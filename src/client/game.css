@@ -1,0 +1,15 @@
+html,
+body,
+#app,
+#game-container {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a2a43;
+}
+
+#game-container {
+  touch-action: none; /* let Phaser handle taps/drags cleanly on mobile */
+}

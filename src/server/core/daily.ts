@@ -1,0 +1,98 @@
+import { redis } from '@devvit/web/server';
+import type { Board } from '../../shared/game/types';
+import { generate } from '../../shared/solver/generator';
+import { solve } from '../../shared/solver/solver';
+import { seedFromDate } from '../../shared/date';
+import { consumeTopSubmissionForDaily } from './ugc';
+import { keys } from './keys';
+
+export type DailyPuzzle = {
+  readonly date: string;
+  readonly board: Board;
+  readonly par: number;
+  readonly creator?: string; // set when the daily came from a community submission
+};
+
+// Always-solvable fallback so a daily post can never be empty.
+const FALLBACK_BOARD: Board = {
+  width: 5,
+  height: 5,
+  holes: [2],
+  pieces: [
+    { kind: 'HOPPER', cells: [0] },
+    { kind: 'BLOCKER', cells: [1] },
+  ],
+};
+
+type GenConfig = {
+  hoppers: number;
+  sliders: number;
+  blockers: number;
+  minPar: number;
+  maxPar: number;
+};
+
+// Difficulty ramps across the week like a daily crossword: Mon/Tue easy,
+// Wed-Fri medium, weekends hard. Higher tiers add more penguins and seals
+// (up to 3 penguins / 2 seals, like Jump In'). The solver still guarantees a
+// fair par for every accepted board.
+const LADDERS: ReadonlyArray<ReadonlyArray<GenConfig>> = [
+  [
+    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 6 },
+    { hoppers: 2, sliders: 0, blockers: 2, minPar: 2, maxPar: 5 },
+    { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 5 },
+  ],
+  [
+    { hoppers: 3, sliders: 1, blockers: 1, minPar: 4, maxPar: 8 },
+    { hoppers: 2, sliders: 1, blockers: 2, minPar: 4, maxPar: 8 },
+    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 7 },
+  ],
+  [
+    { hoppers: 3, sliders: 2, blockers: 2, minPar: 5, maxPar: 10 },
+    { hoppers: 3, sliders: 1, blockers: 2, minPar: 5, maxPar: 9 },
+    { hoppers: 2, sliders: 2, blockers: 2, minPar: 4, maxPar: 9 },
+  ],
+];
+
+const tierForDate = (date: string): number => {
+  const day = new Date(`${date}T00:00:00.000Z`).getUTCDay(); // 0 Sun .. 6 Sat
+  if (day === 0 || day === 6) return 2; // weekend: hard
+  if (day === 1 || day === 2) return 0; // Mon/Tue: easy
+  return 1; // Wed-Fri: medium
+};
+
+const generateDaily = (date: string): { board: Board; par: number } => {
+  const seed = seedFromDate(date);
+  const tier = tierForDate(date);
+  // Try the day's tier, then fall back to the easy tier so we always find one.
+  const configs = [...LADDERS[tier], ...LADDERS[0]];
+  for (let i = 0; i < configs.length; i++) {
+    const config = configs[i];
+    const generated = generate({ width: 5, height: 5, attempts: 2500, seed: seed + i, ...config });
+    if (generated) return generated;
+  }
+  return { board: FALLBACK_BOARD, par: solve(FALLBACK_BOARD).par };
+};
+
+/**
+ * Returns the day's puzzle, creating it on first access. Prefers the top-voted
+ * community submission (the community-curated daily); otherwise generates one.
+ */
+export const getOrCreateDailyPuzzle = async (date: string): Promise<DailyPuzzle> => {
+  const stored = await redis.get(keys.dailyPuzzle(date));
+  if (stored) {
+    const parsed: DailyPuzzle = JSON.parse(stored);
+    return parsed;
+  }
+
+  const community = await consumeTopSubmissionForDaily();
+  const puzzle: DailyPuzzle = community
+    ? { date, board: community.board, par: community.par, creator: community.creator }
+    : ((): DailyPuzzle => {
+        const generated = generateDaily(date);
+        return { date, board: generated.board, par: generated.par };
+      })();
+
+  await redis.set(keys.dailyPuzzle(date), JSON.stringify(puzzle));
+  return puzzle;
+};
