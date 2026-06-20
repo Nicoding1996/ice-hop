@@ -97,12 +97,14 @@ The community stream is built per player (`listStreamForUser` + the pure
 - Interleaves the top-voted pool with the newest pool, so favourites stay visible
   and new submissions still get seen (no pure vote-ranking that buries new work).
 
-Anti-spam on submit (`submitPuzzle`):
+Anti-spam / integrity on submit + vote:
 
 - Rate limit: at most 5 accepted submissions per user per UTC day.
 - De-duplication: identical boards are rejected via a canonical `boardSignature`
   (a player cannot flood the queue with the same puzzle).
-- Plus the existing gate: must be signed in and pass solver validation.
+- Must be signed in and pass solver validation to submit.
+- No self-upvotes: `votePuzzle` rejects a vote when the voter is the creator, and
+  enforces one vote per user per puzzle via a voters hash.
 
 ## Sharing format
 
@@ -118,10 +120,11 @@ The engine stays theme-agnostic; this is purely the art skin.
 - HOPPER  = penguin (1 cell). Hops over rocks/seals; goal is to dive into a water hole.
 - SLIDER  = seal (1x2). Slides along its axis on the ice; cannot enter the water.
 - BLOCKER = ice rock (fixed). The thing penguins hop over; seals cannot slide through it.
-- GOAL    = water hole. Land every penguin in a hole = solved (the colony dives in).
+- GOAL    = water hole. Land every penguin in a hole = solved (they all dive in).
 
-Daily framing / stakes: "Get the whole colony into the water." Number of penguins
+Daily framing / stakes: "Get every penguin into the water." Number of penguins
 always equals the number of water holes so "everyone in" reads instantly.
+(Player-facing copy avoids "colony" - it read ant-ish in testing.)
 
 Display name "Ice Hop"; app slug and package name `ice-hop`.
 
@@ -134,10 +137,34 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 
 ## Editor & controls
 
-- Build screen (`EditorScene`): place Penguin / Seal / Rock / Hole, or Erase.
-  "Random" drops a solver-made starter to riff on. Live solver feedback reports
-  whether the board is solvable and its par before the player submits.
+- Build screen (`EditorScene`): place Penguin / Seal / Rock / Water, or Erase via
+  icon tool-chips (the active tool highlights gold). "Random" drops a solver-made
+  starter to riff on. Live solver feedback reports whether the board is solvable
+  and its par before the player submits.
 - Seal orientation: tap the Seal tool again to rotate it between horizontal
-  (<->) and vertical. Generated dailies can use either orientation too.
+  (<->) and vertical; a status hint spells this out so it stays discoverable.
+  Generated dailies can use either orientation too.
 - Undo: an in-editor history stack reverts the last placement.
+- Test: play your own board before submitting. It saves a draft, jumps into a
+  GameScene "test" mode, and returns you to the editor with the board intact.
+- Submit turns active (coral) only once the board passes validation.
 - Play controls: tap a penguin to hop it; drag a seal along its axis to slide it.
+
+## Navigation & flow
+
+- Home hub (`HomeScene`): the menu screen with Play today's puzzle / Build a
+  puzzle / Community puzzles, plus a persistent sound on/off toggle.
+- In play, the only HUD nav is a single "‹ Menu" button (top-left) back to the
+  hub; Build/Community live on the hub, not crowding the board.
+- No dead ends: the daily win screen offers Copy result, Play community puzzles,
+  and Menu; community wins offer Upvote / Next / Back to daily; test wins offer
+  Back to editing.
+- Loading state: the board hides behind a calm "Getting the penguins ready..."
+  message until the puzzle is fetched and rendered, so no half-built frame flashes.
+- Scene transitions: a shared camera fade (`fadeToScene` / `fadeInScene` in
+  `theme.ts`) between every scene. Always pass a fresh data object to
+  `scene.start` - Phaser keeps the previous scene data when started with
+  `undefined`, which once reloaded a stale community puzzle.
+- Sound: synthesized via the Web Audio API (`src/client/audio.ts`), no audio
+  files - a hop, a slide, a splash, and a win arpeggio, with a persisted mute
+  toggle on the hub.

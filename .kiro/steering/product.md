@@ -14,7 +14,7 @@ puzzle is deterministic with a known optimal solution computed by our solver.
 
 Theme (the art skin over the abstract engine): penguins (hoppers) hop over ice
 rocks (blockers) and seals (sliders) to dive into water holes (goals). The number
-of penguins always equals the number of water holes, so "get the whole colony in
+of penguins always equals the number of water holes, so "get every penguin into
 the water" reads at a glance.
 
 ## Why it can win
@@ -41,9 +41,10 @@ retentive, community-run game:
   invites players to drop their scores, so the comment section is part of play.
 - Leaderboard: daily + all-time, sorted by fewest moves then fastest time.
 - Build + Community stream (the differentiator): players build their own puzzles
-  in the editor; the solver validates each one is solvable before it is accepted;
-  accepted puzzles enter a community stream that anyone can play (solve -> next,
-  or skip), upvoting the ones they like and seeing the creator credited. Each
+  in the editor and can play-test them before submitting; the solver validates
+  each one is solvable before it is accepted; accepted puzzles enter a community
+  stream that anyone can play (solve -> next, or skip), upvoting the ones they
+  like and seeing the creator credited. Each
   player's stream excludes puzzles they have already solved and interleaves the
   top-voted with the newest, so popular puzzles stay visible while fresh ones
   still get exposure. Submissions are de-duplicated and rate-limited (a few per

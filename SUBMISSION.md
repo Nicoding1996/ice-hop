@@ -1,0 +1,181 @@
+# Ice Hop — Devpost submission kit
+
+Everything here is copy-paste ready for the Devpost form. Fill in the four links
+in the checklist at the bottom before you hit submit.
+
+---
+
+## Tagline (one line)
+
+A daily logic puzzle that lives inside a Reddit post and turns the comment
+section into the scoreboard.
+
+---
+
+## What it does
+
+Ice Hop is a daily puzzle you play without leaving the feed. A small grid of ice
+holds a few penguins, a seal or two, and some open water. Tap a penguin and it
+hops over whatever's next to it; drag a seal and it slides. Get every penguin
+into the water in as few moves as you can. That's the whole game, and you can
+read it in about three seconds without an instructions screen.
+
+Under the hood there's a solver that knows the optimal solution to every board.
+That one fact is what makes the rest work:
+
+- **Par scoring.** You're graded golf-style against the fewest possible moves, so
+  "I did it in 7" actually means something and the comments fill up with people
+  comparing lines.
+- **A real community, not a leaderboard with extra steps.** You can build your
+  own puzzle in an in-app editor. The solver checks it's actually solvable (you
+  can play-test it first), then it drops into a community stream other people
+  play, upvote, and credit you for. Endless free content, and a reason for makers
+  to come back and see how their puzzle did.
+- **The comment section is part of the game.** Every daily auto-posts a pinned
+  comment with the rules and a "drop your score" prompt, your result copies out
+  as a spoiler-free emoji grid, and a streak flair gives regulars a public badge.
+
+You come back because there's a fresh puzzle every morning, a streak you don't
+want to break, a leaderboard to climb, and a bottomless pile of player-made
+puzzles waiting when you finish the daily.
+
+---
+
+## Why it fits "Games with a Hook"
+
+- **Delightful UX.** One screen, no tutorial, fits the viewport, plays with a tap
+  or a drag. Penguins breathe, hops squash-and-stretch, and a solved penguin
+  dives into the water and bobs there.
+- **Polish.** Hand-built vector art with a single cohesive "arctic at dawn" look,
+  smooth scene transitions, a loading state, sound, and a win screen that counts
+  your score up and pops the stars in. No dead ends in the flow.
+- **Reddity.** It's community-first, not Reddit-themed. The hook is people
+  comparing scores and playing each other's puzzles in the thread, not karma or
+  Snoo gimmicks.
+- **The hook.** Daily ritual + streak + leaderboard + an endless, player-fed
+  stream. Something to come back to tomorrow, and something to do right now.
+
+---
+
+## Inspiration
+
+I love the little daily puzzles that have taken over group chats, the ones you
+can finish in a minute and then argue about. I wanted that feeling, but living
+where the argument already happens: a Reddit thread. Hopping-and-sliding logic
+puzzles are perfect for it because they're deterministic, which meant I could
+write a solver, and a solver quietly unlocks par scoring, an endless supply of
+fair puzzles, and the ability to let players build their own without ever
+shipping a broken one.
+
+The penguins came from the simplest honest mapping of the mechanic: something
+that hops, something that slides, something that doesn't move, and a goal worth
+diving into. Cold water, penguins, seals. It wrote itself.
+
+---
+
+## How I built it
+
+Built on Devvit Web so it runs natively inside a Reddit post.
+
+- **Engine + solver (pure TypeScript).** The rules, a BFS solver that computes
+  par and proves solvability, and a generator that makes graded puzzles. It's
+  framework-free and unit-tested, with abstract pieces (hopper/slider/blocker)
+  so the penguin theme is just a skin on top.
+- **Generation that feels designed.** The generator doesn't just check
+  "solvable." It rejects boards with more than one optimal solution, throws out
+  any piece that nothing ever touches, and only allows decoys on harder days, so
+  the daily feels hand-made instead of random.
+- **Server (Hono on Devvit's Node runtime).** Daily puzzle, solves, streaks,
+  leaderboards, and all the community puzzle logic, with Redis for state and a
+  cron job that posts a fresh puzzle every day.
+- **Client (Phaser 4).** The whole board and every character are drawn in code as
+  vector art, with the animation, particles, and juice on top. No sprite sheets.
+- **Sound** is synthesized live with the Web Audio API (a hop, a slide, a splash,
+  a little win chime), so there are no audio files to ship.
+
+---
+
+## Challenges I ran into
+
+- **Making generated puzzles fun, not just solvable.** The first version spat out
+  technically-valid boards that felt arbitrary. Adding the uniqueness and
+  "every piece matters" gates was the difference between a tech demo and a game.
+- **Community puzzles that don't turn into spam or a ghost town.** I added a daily
+  submission cap, duplicate rejection, a per-player "already solved" filter, and a
+  stream that interleaves popular and brand-new puzzles so new makers actually get
+  seen.
+- **Feel.** Getting the art to read as intentional vector art instead of
+  programmer shapes took real iteration: outlines, neoteny, a connected ice
+  sheet, and a penguin that dives into the hole instead of standing on it.
+
+---
+
+## What's next
+
+- Promote a top-voted community puzzle into a curated "puzzle of the week."
+- Themed weekend boards and seasonal palettes.
+- Per-subreddit puzzles so any community can host its own daily.
+
+---
+
+## Built with
+
+`devvit`, `devvit-web`, `phaser`, `hono`, `typescript`, `vite`, `redis`,
+`web-audio-api`, `reddit`
+
+---
+
+## New project note (for the submission form)
+
+Ice Hop was built from scratch during the submission window, specifically for
+this hackathon. Everything in it, the engine, solver, generator, server,
+art, and UI, is original work created during the event. The name, the artwork
+(all drawn in code), and every puzzle (generated or player-made) are our own; the
+mechanic is an original take on the public peg-solitaire / sliding-logic genre.
+
+---
+
+## For the judges (how to test in ~60 seconds)
+
+1. Open the demo post (link below) on mobile or desktop.
+2. Tap **Play today's puzzle**. Tap a penguin to hop it, drag a seal to slide it.
+   Get all the penguins into the water. You'll get stars vs par.
+3. From the win screen, hit **Play community puzzles** to play player-made boards,
+   or **Menu → Build a puzzle** to make one. The Build screen has a **Test**
+   button so you can play your board, then **Submit** sends it to the stream.
+4. Check the post's pinned comment, that's auto-seeded on every daily.
+
+No sign-in wall, nothing to install. Works in the feed.
+
+---
+
+## ~50-second demo video script (screencast + voiceover)
+
+Keep it under a minute. Judges may not watch past 60 seconds, so the hook is
+first. Record a clean screen capture and narrate over it.
+
+| Time | On screen | Voiceover |
+| --- | --- | --- |
+| 0:00–0:06 | The daily post in the feed, tap Play, a penguin hops into the water. | "This is Ice Hop, a daily puzzle that lives right inside a Reddit post." |
+| 0:06–0:18 | Finish the daily; stars pop in, score counts up. | "Tap a penguin to hop, drag a seal to slide, get everyone in the water in as few moves as you can." |
+| 0:18–0:26 | Copy result, show it pasted as an emoji grid in the comments. | "Your score shares out spoiler-free, so the thread turns into the scoreboard." |
+| 0:26–0:42 | Open Build, place pieces, the solver shows "solvable, par 5," hit Test then Submit. | "And you can build your own. The solver guarantees it's fair before it ever goes live." |
+| 0:42–0:52 | Community stream: play one, upvote, jump to the next. Show the streak flair. | "Player-made puzzles, a daily streak, leaderboards. Something to do today, and a reason to come back tomorrow." |
+| 0:52–0:58 | Title card: Ice Hop, subreddit name. | "Ice Hop. Get every penguin in the water." |
+
+Tips: no long intro, get to gameplay in the first two seconds, keep the cursor
+moving, and let the on-screen action carry it rather than over-narrating.
+
+---
+
+## Submission checklist (fill these in)
+
+- [ ] **App listing:** https://developers.reddit.com/apps/ice-hop
+- [ ] **Demo post:** link to a public post running the game in your test
+      subreddit (keep the subreddit under 200 members, or install dr-admin-approve
+      so admins can join).
+- [ ] **Demo video:** unlisted/public YouTube link, under one minute.
+- [ ] **Repo (optional):** public code repository URL.
+- [ ] **Developer feedback survey (optional, its own prize):** complete it with
+      specific, actionable notes from building this.
+- [ ] README.md is in the repo root (it is).

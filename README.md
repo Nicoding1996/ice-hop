@@ -4,10 +4,9 @@ A daily logic-puzzle game that runs natively inside a Reddit post, built on
 [Devvit Web](https://developers.reddit.com/docs) for Reddit's "Games with a Hook"
 hackathon.
 
-Guide the whole colony of penguins into the water. Every penguin hops, every seal
-slides, and the ice never moves. Solve the daily in as few moves as possible,
-keep your streak alive, climb the leaderboard, and build puzzles for everyone
-else to play.
+Guide every penguin into the water. Every penguin hops, every seal slides, and
+the ice never moves. Solve the daily in as few moves as possible, keep your
+streak alive, climb the leaderboard, and build puzzles for everyone else to play.
 
 ---
 
@@ -52,15 +51,20 @@ insight matters more than speed.
   Difficulty ramps across the week: easy on Monday and Tuesday, medium midweek,
   hardest on the weekend.
 - **Streaks.** Solve day after day to build a streak. Miss a day and it resets.
+  Your first solve each day sets a streak flair on the subreddit ("🔥 7-day
+  streak"), a public nudge to keep coming back.
 - **Leaderboards.** Daily and all-time, so there's always a race.
+- **A built-in comment hub.** Every daily post auto-seeds a pinned how-to-play
+  comment that invites players to drop their scores, so the comment section
+  becomes part of the game instead of an afterthought.
 - **Shareable result.** Copy a spoiler-free emoji summary of your solve (par,
   moves, streak) straight into the comments to compare without spoiling the board.
 - **Build your own + a community stream.** Make your own puzzle in the editor;
-  the solver checks it's actually solvable before it's accepted. Accepted puzzles
-  go into a community stream anyone can play through (solve one, jump to the next,
-  or skip), upvoting the ones they like with the creator credited. That's an
-  endless supply of "one more" puzzles and a reason for creators to come back and
-  see how their puzzle is doing.
+  the solver checks it's actually solvable (and you can play-test it) before it's
+  accepted. Accepted puzzles go into a community stream anyone can play through
+  (solve one, jump to the next, or skip), upvoting the ones they like with the
+  creator credited. That's an endless supply of "one more" puzzles and a reason
+  for creators to come back and see how their puzzle is doing.
 
 ---
 
@@ -72,6 +76,7 @@ Open the **Build** screen from the game to design a board:
 - Tap the **Seal** tool again to rotate the seal between horizontal and vertical.
 - **Random** drops a solver-generated starter board you can riff on.
 - **Undo** steps back your last placement.
+- **Test** drops you into your own board to play it before you commit.
 - The editor runs the solver live and tells you whether the board is **solvable**
   and its **par** before you submit, so you never publish a dead end.
 
@@ -163,7 +168,9 @@ npm run launch       # deploy + devvit publish
   difficulty ramp.
 - **User contributions:** a solver-validated puzzle editor feeding a playable,
   upvotable community stream with creator credit.
-- **Reddity:** spoiler-free shareable results designed to be pasted into the
-  comments, turning the comment section into the scoreboard and the bragging.
+- **Reddity:** every daily auto-seeds a pinned how-to/score-sharing comment,
+  spoiler-free shareable results are built to be pasted into the thread, and a
+  streak flair gives regulars a public badge, turning the comment section into
+  the scoreboard and the bragging.
 - The puzzle mechanic is an original take on the classic peg-solitaire / sliding
   logic genre. The name, art, generated puzzles, and all user puzzles are our own.

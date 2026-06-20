@@ -12,6 +12,7 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
 ├── tools/                   # tsconfig.{base,client,server,shared,vite}.json
 ├── public/                  # static assets served to the client
 ├── README.md                # game overview + how to play (hackathon requirement)
+├── SUBMISSION.md            # Devpost submission kit (description + demo video script)
 ├── .kiro/steering/          # these docs
 └── src/
     ├── shared/              # PURE TS, unit-testable, no platform imports
@@ -41,7 +42,7 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
     │   │   ├── triggers.ts   # /internal/triggers/* (onAppInstall)
     │   │   └── scheduler.ts  # /internal/scheduler/* (daily puzzle cron)
     │   └── core/
-    │       ├── post.ts       # submitCustomPost helpers
+    │       ├── post.ts       # create daily post + seed the pinned how-to comment
     │       ├── daily.ts      # daily puzzle generation/storage (Redis)
     │       ├── leaderboard.ts# Redis sorted sets + streaks
     │       ├── ugc.ts        # user puzzle submit/list/vote + solver validation

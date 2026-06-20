@@ -19,6 +19,22 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 - Shared (`src/shared`): pure TS shared by both. Trigger/request types come from
   `@devvit/web/shared`.
 
+## Client architecture
+
+- Phaser 4 game (the `game.html` expanded view) with scenes: `Boot` (loads the
+  sound pref, launches the game), `HomeScene` (the hub), `GameScene` (daily /
+  community / test play), `EditorScene` (build), `CommunityScene` (loads the
+  stream and hands off to GameScene).
+- All art is drawn in code as vector graphics - no image/sprite assets. One
+  palette + helper module, `src/client/art/theme.ts`, holds the penguin / seal /
+  rock / water, the connected ice sheet, the backdrop, win FX, and the scene
+  fades (`fadeToScene` / `fadeInScene`).
+- Sound is synthesized at runtime with the Web Audio API
+  (`src/client/audio.ts`) - no audio files. It unlocks on the first tap and has
+  a mute toggle persisted to `localStorage`.
+- The splash (`splash.html`, inline feed view) stays light: an inline SVG penguin
+  + CSS, no Phaser, and it opens the expanded view via `requestExpandedMode`.
+
 ## Server routing
 
 - One Hono app. Mount public routes at `/api` (called by the client) and
