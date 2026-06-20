@@ -104,9 +104,6 @@ export const paintIceSheet = (
   // Ice base.
   g.fillStyle(PALETTE.iceSheet, 1);
   g.fillRoundedRect(x, y, w, h, r);
-  // Top sheen band.
-  g.fillStyle(PALETTE.iceSheen, 0.55);
-  g.fillRoundedRect(x + pad * 0.5, y + pad * 0.5, w - pad, h * 0.32, r * 0.8);
   // Faint scored grid so cells are still readable.
   g.lineStyle(Math.max(1, cell * 0.02), PALETTE.gridLine, 0.55);
   for (let c = 1; c < cols; c++) {
@@ -123,7 +120,8 @@ export const paintIceSheet = (
   layer.add(g);
 };
 
-/** A water hole carved into the ice: dark rim, deep water, shimmer, icy lip. */
+/** A water hole carved into the ice: a wet ice rim bevels it into the sheet, a
+ *  matte deep pool with a recessed top shadow, and a gentle reflection. */
 export const makeWaterHole = (
   scene: Phaser.Scene,
   x: number,
@@ -131,18 +129,21 @@ export const makeWaterHole = (
   s: number
 ): Phaser.GameObjects.Container => {
   const c = scene.add.container(x, y);
-  const rim = scene.add.circle(0, 0, s * 0.37, PALETTE.holeRim);
-  const water = scene.add.circle(0, 0, s * 0.31, PALETTE.water).setStrokeStyle(Math.max(1, s * 0.03), PALETTE.holeDepth);
-  const depth = scene.add.ellipse(0, s * 0.07, s * 0.5, s * 0.4, PALETTE.holeDepth, 0.55);
-  const shimmer = scene.add.ellipse(-s * 0.08, -s * 0.09, s * 0.18, s * 0.1, PALETTE.waterShimmer, 0.85);
-  const lip = scene.add.ellipse(0, -s * 0.19, s * 0.5, s * 0.16, PALETTE.iceSheen, 0.45);
-  c.add([rim, water, depth, shimmer, lip]);
+  // Wet ice rim attaches the hole to the sheet (bevel from ice to water).
+  const rim = scene.add.circle(0, 0, s * 0.36, 0x9ccfe2);
+  // Matte deep water.
+  const water = scene.add.circle(0, 0, s * 0.3, PALETTE.water);
+  // Recessed shadow under the near lip (reads as looking down into a hole).
+  const shadow = scene.add.ellipse(0, -s * 0.07, s * 0.5, s * 0.34, PALETTE.holeRim, 0.5);
+  // Gentle reflection toward the bottom.
+  const shimmer = scene.add.ellipse(s * 0.04, s * 0.1, s * 0.14, s * 0.07, PALETTE.waterShimmer, 0.5);
+  c.add([rim, water, shadow, shimmer]);
   scene.tweens.add({
     targets: shimmer,
-    alpha: 0.3,
-    scaleX: 1.5,
-    scaleY: 1.5,
-    duration: 1500,
+    alpha: 0.18,
+    scaleX: 1.3,
+    scaleY: 1.3,
+    duration: 1800,
     yoyo: true,
     repeat: -1,
     ease: 'Sine.easeInOut',
@@ -179,6 +180,31 @@ export const drawPenguinInto = (
   c.add(scene.add.circle(s * 0.16, eyeY - s * 0.02, s * 0.025, PALETTE.eyeWhite));
   // Small beak.
   c.add(scene.add.triangle(0, -s * 0.04, -s * 0.06, -s * 0.03, s * 0.06, -s * 0.03, 0, s * 0.06, PALETTE.beak).setStrokeStyle(Math.max(1, s * 0.02), PALETTE.beakOutline));
+};
+
+/** A penguin bobbing in a hole: a compact head and shoulders sitting in the
+ *  water with a little ripple ring (no full body, so it reads as "dived in"). */
+export const drawPenguinSwimmingInto = (
+  scene: Phaser.Scene,
+  c: Phaser.GameObjects.Container,
+  s: number
+): void => {
+  const OUT = PALETTE.penguinOutline;
+  const BODY = PALETTE.penguin;
+  const sw = Math.max(1.5, s * 0.04);
+  // Ripple ring at the waterline (behind the head, around the hole).
+  c.add(scene.add.ellipse(0, s * 0.2, s * 0.56, s * 0.18, 0x000000, 0).setStrokeStyle(Math.max(1, s * 0.03), PALETTE.waterShimmer, 0.55));
+  // Head + shoulders sitting in the hole.
+  c.add(scene.add.ellipse(0, -s * 0.02, s * 0.56, s * 0.56, BODY).setStrokeStyle(sw, OUT));
+  c.add(scene.add.ellipse(0, s * 0.06, s * 0.36, s * 0.34, PALETTE.penguinBelly));
+  const eyeY = -s * 0.1;
+  c.add(scene.add.ellipse(-s * 0.12, eyeY, s * 0.19, s * 0.23, PALETTE.eyeWhite));
+  c.add(scene.add.ellipse(s * 0.12, eyeY, s * 0.19, s * 0.23, PALETTE.eyeWhite));
+  c.add(scene.add.circle(-s * 0.1, eyeY + s * 0.01, s * 0.06, PALETTE.eye));
+  c.add(scene.add.circle(s * 0.1, eyeY + s * 0.01, s * 0.06, PALETTE.eye));
+  c.add(scene.add.circle(-s * 0.07, eyeY - s * 0.02, s * 0.02, PALETTE.eyeWhite));
+  c.add(scene.add.circle(s * 0.13, eyeY - s * 0.02, s * 0.02, PALETTE.eyeWhite));
+  c.add(scene.add.triangle(0, s * 0.02, -s * 0.055, -s * 0.02, s * 0.055, -s * 0.02, 0, s * 0.06, PALETTE.beak));
 };
 
 /** A recognizable seal lying on the ice: body, raised head, flipper, tail. */

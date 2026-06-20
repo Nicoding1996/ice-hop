@@ -12,6 +12,7 @@ import {
   paintIceSheet,
   makeWaterHole,
   drawPenguinInto,
+  drawPenguinSwimmingInto,
   drawSealInto,
   drawRockInto,
   splashBurst,
@@ -255,40 +256,68 @@ export class GameScene extends Scene {
     this.pieces.forEach((piece, idx) => {
       const { x, y } = this.pieceCenterPx(piece.cells);
       const container = this.add.container(x, y);
-      // Inner art node: idle/hop animation lives here so the outer container is
+      // Inner art node: idle/move animation lives here so the outer container is
       // free to own position, hit-area, and dragging.
       const art = this.add.container(0, 0);
       container.add(art);
       container.setData('art', art);
 
       if (piece.kind === 'HOPPER') {
-        drawPenguinInto(this, art, s);
         this.makeSelectable(container, s * 0.82, s * 0.82, idx);
-        this.tweens.add({
-          targets: art,
-          y: -s * 0.05,
-          duration: 1300 + (idx % 3) * 180,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut',
-        });
       } else if (piece.kind === 'SLIDER') {
         const orient = piece.orient ?? 'H';
-        drawSealInto(this, art, s, orient);
         const w = orient === 'H' ? s * 1.8 : s * 0.82;
         const hgt = orient === 'H' ? s * 0.82 : s * 1.8;
         this.makeSelectable(container, w, hgt, idx);
         container.setData('pieceIndex', idx);
         container.setData('slider', true);
         this.input.setDraggable(container);
-      } else {
-        drawRockInto(this, art, s);
       }
       this.pieceLayer.add(container);
       this.pieceViews[idx] = container;
+      this.buildPieceArt(container, piece, idx);
     });
 
     this.renderHighlights();
+  }
+
+  /** Start the gentle idle breathing bob on a piece's art node. */
+  private startBob(art: Phaser.GameObjects.Container, idx: number, amp: number): void {
+    this.tweens.add({
+      targets: art,
+      y: -this.cell * amp,
+      duration: 1300 + (idx % 3) * 180,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+  }
+
+  /** (Re)draw one piece's art in place: penguin (standing, or swimming when on a
+   *  hole), seal, or rock. Only this piece is touched, so other pieces' idle
+   *  animations and the water shimmer keep running across moves. */
+  private buildPieceArt(view: Phaser.GameObjects.Container, piece: Piece, idx: number): void {
+    const art: Phaser.GameObjects.Container | undefined = view.getData('art');
+    if (!art) return;
+    this.tweens.killTweensOf(art);
+    art.removeAll(true);
+    art.setScale(1);
+    art.setRotation(0);
+    art.y = 0;
+    const s = this.cell;
+    if (piece.kind === 'HOPPER') {
+      if (this.board?.holes.includes(piece.cells[0])) {
+        drawPenguinSwimmingInto(this, art, s);
+        this.startBob(art, idx, 0.03);
+      } else {
+        drawPenguinInto(this, art, s);
+        this.startBob(art, idx, 0.05);
+      }
+    } else if (piece.kind === 'SLIDER') {
+      drawSealInto(this, art, s, piece.orient ?? 'H');
+    } else {
+      drawRockInto(this, art, s);
+    }
   }
 
   private makeSelectable(
@@ -472,8 +501,21 @@ export class GameScene extends Scene {
       this.moves += 1;
       this.selected = null;
       this.busy = false;
-      this.renderBoard();
+      // Rebuild only the moved piece's art (its outer view is already tweened to
+      // the destination); every other piece keeps its idle animation running.
+      const movedView = this.pieceViews[move.pieceIndex];
+      if (movedView) this.buildPieceArt(movedView, this.pieces[move.pieceIndex], move.pieceIndex);
       this.updateHud();
+      this.renderHighlights();
+      // Dive-pop after highlights (which resets scales), so a penguin that just
+      // entered the water bobs up from below.
+      if (landsInWater && move.kind === 'HOPPER' && movedView) {
+        const movedArt: Phaser.GameObjects.Container | undefined = movedView.getData('art');
+        if (movedArt) {
+          movedArt.setScale(1.12, 0.6);
+          this.tweens.add({ targets: movedArt, scaleX: 1, scaleY: 1, duration: 300, ease: 'Back.easeOut' });
+        }
+      }
       if (isSolved(this.board, this.pieces)) this.onWin();
     };
 

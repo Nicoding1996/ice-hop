@@ -49,13 +49,18 @@ Large eyes, round bodies, soft contours trigger a protective, nurturing response
   not threatening. Refuses water (a flipper bump) — characterful + teaches the rule.
 - Ice rock (BLOCKER): faceted block with a snow cap. Clearly scenery so players
   do not expect it to move.
-- Water hole (GOAL): a glowing pool with a gentle shimmer; reads as inviting.
+- Water hole (GOAL): a carved, recessed pool with a wet ice rim so it sits in the
+  sheet (not a floating orb); matte water, a soft recessed shadow, gentle
+  reflection. A penguin that reaches a hole "dives in" and bobs there as a head +
+  shoulders with a ripple (drawPenguinSwimmingInto) - instant "this one's done".
 
 ## Motion / juice (feel)
 
 Layer feedback; keep it synced and tasteful (not constant motion).
 - Idle: penguins do a slow breathing bob; water holes shimmer. Bob the inner art
-  node, never the outer container (which owns position/hit-area/drag).
+  node, never the outer container (which owns position/hit-area/drag). Piece views
+  persist across moves: a move rebuilds ONLY the moved piece's art, so other
+  pieces' bobs and the water shimmer keep running (never reset the whole board).
 - Select: the chosen piece lifts/scales slightly; a gold ring appears.
 - Hop: squash on takeoff, stretch through an arc, squash on landing; a small
   splash burst (a few tweened circles, no texture needed) when landing in water.
