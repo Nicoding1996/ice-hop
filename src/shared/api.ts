@@ -9,6 +9,9 @@ export type InitResponse = {
   readonly par: number;
   readonly username: string;
   readonly solved: boolean;
+  /** The viewer's prior result for this daily, when they've already solved it
+   *  (drives the "solved today" recap). Absent for a first/unsolved visit. */
+  readonly solvedResult?: { readonly moves: number; readonly stars: number };
 };
 
 /** Client -> server (POST /api/solve) when a player completes a puzzle. */

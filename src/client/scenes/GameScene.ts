@@ -134,7 +134,7 @@ export class GameScene extends Scene {
       .text(0, 0, '', { fontFamily: 'Arial', fontSize: '22px', color: COLORS.text })
       .setOrigin(0.5);
     this.hintText = this.add
-      .text(0, 0, 'Tap a penguin to hop, drag a seal to slide.\nPar = the fewest moves possible.', {
+      .text(0, 0, 'Tap a penguin to hop, drag a seal to slide.\nGet every penguin into the water.', {
         fontFamily: 'Arial',
         fontSize: '13px',
         color: COLORS.text,
@@ -333,6 +333,7 @@ export class GameScene extends Scene {
       this.layout();
       this.renderBoard();
       this.updateHud();
+      if (data.solved) this.showDailySolvedRecap(data.solvedResult);
     } catch (error) {
       console.error(error);
       this.showLoadError('Could not load today\u2019s puzzle.');
@@ -935,6 +936,90 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     btn.on('pointerdown', () => showLoginPrompt());
     this.fxLayer.add(btn);
+  }
+
+  /** Returning-player recap: when you re-open a daily you've already solved,
+   *  acknowledge it and funnel onward (Endless / Community) rather than silently
+   *  dropping you back into a beaten board. "Play again" dismisses it to replay.
+   *  We don't set `won` - the board stays playable; the interactive overlay just
+   *  blocks accidental taps until the player chooses. */
+  private showDailySolvedRecap(result?: { moves: number; stars: number }): void {
+    const w = this.scale.width;
+    const h = this.scale.height;
+    this.fxLayer.removeAll(true);
+    this.hudText.setVisible(false);
+    this.hintText.setVisible(false);
+    this.resetButton.setVisible(false);
+    this.hintButton.setVisible(false);
+
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.82).setInteractive();
+    const headline = this.add
+      .text(w / 2, h * 0.28, "You've solved today's puzzle!", {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        fontStyle: 'bold',
+        color: COLORS.text,
+        align: 'center',
+        wordWrap: { width: w - 48 },
+      })
+      .setOrigin(0.5);
+    const subText = result
+      ? `${result.moves} moves   ${'\u2605'.repeat(result.stars)}\nA fresh puzzle drops tomorrow.`
+      : 'A fresh puzzle drops tomorrow.';
+    const sub = this.add
+      .text(w / 2, h * 0.4, subText, {
+        fontFamily: 'Arial',
+        fontSize: '15px',
+        color: COLORS.text,
+        align: 'center',
+        lineSpacing: 6,
+        wordWrap: { width: w - 48 },
+      })
+      .setOrigin(0.5)
+      .setAlpha(0.9);
+
+    const endlessBtn = this.add
+      .text(w / 2, h * 0.57, 'Endless puzzles \u25B6', {
+        fontFamily: 'Arial',
+        fontSize: '17px',
+        fontStyle: 'bold',
+        color: '#062033',
+        backgroundColor: '#ff8a5b',
+        padding: { left: 18, right: 18, top: 10, bottom: 10 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    endlessBtn.on('pointerdown', () => fadeToScene(this, 'EndlessScene'));
+
+    const communityBtn = this.add
+      .text(w / 2, h * 0.68, 'Community puzzles', {
+        fontFamily: 'Arial',
+        fontSize: '15px',
+        color: '#062033',
+        backgroundColor: '#cfe6f2',
+        padding: { left: 14, right: 14, top: 8, bottom: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    communityBtn.on('pointerdown', () => fadeToScene(this, 'CommunityScene'));
+
+    const replayBtn = this.add
+      .text(w / 2, h * 0.78, "Play today's again", {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: COLORS.text,
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    replayBtn.on('pointerdown', () => {
+      this.fxLayer.removeAll(true);
+      this.hudText.setVisible(true);
+      this.updateHud();
+    });
+
+    this.fxLayer.add([overlay, headline, sub, endlessBtn, communityBtn, replayBtn]);
+    headline.setScale(0.95).setAlpha(0);
+    this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
   }
 
   private onWin(): void {

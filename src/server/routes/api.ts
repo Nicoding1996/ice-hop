@@ -42,6 +42,11 @@ api.get('/init', async (c) => {
     const puzzle = await getOrCreateDailyPuzzle(date);
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
     const solveRecord = await redis.get(keys.solve(date, username));
+    let solvedResult: { moves: number; stars: number } | undefined;
+    if (solveRecord) {
+      const rec: { moves: number; timeMs: number; stars: number } = JSON.parse(solveRecord);
+      solvedResult = { moves: rec.moves, stars: rec.stars };
+    }
 
     return c.json<InitResponse>({
       type: 'init',
@@ -50,6 +55,7 @@ api.get('/init', async (c) => {
       par: puzzle.par,
       username,
       solved: Boolean(solveRecord),
+      solvedResult,
     });
   } catch (error) {
     console.error(`/api/init failed: ${error}`);
