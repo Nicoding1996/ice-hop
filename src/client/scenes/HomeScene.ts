@@ -44,7 +44,7 @@ export class HomeScene extends Scene {
       })
       .setOrigin(0.5);
     const tag = this.add
-      .text(w / 2, h * 0.42, 'Get the whole colony into the water.', {
+      .text(w / 2, h * 0.42, 'Get every penguin into the water!', {
         fontFamily: 'Arial',
         fontSize: '14px',
         color: PALETTE.text,

@@ -106,11 +106,12 @@ export class GameScene extends Scene {
       .text(0, 0, '', { fontFamily: 'Arial', fontSize: '22px', color: COLORS.text })
       .setOrigin(0.5);
     this.hintText = this.add
-      .text(0, 0, 'Tap a penguin to hop  -  drag a seal to slide', {
+      .text(0, 0, 'Tap a penguin to hop, drag a seal to slide.\nPar = the fewest moves possible.', {
         fontFamily: 'Arial',
-        fontSize: '14px',
+        fontSize: '13px',
         color: COLORS.text,
         align: 'center',
+        lineSpacing: 3,
         wordWrap: { width: this.scale.width - 24 },
       })
       .setOrigin(0.5)
@@ -180,7 +181,7 @@ export class GameScene extends Scene {
     // half-built frame (empty backdrop + unpositioned HUD) never flashes.
     this.uiLayer.setVisible(false);
     this.loadingText = this.add
-      .text(this.scale.width / 2, this.scale.height / 2, 'Gathering the colony\u2026', {
+      .text(this.scale.width / 2, this.scale.height / 2, 'Getting the penguins ready\u2026', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: COLORS.text,
@@ -240,14 +241,18 @@ export class GameScene extends Scene {
     const w = this.scale.width;
     const h = this.scale.height;
     this.hudHeight = Math.min(72, h * 0.13);
+    // Reserve a strip at the bottom for the hint / breathing room so the board
+    // never sits under it (was clipping the hint on large/desktop screens).
+    const bottomStrip = 50;
     const pad = 16;
     const availW = w - pad * 2;
-    const availH = h - this.hudHeight - pad * 2;
+    const regionH = h - this.hudHeight - bottomStrip;
+    const availH = regionH - pad * 2;
     this.cell = Math.max(24, Math.floor(Math.min(availW / this.board.width, availH / this.board.height)));
     const gridW = this.cell * this.board.width;
     const gridH = this.cell * this.board.height;
     this.originX = (w - gridW) / 2;
-    this.originY = this.hudHeight + (h - this.hudHeight - gridH) / 2;
+    this.originY = this.hudHeight + (regionH - gridH) / 2;
   }
 
   private cellCenter(index: number): { x: number; y: number } {
@@ -579,7 +584,7 @@ export class GameScene extends Scene {
   private updateHud(): void {
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
     this.hudText.setPosition(this.scale.width / 2, this.hudHeight / 2);
-    this.hintText.setPosition(this.scale.width / 2, this.scale.height - 22);
+    this.hintText.setPosition(this.scale.width / 2, this.scale.height - 26);
     this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
     this.menuButton.setPosition(52, this.hudHeight / 2);
     this.menuButton.setVisible(!this.won);
@@ -626,7 +631,7 @@ export class GameScene extends Scene {
     if (stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
 
     const headline = this.add
-      .text(w / 2, h * 0.24, `The colony made it in!\n${blurb}`, {
+      .text(w / 2, h * 0.24, `Everyone made it in!\n${blurb}`, {
         fontFamily: 'Arial',
         fontSize: '22px',
         color: COLORS.text,
