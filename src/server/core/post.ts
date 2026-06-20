@@ -19,5 +19,23 @@ export const createDailyPost = async (date: string) => {
   });
 
   await redis.set(keys.postDate(post.id), date);
+
+  // Seed a distinguished/pinned comment so every daily has a discussion home
+  // (the "comment section is part of the game" lever). Never let it break the
+  // post if the app lacks comment/distinguish permissions.
+  try {
+    const comment = await reddit.submitComment({
+      id: post.id,
+      text: [
+        "\uD83D\uDC27 **Ice Hop \u2014 today's puzzle is live!**",
+        'How to play: tap a penguin to hop it over things, drag a seal to slide. Get the whole colony into the water in as few moves as you can.',
+        'Solved it? Drop your score below \uD83D\uDC47 and see if the colony can beat your move count. You can build your own puzzle from the menu, too!',
+      ].join('\n\n'),
+    });
+    await comment.distinguish(true);
+  } catch (error) {
+    console.error(`Failed to seed daily comment: ${error}`);
+  }
+
   return post;
 };

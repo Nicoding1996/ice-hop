@@ -61,6 +61,7 @@ export class GameScene extends Scene {
   private uiLayer!: Phaser.GameObjects.Container;
   private hudText!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
+  private loadingText!: Phaser.GameObjects.Text;
   private pieceViews: Phaser.GameObjects.Container[] = [];
 
   private cell = 0;
@@ -168,11 +169,24 @@ export class GameScene extends Scene {
 
     this.scale.on('resize', () => {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+      if (this.loadingText) this.loadingText.setPosition(this.scale.width / 2, this.scale.height / 2);
       if (!this.board) return;
       this.layout();
       this.renderBoard();
       this.updateHud();
     });
+
+    // Hide the UI behind a calm loading state until the board is ready, so the
+    // half-built frame (empty backdrop + unpositioned HUD) never flashes.
+    this.uiLayer.setVisible(false);
+    this.loadingText = this.add
+      .text(this.scale.width / 2, this.scale.height / 2, 'Gathering the colony\u2026', {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: COLORS.text,
+      })
+      .setOrigin(0.5)
+      .setAlpha(0.85);
 
     void this.loadPuzzle();
   }
@@ -217,8 +231,7 @@ export class GameScene extends Scene {
       this.updateHud();
     } catch (error) {
       console.error(error);
-      this.hudText.setText('Could not load today\u2019s puzzle');
-      this.hudText.setPosition(this.scale.width / 2, this.scale.height / 2);
+      this.loadingText.setText('Could not load today\u2019s puzzle.');
     }
   }
 
@@ -572,6 +585,9 @@ export class GameScene extends Scene {
     this.menuButton.setVisible(!this.won);
     this.skipButton.setPosition(this.scale.width - 52, this.hudHeight / 2);
     this.skipButton.setVisible(this.isCommunity && !this.won);
+    // The board is ready: drop the loading state and reveal the UI.
+    if (this.loadingText) this.loadingText.setVisible(false);
+    this.uiLayer.setVisible(true);
   }
 
   private onWin(): void {

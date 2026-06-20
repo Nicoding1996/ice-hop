@@ -37,8 +37,12 @@ players, and the solver counts moves the same way.
 
 ## Retention loops (the hook)
 
-1. Daily ritual: one shared puzzle/day via cron-posted feed item + streak.
+1. Daily ritual: one shared puzzle/day via cron-posted feed item + streak. Each
+   daily post auto-seeds a pinned how-to-play comment inviting score-sharing, so
+   the comment section is a built-in discussion home (Reddity lever).
 2. Competition: daily + all-time leaderboards; reset gives a fresh daily race.
+   The first solve each day also sets a streak-based subreddit flair (e.g.
+   "🔥 7-day streak"), a public, recurring status that nudges return visits.
 3. Completion: hit par, get clean closure, anticipate tomorrow (healthier than
    time-grinding the same board).
 4. Difficulty ladder: the daily ramps across the week (Mon/Tue easy -> Wed-Fri

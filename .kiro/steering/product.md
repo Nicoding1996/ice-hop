@@ -33,9 +33,12 @@ retentive, community-run game:
   feed (the ritual). Difficulty ramps across the week (Mon/Tue easy -> weekend
   hard). The daily is always solver-generated; it is NOT sourced from user
   submissions.
-- Streak: consecutive days solved; loss aversion brings people back.
+- Streak: consecutive days solved; loss aversion brings people back. The first
+  solve each day sets a streak-based subreddit flair (e.g. "🔥 7-day streak").
 - Score: moves vs par -> star rating; time is only a tiebreaker.
 - Share: a spoiler-free emoji-grid of your solution path, pasted into comments.
+- Comment hub: each daily post auto-seeds a pinned how-to-play comment that
+  invites players to drop their scores, so the comment section is part of play.
 - Leaderboard: daily + all-time, sorted by fewest moves then fastest time.
 - Build + Community stream (the differentiator): players build their own puzzles
   in the editor; the solver validates each one is solvable before it is accepted;

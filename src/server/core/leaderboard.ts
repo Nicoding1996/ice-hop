@@ -1,4 +1,4 @@
-import { redis } from '@devvit/web/server';
+import { context, reddit, redis } from '@devvit/web/server';
 import type { LeaderboardEntry } from '../../shared/api';
 import { computeStars, decodeScore, leaderboardScore } from '../../shared/scoring';
 import { previousDate } from '../../shared/date';
@@ -14,6 +14,18 @@ export type SolveOutcome = {
 
 type SolveRecord = { moves: number; timeMs: number; stars: number };
 type StreakRecord = { count: number; lastDate: string };
+
+/** Set a streak-based user flair (best-effort; needs flair perms + a subreddit). */
+const setStreakFlair = async (username: string, streak: number): Promise<void> => {
+  const subredditName = context.subredditName;
+  if (!subredditName || username === 'anon') return;
+  const text = streak >= 2 ? `\uD83D\uDD25 ${streak}-day streak` : '\uD83D\uDC27 Ice Hopper';
+  try {
+    await reddit.setUserFlair({ subredditName, username, text, backgroundColor: '#1d6f9c', textColor: 'light' });
+  } catch (error) {
+    console.error(`Failed to set streak flair: ${error}`);
+  }
+};
 
 /**
  * Records a solve: keeps the user's best (fewest moves, then fastest time),
@@ -54,6 +66,7 @@ export const recordSolve = async (
     else if (prevStreak.lastDate === date) streak = prevStreak.count; // desync safety
     else streak = 1;
     await redis.set(keys.streak(username), JSON.stringify({ count: streak, lastDate: date }));
+    await setStreakFlair(username, streak);
   } else {
     streak = prevStreak.count > 0 ? prevStreak.count : 1;
   }

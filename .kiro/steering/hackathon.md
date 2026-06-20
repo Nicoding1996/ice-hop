@@ -10,6 +10,8 @@ Reddit "Games with a Hook" hackathon. Submission window June 17 - July 15, 2026
 2. Polish - launch-ready, no broken states, understandable from the demo post.
 3. Reddity - community-first, NOT Reddit-themed. The comment section should be
    part of the gameplay. Do not build around karma/Snoo/subreddits as a gimmick.
+   (We hit this via: solver-validated UGC + a community stream, a pinned
+   how-to-play/score-sharing comment seeded on each daily, and streak flair.)
 4. Hook - a concrete reason to return day after day.
 5. Phaser Innovation - only for the Phaser category.
 

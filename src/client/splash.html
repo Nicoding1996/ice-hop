@@ -10,32 +10,73 @@
     <title>Ice Hop</title>
   </head>
   <body>
+    <!-- Calm dawn atmosphere: aurora glow, faint stars, soft snow drifts. -->
+    <div class="backdrop" aria-hidden="true">
+      <div class="aurora"></div>
+      <div class="stars"></div>
+      <div class="drift drift-1"></div>
+      <div class="drift drift-2"></div>
+    </div>
+
     <main class="wrap">
       <div class="hero">
-        <svg class="penguin" viewBox="0 0 160 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A happy penguin on an ice block">
-          <rect x="24" y="132" width="112" height="26" rx="11" fill="#bfe3f2" stroke="#7fb4d4" stroke-width="2" />
-          <rect x="32" y="136" width="96" height="8" rx="4" fill="#e8f7ff" opacity="0.6" />
-          <ellipse cx="66" cy="132" rx="13" ry="6" fill="#f6a623" />
-          <ellipse cx="94" cy="132" rx="13" ry="6" fill="#f6a623" />
-          <ellipse cx="36" cy="86" rx="12" ry="34" fill="#2b3440" />
-          <ellipse cx="124" cy="86" rx="12" ry="34" fill="#2b3440" />
-          <ellipse cx="80" cy="84" rx="44" ry="54" fill="#2b3440" />
-          <ellipse cx="80" cy="92" rx="28" ry="40" fill="#f4f9fc" />
-          <circle cx="66" cy="64" r="12" fill="#ffffff" />
-          <circle cx="94" cy="64" r="12" fill="#ffffff" />
-          <circle cx="69" cy="66" r="6.5" fill="#15202b" />
-          <circle cx="91" cy="66" r="6.5" fill="#15202b" />
-          <circle cx="66" cy="61" r="2.6" fill="#ffffff" />
-          <circle cx="88" cy="61" r="2.6" fill="#ffffff" />
-          <polygon points="80,70 72,80 88,80" fill="#f6a623" />
+        <svg
+          class="hero-art"
+          viewBox="0 0 220 210"
+          xmlns="http://www.w3.org/2000/svg"
+          role="img"
+          aria-label="A happy penguin sitting on a floating ice floe"
+        >
+          <defs>
+            <!-- Keeps the hero sheen inside the body silhouette (just inside the outline). -->
+            <clipPath id="bodyClip"><ellipse cx="110" cy="98" rx="40" ry="43" /></clipPath>
+            <!-- Softens the sheen into a light catch rather than a hard patch. -->
+            <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="3.2" />
+            </filter>
+          </defs>
+
+          <!-- Ice floe -->
+          <ellipse class="floe-shadow" cx="110" cy="180" rx="74" ry="13" fill="#06121f" opacity="0.35" />
+          <ellipse cx="110" cy="157" rx="83" ry="23" fill="#7fb4d4" />
+          <ellipse cx="110" cy="150" rx="83" ry="23" fill="#bfe3f2" stroke="#7fb4d4" stroke-width="2" />
+          <ellipse cx="100" cy="145" rx="55" ry="9" fill="#e8f7ff" opacity="0.55" />
+          <ellipse cx="110" cy="148" rx="42" ry="8" fill="#7fb4d4" opacity="0.45" />
+
+          <!-- Penguin (mirrors the in-game drawPenguinInto art: outlined, chunky) -->
+          <g class="bob">
+            <!-- Webbed feet, splayed in front -->
+            <ellipse cx="93" cy="139" rx="15" ry="8.5" fill="#f6a623" stroke="#c77f15" stroke-width="2.5" transform="rotate(-12.6 93 139)" />
+            <ellipse cx="127" cy="139" rx="15" ry="8.5" fill="#f6a623" stroke="#c77f15" stroke-width="2.5" transform="rotate(12.6 127 139)" />
+            <!-- Flippers behind the body -->
+            <ellipse cx="72" cy="104" rx="10" ry="26" fill="#2b3440" stroke="#141a22" stroke-width="4" transform="rotate(9.2 72 104)" />
+            <ellipse cx="148" cy="104" rx="10" ry="26" fill="#2b3440" stroke="#141a22" stroke-width="4" transform="rotate(-9.2 148 104)" />
+            <!-- Chubby body -->
+            <ellipse cx="110" cy="98" rx="42" ry="45" fill="#2b3440" stroke="#141a22" stroke-width="4" />
+            <!-- Hero-only sheen: a soft dawn light catch on the upper-left of the head -->
+            <ellipse cx="92" cy="68" rx="20" ry="13" fill="#43505f" opacity="0.55" transform="rotate(-22 92 68)" filter="url(#soft)" clip-path="url(#bodyClip)" />
+            <!-- White belly / face front (matches drawPenguinInto: cy 0.2s, 0.54s x 0.58s) -->
+            <ellipse cx="110" cy="120" rx="27" ry="29" fill="#f4f9fc" />
+            <!-- Big eyes -->
+            <ellipse cx="95" cy="83" rx="11" ry="13" fill="#ffffff" />
+            <ellipse cx="125" cy="83" rx="11" ry="13" fill="#ffffff" />
+            <circle cx="97" cy="85" r="7" fill="#15202b" />
+            <circle cx="123" cy="85" r="7" fill="#15202b" />
+            <circle cx="100" cy="81" r="2.5" fill="#ffffff" />
+            <circle cx="126" cy="81" r="2.5" fill="#ffffff" />
+            <!-- Small beak (matches drawPenguinInto position) -->
+            <polygon points="104,93 116,93 110,102" fill="#f6a623" stroke="#c77f15" stroke-width="2" stroke-linejoin="round" />
+          </g>
         </svg>
       </div>
+
       <h1 class="title">ICE HOP</h1>
       <p class="tag">Get the whole colony into the water.</p>
       <button class="start" id="start-button">Play today's puzzle</button>
       <p class="meta" id="meta">Daily puzzle</p>
-      <p class="how">Tap a penguin to hop it over things. Drag a seal to slide. Land every penguin in the water.</p>
+      <p class="how">Tap a penguin to hop. Drag a seal to slide. Land every penguin in the water.</p>
     </main>
+
     <script type="module" src="splash.ts" defer></script>
   </body>
 </html>

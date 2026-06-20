@@ -15,7 +15,72 @@ body {
   overflow: hidden;
 }
 
+/* ---- Calm dawn backdrop --------------------------------------------------- */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Soft northern-lights glow near the top (cool, luminous, low alpha). */
+.aurora {
+  position: absolute;
+  top: -14%;
+  left: -10%;
+  right: -10%;
+  height: 46%;
+  background:
+    radial-gradient(58% 100% at 28% 0%, rgba(94, 240, 192, 0.18), transparent 70%),
+    radial-gradient(56% 100% at 74% 8%, rgba(111, 208, 255, 0.16), transparent 70%);
+  filter: blur(28px);
+  animation: aurora-glow 9s ease-in-out infinite;
+}
+
+/* A scatter of faint stars. */
+.stars {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-image:
+    radial-gradient(1.6px 1.6px at 12% 14%, rgba(234, 246, 251, 0.8), transparent),
+    radial-gradient(1.2px 1.2px at 24% 9%, rgba(234, 246, 251, 0.55), transparent),
+    radial-gradient(1.4px 1.4px at 38% 16%, rgba(234, 246, 251, 0.6), transparent),
+    radial-gradient(1px 1px at 53% 7%, rgba(234, 246, 251, 0.5), transparent),
+    radial-gradient(1.5px 1.5px at 67% 13%, rgba(234, 246, 251, 0.7), transparent),
+    radial-gradient(1.1px 1.1px at 80% 8%, rgba(234, 246, 251, 0.5), transparent),
+    radial-gradient(1.3px 1.3px at 90% 17%, rgba(234, 246, 251, 0.6), transparent);
+  animation: twinkle 6s ease-in-out infinite;
+}
+
+/* Soft snow drifts hugging the bottom edge. */
+.drift {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(10px);
+}
+
+.drift-1 {
+  width: 130%;
+  height: 28%;
+  left: -30%;
+  bottom: -15%;
+  background: rgba(232, 247, 255, 0.08);
+}
+
+.drift-2 {
+  width: 95%;
+  height: 22%;
+  right: -22%;
+  bottom: -10%;
+  background: rgba(232, 247, 255, 0.06);
+}
+
+/* ---- Content -------------------------------------------------------------- */
 .wrap {
+  position: relative;
+  z-index: 1;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -30,11 +95,16 @@ body {
   margin-bottom: 2px;
 }
 
-.penguin {
-  width: clamp(96px, 30vw, 140px);
+.hero-art {
+  width: clamp(150px, 44vw, 216px);
   height: auto;
-  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
-  animation: bob 3s ease-in-out infinite;
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.38));
+}
+
+/* Bob only the penguin group; the floe stays put. */
+.bob {
+  animation: bob 3.2s ease-in-out infinite;
+  transform-origin: center;
 }
 
 @keyframes bob {
@@ -43,7 +113,27 @@ body {
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-6px);
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes aurora-glow {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
@@ -52,6 +142,7 @@ body {
   font-size: clamp(34px, 11vw, 60px);
   letter-spacing: 6px;
   font-weight: 800;
+  text-shadow: 0 2px 16px rgba(127, 224, 255, 0.2);
 }
 
 .tag {
@@ -69,12 +160,19 @@ body {
   font-weight: 700;
   color: #062033;
   background: linear-gradient(180deg, #ff8a5b 0%, #ff7043 100%);
-  box-shadow: 0 8px 20px rgba(255, 112, 67, 0.35);
+  box-shadow: 0 8px 22px rgba(255, 112, 67, 0.4);
   cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.start:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px rgba(255, 112, 67, 0.5);
 }
 
 .start:active {
   transform: translateY(1px);
+  box-shadow: 0 6px 16px rgba(255, 112, 67, 0.35);
 }
 
 .meta {
@@ -90,4 +188,13 @@ body {
   font-size: 12.5px;
   line-height: 1.5;
   opacity: 0.7;
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .bob,
+  .aurora,
+  .stars {
+    animation: none;
+  }
 }
