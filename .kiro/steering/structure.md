@@ -49,8 +49,11 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
     └── client/
         ├── splash.html/.css/.ts   # inline feed view (fast, light)
         ├── game.html/.css/.ts     # expanded Phaser view (game.ts bootstraps Phaser)
+        ├── audio.ts               # tiny Web Audio synth SFX (tap/slide/splash/win) + mute pref
+        ├── art/theme.ts           # palette, vector draw helpers, transitions, win FX
         └── scenes/                # Phaser scenes
-            ├── Boot.ts            # boot + launch GameScene
+            ├── Boot.ts            # boot, load audio pref, launch GameScene
+            ├── HomeScene.ts       # hub: Play / Build / Community + sound toggle
             ├── GameScene.ts       # play the daily or a community puzzle
             ├── EditorScene.ts     # build + live-validate a puzzle
             └── CommunityScene.ts  # load the community stream, hand off to GameScene

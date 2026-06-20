@@ -1,26 +1,33 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { UgcListResponse } from '../../shared/api';
+import { PALETTE, paintBackdrop, drawPenguinInto, fadeInScene, fadeToScene } from '../art/theme';
 
 const TEXT = '#eaf6fb';
 
 /**
- * Loads the community puzzle queue and starts the "stream": it stores the queue
- * in the global registry and launches the first puzzle in GameScene. GameScene
- * handles Next/Skip/Upvote from there. If there are no puzzles, it invites the
- * player to build one.
+ * Loads the community puzzle stream and hands off to GameScene. The server
+ * already filters out puzzles the player has solved and interleaves popular +
+ * fresh ones, so this scene just kicks off the first puzzle. If there are none,
+ * it warmly invites the player to build one.
  */
 export class CommunityScene extends Scene {
+  private bgLayer!: Phaser.GameObjects.Container;
+
   constructor() {
     super('CommunityScene');
   }
 
   create(): void {
-    this.cameras.main.setBackgroundColor(0x0a2a43);
+    this.cameras.main.setBackgroundColor(PALETTE.bg);
+    fadeInScene(this);
+    this.bgLayer = this.add.container(0, 0);
+    paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+
     const w = this.scale.width;
     const h = this.scale.height;
     const status = this.add
-      .text(w / 2, h * 0.4, 'Loading community puzzles...', {
+      .text(w / 2, h * 0.46, 'Loading community puzzles\u2026', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: TEXT,
@@ -38,41 +45,47 @@ export class CommunityScene extends Scene {
       const data: UgcListResponse = await response.json();
       const subs = data.submissions;
       if (subs.length === 0) {
-        status.setText('No community puzzles yet -\nbe the first to build one!');
-        this.addExitButtons();
+        status.setText('No community puzzles yet.\nBe the first to build one!');
+        this.showEmptyState();
         return;
       }
       this.registry.set('ugc.queue', subs);
       this.registry.set('ugc.index', 0);
       const first = subs[0];
-      this.scene.start('GameScene', {
+      fadeToScene(this, 'GameScene', {
         community: { id: first.id, board: first.board, par: first.par, creator: first.creator },
       });
     } catch (error) {
       console.error(error);
       status.setText('Could not load community puzzles.');
-      this.addExitButtons();
+      this.showEmptyState();
     }
   }
 
-  private addExitButtons(): void {
+  private showEmptyState(): void {
     const w = this.scale.width;
     const h = this.scale.height;
+    // A friendly penguin above the call to action.
+    const peng = this.add.container(w / 2, h * 0.3);
+    drawPenguinInto(this, peng, 64);
+
     const build = this.add
-      .text(w / 2, h * 0.56, 'Build a puzzle', {
+      .text(w / 2, h * 0.58, 'Build a puzzle', {
         fontFamily: 'Arial',
         fontSize: '17px',
+        fontStyle: 'bold',
         color: '#062033',
-        backgroundColor: '#aef0d2',
-        padding: { left: 14, right: 14, top: 9, bottom: 9 },
+        backgroundColor: '#ff8a5b',
+        padding: { left: 16, right: 16, top: 10, bottom: 10 },
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    build.on('pointerdown', () => this.scene.start('EditorScene'));
+    build.on('pointerdown', () => fadeToScene(this, 'EditorScene'));
+
     const back = this.add
-      .text(w / 2, h * 0.68, 'Back to daily', { fontFamily: 'Arial', fontSize: '16px', color: TEXT })
+      .text(w / 2, h * 0.7, 'Back to daily', { fontFamily: 'Arial', fontSize: '15px', color: TEXT })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    back.on('pointerdown', () => this.scene.start('GameScene'));
+    back.on('pointerdown', () => fadeToScene(this, 'GameScene'));
   }
 }

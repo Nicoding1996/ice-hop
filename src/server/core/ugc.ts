@@ -109,22 +109,33 @@ export const listStreamForUser = async (
   }
 
   const playedIds = await getPlayedIds(username);
-  return orderCommunityStream(subs, { playedIds, excludeCreator: username, limit });
+  // Note: we intentionally do NOT exclude the player's own puzzles, so creators
+  // can see their submission go live (and a solo tester/judge isn't shown an
+  // empty stream). Solved puzzles are still filtered out via playedIds.
+  return orderCommunityStream(subs, { playedIds, limit });
 };
 
-/** One upvote per user per submission (enforced with hSetNX). */
+/** One upvote per user per submission (enforced with hSetNX). Creators cannot
+ *  upvote their own puzzles. */
 export const votePuzzle = async (id: string): Promise<VoteResponse> => {
   const username = (await reddit.getCurrentUsername()) ?? 'anon';
-  if (username === 'anon') return { ok: false, votes: 0 };
+  if (username === 'anon') return { ok: false, votes: 0, reason: 'Sign in to upvote.' };
 
-  const exists = await redis.exists(keys.ugcSubmission(id));
-  if (!exists) return { ok: false, votes: 0 };
+  const raw = await redis.get(keys.ugcSubmission(id));
+  if (!raw) return { ok: false, votes: 0, reason: 'That puzzle is no longer around.' };
+  const sub: UgcSubmission = JSON.parse(raw);
+
+  const currentVotes = async (): Promise<number> => {
+    const v = await redis.zScore(keys.ugcIndex(), id);
+    return typeof v === 'number' ? v : 0;
+  };
+
+  if (sub.creator === username) {
+    return { ok: false, votes: await currentVotes(), reason: "You can't upvote your own puzzle." };
+  }
 
   const added = await redis.hSetNX(keys.ugcVoters(id), username, '1');
-  if (!added) {
-    const current = await redis.zScore(keys.ugcIndex(), id);
-    return { ok: false, votes: typeof current === 'number' ? current : 0 };
-  }
+  if (!added) return { ok: false, votes: await currentVotes(), reason: 'You already upvoted this one.' };
 
   const votes = await redis.zIncrBy(keys.ugcIndex(), id, 1);
   return { ok: true, votes };

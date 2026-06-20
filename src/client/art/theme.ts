@@ -257,3 +257,74 @@ export const splashBurst = (
     });
   }
 };
+
+/** Fade the camera out, then start another scene (pair with fadeIn on create). */
+export const fadeToScene = (scene: Phaser.Scene, key: string, data?: object): void => {
+  scene.cameras.main.fadeOut(160, 11, 31, 58);
+  // Always pass a fresh object: Phaser keeps the scene's PREVIOUS data when started
+  // with undefined, which would otherwise reload a stale community puzzle.
+  scene.cameras.main.once('camerafadeoutcomplete', () => scene.scene.start(key, data ?? {}));
+};
+
+/** Standard fade-in for a scene's create(), matching the dawn backdrop. */
+export const fadeInScene = (scene: Phaser.Scene): void => {
+  scene.cameras.main.fadeIn(200, 11, 31, 58);
+};
+
+/** A celebratory burst of little stars that fan out and fade (for wins). */
+export const sparkleBurst = (
+  scene: Phaser.Scene,
+  layer: Phaser.GameObjects.Container,
+  x: number,
+  y: number,
+  s: number
+): void => {
+  const colors = [PALETTE.gold, 0xffffff, PALETTE.waterShimmer];
+  for (let i = 0; i < 14; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = s * (0.6 + Math.random() * 0.9);
+    const color = colors[i % colors.length];
+    const sp = scene.add.star(x, y, 4, s * 0.05, s * 0.12, color, 0.95).setAngle(Math.random() * 90);
+    layer.add(sp);
+    scene.tweens.add({
+      targets: sp,
+      x: x + Math.cos(ang) * dist,
+      y: y + Math.sin(ang) * dist,
+      alpha: 0,
+      scale: 0.2,
+      angle: sp.angle + 140,
+      duration: 600 + Math.random() * 350,
+      ease: 'Quad.easeOut',
+      onComplete: () => sp.destroy(),
+    });
+  }
+};
+
+/** Subtle northern-lights curtains near the top, for a standout (3-star) win.
+ *  Thin vertical glows with ADD blending so colours stay luminous over the dark
+ *  win overlay (a low-alpha fill would just muddy into a grey oval). */
+export const auroraFlourish = (
+  scene: Phaser.Scene,
+  layer: Phaser.GameObjects.Container,
+  width: number,
+  y: number
+): void => {
+  const cols = [0x5ef0c0, 0x6fd0ff, 0x9a7bff];
+  for (let i = 0; i < 7; i++) {
+    const x = width * (0.12 + i * 0.12);
+    const curtain = scene.add.ellipse(x, y, width * 0.08, 150, cols[i % cols.length], 0);
+    curtain.setBlendMode(Phaser.BlendModes.ADD);
+    layer.add(curtain);
+    scene.tweens.add({
+      targets: curtain,
+      alpha: 0.22,
+      scaleY: 1.3 + Math.random() * 0.5,
+      y: y + (Math.random() * 28 - 14),
+      duration: 1200 + Math.random() * 900,
+      delay: i * 120,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+  }
+};

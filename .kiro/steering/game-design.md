@@ -87,7 +87,9 @@ The community stream is built per player (`listStreamForUser` + the pure
 - Excludes puzzles the player has already solved (tracked in `ugc:played:{user}`,
   recorded when a community puzzle is solved). Skips do NOT mark a puzzle played,
   so a skipped puzzle can resurface later.
-- Excludes the player's own puzzles.
+- Includes the player's own puzzles, so a creator (or a solo tester/judge) can
+  see their submission go live instead of an empty stream; solved ones still drop
+  out via the played set.
 - Interleaves the top-voted pool with the newest pool, so favourites stay visible
   and new submissions still get seen (no pure vote-ranking that buries new work).
 

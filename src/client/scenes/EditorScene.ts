@@ -4,28 +4,32 @@ import type { Board, Piece } from '../../shared/game/types';
 import type { SubmitPuzzleResponse } from '../../shared/api';
 import { validateSubmission } from '../../shared/solver/validate';
 import { generate } from '../../shared/solver/generator';
+import {
+  PALETTE,
+  paintBackdrop,
+  paintIceSheet,
+  makeWaterHole,
+  drawPenguinInto,
+  drawSealInto,
+  drawRockInto,
+  fadeInScene,
+  fadeToScene,
+} from '../art/theme';
 
-const COLORS = {
-  bg: 0x0a2a43,
-  ice: 0xa7d8ec,
-  iceEdge: 0xd6f0fa,
-  water: 0x0c3f59,
-  waterRing: 0x14628a,
-  rock: 0x8b97a4,
-  rockTop: 0xbcc6d0,
-  seal: 0x556471,
-  sealBelly: 0x8b9aa7,
-  penguin: 0x232b33,
-  penguinBelly: 0xf3f7fa,
-  beak: 0xf2a33c,
-  eye: 0x10151a,
+// CSS-string colours for text/buttons; numbers for shape fills.
+const UI = {
   text: '#eaf6fb',
-  good: '#7ee0b8',
+  good: '#8fe0c0',
   warn: '#ffd27e',
-  toolIdle: '#244a63',
-  toolActive: '#ffe08a',
-  action: '#aef0d2',
-  actionMuted: '#5b6b78',
+  toolLabelIdle: '#dbeaf3',
+  toolLabelActive: '#062033',
+  action: '#cfe6f2',
+  actionText: '#062033',
+  submit: '#ff8a5b',
+  submitMuted: '#3a5066',
+  back: '#1f3f59',
+  chipIdle: 0x1f3f59,
+  chipActive: 0xffd166,
 };
 
 type Tool = 'PENGUIN' | 'SEAL' | 'ROCK' | 'HOLE' | 'ERASE';
@@ -34,9 +38,16 @@ const TOOLS: ReadonlyArray<{ tool: Tool; label: string }> = [
   { tool: 'PENGUIN', label: 'Penguin' },
   { tool: 'SEAL', label: 'Seal' },
   { tool: 'ROCK', label: 'Rock' },
-  { tool: 'HOLE', label: 'Hole' },
+  { tool: 'HOLE', label: 'Water' },
   { tool: 'ERASE', label: 'Erase' },
 ];
+
+type ToolChip = {
+  tool: Tool;
+  cont: Phaser.GameObjects.Container;
+  bg: Phaser.GameObjects.Rectangle;
+  label: Phaser.GameObjects.Text;
+};
 
 export class EditorScene extends Scene {
   private readonly width = 5;
@@ -48,12 +59,15 @@ export class EditorScene extends Scene {
   private history: string[] = [];
   private canSubmit = false;
   private submitting = false;
+  private touched = false;
 
+  private bgLayer!: Phaser.GameObjects.Container;
   private boardLayer!: Phaser.GameObjects.Container;
   private pieceLayer!: Phaser.GameObjects.Container;
   private titleText!: Phaser.GameObjects.Text;
   private statusText!: Phaser.GameObjects.Text;
-  private toolButtons: { tool: Tool; text: Phaser.GameObjects.Text }[] = [];
+  private backButton!: Phaser.GameObjects.Text;
+  private toolChips: ToolChip[] = [];
   private submitButton!: Phaser.GameObjects.Text;
   private actionButtons: Phaser.GameObjects.Text[] = [];
 
@@ -72,38 +86,35 @@ export class EditorScene extends Scene {
     this.sealOrient = 'H';
     this.canSubmit = false;
     this.submitting = false;
+    this.touched = false;
 
-    this.cameras.main.setBackgroundColor(COLORS.bg);
+    this.cameras.main.setBackgroundColor(PALETTE.bg);
+    fadeInScene(this);
+    this.bgLayer = this.add.container(0, 0);
+    paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
     this.boardLayer = this.add.container(0, 0);
     this.pieceLayer = this.add.container(0, 0);
 
     this.titleText = this.add
-      .text(0, 0, 'Build a puzzle', { fontFamily: 'Arial', fontSize: '20px', color: COLORS.text })
+      .text(0, 0, 'Build a puzzle', { fontFamily: 'Arial', fontSize: '20px', color: UI.text, fontStyle: 'bold' })
       .setOrigin(0.5);
     this.statusText = this.add
-      .text(0, 0, '', { fontFamily: 'Arial', fontSize: '15px', color: COLORS.warn, align: 'center' })
+      .text(0, 0, '', { fontFamily: 'Arial', fontSize: '14px', color: UI.warn, align: 'center' })
       .setOrigin(0.5);
+    this.backButton = this.makeButton('\u2039 Back', UI.back, UI.text, () => fadeToScene(this, 'HomeScene'));
 
-    this.toolButtons = TOOLS.map(({ tool, label }) => ({
-      tool,
-      text: this.makeButton(
-        label,
-        COLORS.toolIdle,
-        '#ffffff',
-        tool === 'SEAL' ? () => this.onSealToolTap() : () => this.setTool(tool)
-      ),
-    }));
+    this.toolChips = TOOLS.map(({ tool, label }) => this.makeToolChip(tool, label));
 
-    this.submitButton = this.makeButton('Submit', COLORS.actionMuted, '#062033', () => void this.submit());
+    this.submitButton = this.makeButton('Submit', UI.submitMuted, '#ffffff', () => void this.submit());
     this.actionButtons = [
-      this.makeButton('Random', COLORS.action, '#062033', () => this.randomFill()),
-      this.makeButton('Undo', COLORS.action, '#062033', () => this.undo()),
-      this.makeButton('Clear', COLORS.action, '#062033', () => this.clearAll()),
+      this.makeButton('Random', UI.action, UI.actionText, () => this.randomFill()),
+      this.makeButton('Undo', UI.action, UI.actionText, () => this.undo()),
+      this.makeButton('Clear', UI.action, UI.actionText, () => this.clearAll()),
       this.submitButton,
-      this.makeButton('Back', COLORS.action, '#062033', () => this.scene.start('GameScene')),
     ];
 
     this.scale.on('resize', () => {
+      paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       this.layoutAll();
       this.render();
     });
@@ -113,6 +124,9 @@ export class EditorScene extends Scene {
     this.layoutAll();
     this.render();
     this.revalidate();
+    // Friendly first nudge before any edits.
+    this.statusText.setText('Pick a tool, then tap the ice to build.');
+    this.statusText.setColor(UI.text);
   }
 
   private makeButton(
@@ -127,7 +141,7 @@ export class EditorScene extends Scene {
         fontSize: '15px',
         color: fg,
         backgroundColor: bg,
-        padding: { left: 9, right: 9, top: 6, bottom: 6 },
+        padding: { left: 11, right: 11, top: 7, bottom: 7 },
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
@@ -135,15 +149,44 @@ export class EditorScene extends Scene {
     return btn;
   }
 
+  private makeToolChip(tool: Tool, label: string): ToolChip {
+    const cont = this.add.container(0, 0);
+    const bg = this.add.rectangle(0, 0, 64, 52, UI.chipIdle).setStrokeStyle(1.5, PALETTE.iceEdge, 0.5);
+    const icon = this.add.container(0, -8);
+    this.drawToolIcon(icon, tool, 22);
+    const text = this.add
+      .text(0, 17, label, { fontFamily: 'Arial', fontSize: '12px', color: UI.toolLabelIdle })
+      .setOrigin(0.5);
+    cont.add([bg, icon, text]);
+    cont.on('pointerdown', () => (tool === 'SEAL' ? this.onSealToolTap() : this.setTool(tool)));
+    return { tool, cont, bg, label: text };
+  }
+
+  private drawToolIcon(cont: Phaser.GameObjects.Container, tool: Tool, s: number): void {
+    if (tool === 'PENGUIN') drawPenguinInto(this, cont, s);
+    else if (tool === 'SEAL') drawSealInto(this, cont, s * 0.7, 'H');
+    else if (tool === 'ROCK') drawRockInto(this, cont, s);
+    else if (tool === 'HOLE') {
+      cont.add(this.add.circle(0, 0, s * 0.36, PALETTE.holeRim));
+      cont.add(this.add.circle(0, 0, s * 0.3, PALETTE.water));
+      cont.add(this.add.ellipse(-s * 0.08, -s * 0.09, s * 0.16, s * 0.09, PALETTE.waterShimmer, 0.85));
+    } else {
+      cont.add(this.add.circle(0, 0, s * 0.36, 0xffffff, 0.9).setStrokeStyle(Math.max(1, s * 0.05), PALETTE.sealOutline));
+      cont.add(this.add.rectangle(0, 0, s * 0.44, Math.max(2, s * 0.09), PALETTE.sealOutline).setRotation(0.785));
+      cont.add(this.add.rectangle(0, 0, s * 0.44, Math.max(2, s * 0.09), PALETTE.sealOutline).setRotation(-0.785));
+    }
+  }
+
   private layoutAll(): void {
     const w = this.scale.width;
     const h = this.scale.height;
-    const topBar = 80;
-    const bottomBar = 104;
+    const topBar = 74;
+    const bottomBar = 120;
 
     this.titleText.setPosition(w / 2, 22);
-    this.statusText.setPosition(w / 2, 54);
-    this.statusText.setWordWrapWidth(w - 24);
+    this.statusText.setPosition(w / 2, 50);
+    this.statusText.setWordWrapWidth(w - 40);
+    this.backButton.setPosition(40, 24);
 
     const pad = 16;
     const availW = w - pad * 2;
@@ -154,8 +197,22 @@ export class EditorScene extends Scene {
     this.originX = (w - gridW) / 2;
     this.originY = topBar + (availH - gridH) / 2;
 
-    this.spread(this.toolButtons.map((b) => b.text), h - bottomBar + 34);
-    this.spread(this.actionButtons, h - 30);
+    const margin = 8;
+    const toolsY = h - bottomBar + 40;
+    const chipH = 54;
+    const tslot = (w - margin * 2) / this.toolChips.length;
+    const cw = Math.min(tslot - 6, 80);
+    this.toolChips.forEach((chip, i) => {
+      const x = margin + tslot * (i + 0.5);
+      chip.cont.setPosition(x, toolsY);
+      chip.bg.setSize(cw, chipH);
+      chip.cont.setInteractive(
+        new Phaser.Geom.Rectangle(-cw / 2, -chipH / 2, cw, chipH),
+        Phaser.Geom.Rectangle.Contains
+      );
+    });
+
+    this.spread(this.actionButtons, h - 26);
   }
 
   private spread(buttons: Phaser.GameObjects.Text[], y: number): void {
@@ -193,36 +250,29 @@ export class EditorScene extends Scene {
     return JSON.stringify({ pieces: this.pieces, holes: [...this.holes].sort((a, b) => a - b) });
   }
 
-  private recordHistory(): void {
-    this.history.push(this.serialize());
-    if (this.history.length > 60) this.history.shift();
-  }
-
   private render(): void {
     this.boardLayer.removeAll(true);
     this.pieceLayer.removeAll(true);
     const s = this.cell;
 
+    // One connected ice sheet (matches the game board).
+    paintIceSheet(this, this.boardLayer, this.originX, this.originY, this.width, this.height, s);
+
     for (let i = 0; i < this.width * this.height; i++) {
       const { x, y } = this.cellCenter(i);
-      const tile = this.add
-        .rectangle(x, y, s * 0.94, s * 0.94, COLORS.ice)
-        .setStrokeStyle(2, COLORS.iceEdge)
-        .setInteractive({ useHandCursor: true });
-      tile.on('pointerdown', () => this.applyTool(i));
-      this.boardLayer.add(tile);
-      if (this.holes.has(i)) {
-        this.boardLayer.add(this.add.circle(x, y, s * 0.37, COLORS.waterRing));
-        this.boardLayer.add(this.add.circle(x, y, s * 0.3, COLORS.water));
-      }
+      if (this.holes.has(i)) this.boardLayer.add(makeWaterHole(this, x, y, s));
+      // Transparent tap zone per cell (kept above holes; pieces are non-interactive).
+      const zone = this.add.rectangle(x, y, s * 0.96, s * 0.96, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+      zone.on('pointerdown', () => this.applyTool(i));
+      this.boardLayer.add(zone);
     }
 
     for (const piece of this.pieces) {
       const { x, y } = this.pieceCenterPx(piece.cells);
       const c = this.add.container(x, y);
-      if (piece.kind === 'HOPPER') this.drawPenguin(c);
-      else if (piece.kind === 'SLIDER') this.drawSeal(c, piece.orient ?? 'H');
-      else this.drawRock(c);
+      if (piece.kind === 'HOPPER') drawPenguinInto(this, c, s);
+      else if (piece.kind === 'SLIDER') drawSealInto(this, c, s, piece.orient ?? 'H');
+      else drawRockInto(this, c, s);
       this.pieceLayer.add(c);
     }
   }
@@ -274,6 +324,7 @@ export class EditorScene extends Scene {
     if (this.serialize() !== before) {
       this.history.push(before);
       if (this.history.length > 60) this.history.shift();
+      this.touched = true;
     }
     this.render();
     this.revalidate();
@@ -302,22 +353,23 @@ export class EditorScene extends Scene {
     const result = validateSubmission(this.currentBoard());
     if (result.ok) {
       this.canSubmit = true;
-      this.statusText.setText(`Solvable in ${result.par} moves - tap Submit!`);
-      this.statusText.setColor(COLORS.good);
+      this.statusText.setText(`Solvable in ${result.par} moves \u2014 tap Submit!`);
+      this.statusText.setColor(UI.good);
     } else {
       this.canSubmit = false;
-      this.statusText.setText(result.reason);
-      this.statusText.setColor(COLORS.warn);
+      this.statusText.setText(this.touched ? result.reason : 'Pick a tool, then tap the ice to build.');
+      this.statusText.setColor(this.touched ? UI.warn : UI.text);
     }
-    this.submitButton.setBackgroundColor(this.canSubmit ? COLORS.action : COLORS.actionMuted);
+    this.submitButton.setBackgroundColor(this.canSubmit ? UI.submit : UI.submitMuted);
+    this.submitButton.setColor(this.canSubmit ? '#062033' : '#ffffff');
   }
 
   private setTool(tool: Tool): void {
     this.currentTool = tool;
-    for (const b of this.toolButtons) {
-      const active = b.tool === tool;
-      b.text.setBackgroundColor(active ? COLORS.toolActive : COLORS.toolIdle);
-      b.text.setColor(active ? '#062033' : '#ffffff');
+    for (const chip of this.toolChips) {
+      const active = chip.tool === tool;
+      chip.bg.setFillStyle(active ? UI.chipActive : UI.chipIdle);
+      chip.label.setColor(active ? UI.toolLabelActive : UI.toolLabelIdle);
     }
   }
 
@@ -331,8 +383,8 @@ export class EditorScene extends Scene {
   }
 
   private updateSealLabel(): void {
-    const sealBtn = this.toolButtons.find((b) => b.tool === 'SEAL');
-    if (sealBtn) sealBtn.text.setText(this.sealOrient === 'H' ? 'Seal \u2194' : 'Seal \u2195');
+    const sealChip = this.toolChips.find((c) => c.tool === 'SEAL');
+    if (sealChip) sealChip.label.setText(this.sealOrient === 'H' ? 'Seal \u2194' : 'Seal \u2195');
   }
 
   private randomFill(): void {
@@ -347,20 +399,23 @@ export class EditorScene extends Scene {
       attempts: 1500,
     });
     if (g) {
-      this.recordHistory();
+      this.history.push(this.serialize());
+      if (this.history.length > 60) this.history.shift();
+      this.touched = true;
       this.pieces = g.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.holes = new Set(g.board.holes);
       this.render();
       this.revalidate();
     } else {
-      this.statusText.setText('Could not make a starter - tap Random again.');
-      this.statusText.setColor(COLORS.warn);
+      this.statusText.setText('Could not make a starter \u2014 tap Random again.');
+      this.statusText.setColor(UI.warn);
     }
   }
 
   private clearAll(): void {
     if (this.pieces.length === 0 && this.holes.size === 0) return;
-    this.recordHistory();
+    this.history.push(this.serialize());
+    if (this.history.length > 60) this.history.shift();
     this.pieces = [];
     this.holes = new Set<number>();
     this.render();
@@ -371,7 +426,7 @@ export class EditorScene extends Scene {
     if (!this.canSubmit || this.submitting) return;
     this.submitting = true;
     this.statusText.setText('Submitting...');
-    this.statusText.setColor(COLORS.text);
+    this.statusText.setColor(UI.text);
     try {
       const response = await fetch('/api/ugc/submit', {
         method: 'POST',
@@ -381,46 +436,19 @@ export class EditorScene extends Scene {
       const data: SubmitPuzzleResponse = await response.json();
       if (data.ok) {
         this.statusText.setText(`Submitted! Par ${data.par}. The community can play it now.`);
-        this.statusText.setColor(COLORS.good);
+        this.statusText.setColor(UI.good);
         this.canSubmit = false;
-        this.submitButton.setBackgroundColor(COLORS.actionMuted);
+        this.submitButton.setBackgroundColor(UI.submitMuted);
+        this.submitButton.setColor('#ffffff');
       } else {
         this.statusText.setText(data.reason);
-        this.statusText.setColor(COLORS.warn);
+        this.statusText.setColor(UI.warn);
       }
     } catch (error) {
       console.error(error);
-      this.statusText.setText('Could not submit - try again.');
-      this.statusText.setColor(COLORS.warn);
+      this.statusText.setText('Could not submit \u2014 try again.');
+      this.statusText.setColor(UI.warn);
     }
     this.submitting = false;
-  }
-
-  private drawPenguin(c: Phaser.GameObjects.Container): void {
-    const s = this.cell;
-    c.add(this.add.ellipse(0, 0, s * 0.62, s * 0.74, COLORS.penguin));
-    c.add(this.add.ellipse(0, s * 0.06, s * 0.4, s * 0.54, COLORS.penguinBelly));
-    c.add(this.add.triangle(0, s * 0.04, -s * 0.07, 0, s * 0.07, 0, 0, s * 0.12, COLORS.beak));
-    c.add(this.add.circle(-s * 0.1, -s * 0.18, s * 0.045, COLORS.eye));
-    c.add(this.add.circle(s * 0.1, -s * 0.18, s * 0.045, COLORS.eye));
-  }
-
-  private drawSeal(c: Phaser.GameObjects.Container, orient: 'H' | 'V'): void {
-    const s = this.cell;
-    const long = s * 1.66;
-    const short = s * 0.5;
-    const w = orient === 'H' ? long : short;
-    const h = orient === 'H' ? short : long;
-    c.add(this.add.ellipse(0, 0, w, h, COLORS.seal));
-    c.add(this.add.ellipse(0, 0, w * 0.7, h * 0.6, COLORS.sealBelly));
-    const headX = orient === 'H' ? w * 0.42 : 0;
-    const headY = orient === 'H' ? 0 : -h * 0.42;
-    c.add(this.add.circle(headX, headY, s * 0.2, COLORS.seal));
-  }
-
-  private drawRock(c: Phaser.GameObjects.Container): void {
-    const s = this.cell;
-    c.add(this.add.rectangle(0, s * 0.08, s * 0.7, s * 0.46, COLORS.rock));
-    c.add(this.add.ellipse(0, -s * 0.12, s * 0.62, s * 0.3, COLORS.rockTop));
   }
 }
