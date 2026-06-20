@@ -54,6 +54,16 @@ players, and the solver counts moves the same way.
    content + creators return to see plays and votes. (Future option: promote a
    top-voted community puzzle into a curated daily. Today the daily and the
    community stream are independent: the daily is always freshly generated.)
+6. Endless mode (the "play more" loop): a tier picker (Easy / Medium / Hard)
+   backed by the same solver-graded generator as the daily, serving an unlimited
+   random shuffle of fresh puzzles from the chosen bucket. A lifetime "Solved: N"
+   count (Redis `endless:{user}`) is the progression payoff and ticks up on the
+   win screen. Endless is the cold-start answer: it is always full even when a
+   subreddit has zero community puzzles, so it - not the (possibly empty)
+   community stream - is the CTA after a daily solve. Tiers are defined purely by
+   the generator levers (par range + piece counts): Easy is trap-free
+   (`requireAllPiecesUsed`, par ~2-4), Medium allows decoys (par ~5-8), Hard is
+   brutal-but-fair (more pieces, par ~7-12) but never literally unsolvable.
 
 ## Solver is the linchpin
 
@@ -152,13 +162,18 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 
 ## Navigation & flow
 
-- Home hub (`HomeScene`): the menu screen with Play today's puzzle / Build a
-  puzzle / Community puzzles, plus a persistent sound on/off toggle.
+- Home hub (`HomeScene`): the menu screen with Play today's puzzle / Endless
+  puzzles / Build a puzzle / Community puzzles, plus a persistent sound on/off
+  toggle.
+- Endless tier select (`EndlessScene`): pick Easy / Medium / Hard; shows the
+  lifetime "Solved so far" banner and routes into `GameScene` in endless mode.
 - In play, the only HUD nav is a single "‹ Menu" button (top-left) back to the
-  hub; Build/Community live on the hub, not crowding the board.
-- No dead ends: the daily win screen offers Copy result, Play community puzzles,
-  and Menu; community wins offer Upvote / Next / Back to daily; test wins offer
-  Back to editing.
+  hub; Build/Community live on the hub, not crowding the board. Endless play also
+  shows a top-right "Solved: N" progression banner.
+- No dead ends: the daily win screen offers Copy result, More puzzles (-> Endless
+  tier select), and Menu; endless wins offer Next puzzle (same tier) / Change
+  level / Menu; community wins offer Upvote / Next / Back to daily; test wins
+  offer Back to editing.
 - Loading state: the board hides behind a calm "Getting the penguins ready..."
   message until the puzzle is fetched and rendered, so no half-built frame flashes.
 - Scene transitions: a shared camera fade (`fadeToScene` / `fadeInScene` in

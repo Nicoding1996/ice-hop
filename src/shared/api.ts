@@ -67,3 +67,20 @@ export type VoteResponse = { readonly ok: boolean; readonly votes: number; reado
 
 /** Client -> server (POST /api/ugc/played) to mark a community puzzle solved. */
 export type MarkPlayedRequest = { readonly id: string };
+
+// --- Endless mode ---
+
+/** The three solver-graded difficulty buckets for endless play. */
+export type EndlessTier = 'easy' | 'medium' | 'hard';
+
+/** Response from GET /api/endless?tier=: a fresh graded puzzle + lifetime count. */
+export type EndlessResponse = {
+  readonly tier: EndlessTier;
+  readonly board: Board;
+  readonly par: number;
+  /** Total endless puzzles this player has solved (the progression banner). */
+  readonly solved: number;
+};
+
+/** Server -> client after recording an endless solve. */
+export type EndlessSolvedResponse = { readonly solved: number };

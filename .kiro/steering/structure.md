@@ -36,7 +36,7 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
     ├── server/
     │   ├── index.ts         # Hono entry (mounts /api and /internal)
     │   ├── routes/
-    │   │   ├── api.ts        # /api/* (init, solve, leaderboard)
+    │   │   ├── api.ts        # /api/* (init, solve, leaderboard, endless)
     │   │   ├── ugc.ts        # /api/ugc/* (submit, list, vote)
     │   │   ├── menu.ts       # /internal/menu/*
     │   │   ├── triggers.ts   # /internal/triggers/* (onAppInstall)
@@ -44,6 +44,7 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
     │   └── core/
     │       ├── post.ts       # create daily post + seed the pinned how-to comment
     │       ├── daily.ts      # daily puzzle generation/storage (Redis)
+    │       ├── endless.ts    # endless-mode tiered generation + lifetime solve counter
     │       ├── leaderboard.ts# Redis sorted sets + streaks
     │       ├── ugc.ts        # user puzzle submit/list/vote + solver validation
     │       └── keys.ts       # single source of truth for Redis keys
@@ -54,10 +55,11 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
         ├── art/theme.ts           # palette, vector draw helpers, transitions, win FX
         └── scenes/                # Phaser scenes
             ├── Boot.ts            # boot, load audio pref, launch GameScene
-            ├── HomeScene.ts       # hub: Play / Build / Community + sound toggle
-            ├── GameScene.ts       # play the daily or a community puzzle
+            ├── HomeScene.ts       # hub: Play / Endless / Build / Community + sound toggle
+            ├── GameScene.ts       # play the daily, an endless, a community, or a test puzzle
             ├── EditorScene.ts     # build + live-validate a puzzle
-            └── CommunityScene.ts  # load the community stream, hand off to GameScene
+            ├── CommunityScene.ts  # load the community stream, hand off to GameScene
+            └── EndlessScene.ts    # endless tier select (Easy/Medium/Hard) + solved banner
 ```
 
 ## Conventions
@@ -72,4 +74,6 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
   `ugc:sub:{id}`, `ugc:index` (sorted set by votes), `ugc:recent` (sorted set by
   createdAt), `ugc:voters:{id}` (hash, one-vote-per-user), `ugc:boards` (hash of
   board signatures for dedup), `ugc:played:{user}` (sorted set of solved puzzles),
-  and `ugc:subs:{user}:{date}` (per-day submission counter for the rate limit).
+  `ugc:subs:{user}:{date}` (per-day submission counter for the rate limit), and
+  `endless:{user}` (lifetime count of endless puzzles solved - the progression
+  banner).

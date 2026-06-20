@@ -1,18 +1,26 @@
 import { Hono } from 'hono';
 import { context, reddit, redis } from '@devvit/web/server';
 import type {
+  EndlessResponse,
+  EndlessSolvedResponse,
+  EndlessTier,
   InitResponse,
   LeaderboardResponse,
   SolveResultDTO,
   SolveSubmission,
 } from '../../shared/api';
 import { getOrCreateDailyPuzzle } from '../core/daily';
+import { generateEndlessPuzzle, getEndlessSolved, recordEndlessSolve } from '../core/endless';
 import { getDailyLeaderboard, recordSolve } from '../core/leaderboard';
 import { keys } from '../core/keys';
 import { todayUtc } from '../../shared/date';
 import { ugc } from './ugc';
 
 type ErrorResponse = { status: 'error'; message: string };
+
+const ENDLESS_TIERS: ReadonlyArray<EndlessTier> = ['easy', 'medium', 'hard'];
+const asTier = (value: string | undefined): EndlessTier =>
+  ENDLESS_TIERS.find((t) => t === value) ?? 'easy';
 
 export const api = new Hono();
 
@@ -87,6 +95,48 @@ api.get('/leaderboard', async (c) => {
   } catch (error) {
     console.error(`/api/leaderboard failed: ${error}`);
     const message = error instanceof Error ? error.message : 'leaderboard failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// Endless mode: hand back a fresh, solver-verified puzzle for the requested
+// tier plus the viewer's lifetime solved count (the progression banner).
+api.get('/endless', async (c) => {
+  try {
+    const tier = asTier(c.req.query('tier'));
+    const username = (await reddit.getCurrentUsername()) ?? 'anon';
+    const { board, par } = generateEndlessPuzzle(tier);
+    const solved = await getEndlessSolved(username);
+    return c.json<EndlessResponse>({ tier, board, par, solved });
+  } catch (error) {
+    console.error(`/api/endless failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'endless failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// Lightweight lifetime count for the tier-select banner (no puzzle generation).
+api.get('/endless/stats', async (c) => {
+  try {
+    const username = (await reddit.getCurrentUsername()) ?? 'anon';
+    const solved = await getEndlessSolved(username);
+    return c.json<EndlessSolvedResponse>({ solved });
+  } catch (error) {
+    console.error(`/api/endless/stats failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'endless stats failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// Records one endless solve and returns the new lifetime total.
+api.post('/endless/solved', async (c) => {
+  try {
+    const username = (await reddit.getCurrentUsername()) ?? 'anon';
+    const solved = await recordEndlessSolve(username);
+    return c.json<EndlessSolvedResponse>({ solved });
+  } catch (error) {
+    console.error(`/api/endless/solved failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'endless solve failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });

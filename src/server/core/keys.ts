@@ -31,4 +31,8 @@ export const keys = {
   ugcPlayed: (user: string): string => `ugc:played:${user}`,
   /** How many puzzles a user has submitted on a given UTC day (rate limit). */
   ugcDailyCount: (user: string, date: string): string => `ugc:subs:${user}:${date}`,
+
+  // --- Endless mode ---
+  /** Lifetime count of endless puzzles a user has solved (progression banner). */
+  endlessSolved: (user: string): string => `endless:${user}`,
 };

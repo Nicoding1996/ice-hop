@@ -1,7 +1,16 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { Board, Move, Piece } from '../../shared/game/types';
-import type { InitResponse, LeaderboardResponse, SolveResultDTO, UgcSubmission, VoteResponse } from '../../shared/api';
+import type {
+  EndlessResponse,
+  EndlessSolvedResponse,
+  EndlessTier,
+  InitResponse,
+  LeaderboardResponse,
+  SolveResultDTO,
+  UgcSubmission,
+  VoteResponse,
+} from '../../shared/api';
 import { legalMoves } from '../../shared/game/moves';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
@@ -51,6 +60,10 @@ export class GameScene extends Scene {
   private testBoard?: Board;
   private testPar = 0;
   private isTest = false;
+  private isEndless = false;
+  private endlessTier: EndlessTier = 'easy';
+  private endlessSolved = 0;
+  private endlessBanner!: Phaser.GameObjects.Text;
   private skipButton!: Phaser.GameObjects.Text;
   private dragState: DragState | null = null;
 
@@ -76,12 +89,16 @@ export class GameScene extends Scene {
   init(data?: {
     community?: { id: string; board: Board; par: number; creator: string };
     test?: { board: Board; par: number };
+    endless?: { tier: EndlessTier };
   }): void {
     this.communityPuzzle = data?.community;
     this.isCommunity = Boolean(data?.community);
     this.testBoard = data?.test?.board;
     this.testPar = data?.test?.par ?? 0;
     this.isTest = Boolean(data?.test);
+    this.isEndless = Boolean(data?.endless);
+    this.endlessTier = data?.endless?.tier ?? 'easy';
+    this.endlessSolved = 0;
     // Scene instances are reused across restarts, so reset transient state here.
     this.pieces = [];
     this.moves = 0;
@@ -143,6 +160,18 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     this.skipButton.on('pointerdown', () => this.nextCommunity());
     this.uiLayer.add(this.skipButton);
+
+    // Endless progression banner (top-right): lifetime puzzles solved.
+    this.endlessBanner = this.add
+      .text(0, 0, '', {
+        fontFamily: 'Arial',
+        fontSize: '13px',
+        color: '#062033',
+        backgroundColor: '#ffd166',
+        padding: { left: 9, right: 9, top: 5, bottom: 5 },
+      })
+      .setOrigin(1, 0.5);
+    this.uiLayer.add(this.endlessBanner);
 
     // Tapping empty ice clears the current selection.
     this.input.on(
@@ -215,6 +244,27 @@ export class GameScene extends Scene {
       this.layout();
       this.renderBoard();
       this.updateHud();
+      return;
+    }
+    if (this.isEndless) {
+      try {
+        const response = await fetch(`/api/endless?tier=${encodeURIComponent(this.endlessTier)}`);
+        if (!response.ok) throw new Error(`endless failed: ${response.status}`);
+        const data: EndlessResponse = await response.json();
+        this.board = data.board;
+        this.pieces = data.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+        this.par = data.par;
+        this.endlessSolved = data.solved;
+        this.date = '';
+        this.moves = 0;
+        this.startTime = Date.now();
+        this.layout();
+        this.renderBoard();
+        this.updateHud();
+      } catch (error) {
+        console.error(error);
+        this.loadingText.setText('Could not load an endless puzzle.');
+      }
       return;
     }
     try {
@@ -590,6 +640,9 @@ export class GameScene extends Scene {
     this.menuButton.setVisible(!this.won);
     this.skipButton.setPosition(this.scale.width - 52, this.hudHeight / 2);
     this.skipButton.setVisible(this.isCommunity && !this.won);
+    this.endlessBanner.setText(`Solved: ${this.endlessSolved}`);
+    this.endlessBanner.setPosition(this.scale.width - 14, this.hudHeight / 2);
+    this.endlessBanner.setVisible(this.isEndless && !this.won);
     // The board is ready: drop the loading state and reveal the UI.
     if (this.loadingText) this.loadingText.setVisible(false);
     this.uiLayer.setVisible(true);
@@ -599,12 +652,17 @@ export class GameScene extends Scene {
     this.won = true;
     this.menuButton.setVisible(false);
     this.skipButton.setVisible(false);
+    this.endlessBanner.setVisible(false);
     if (this.isTest) {
       this.onWinTest();
       return;
     }
     if (this.isCommunity) {
       this.onWinCommunity();
+      return;
+    }
+    if (this.isEndless) {
+      this.onWinEndless();
       return;
     }
     playWin();
@@ -704,9 +762,11 @@ export class GameScene extends Scene {
       void this.copyResult(copyButton);
     });
 
-    // Forward navigation so the daily isn't a dead end (keeps the "one more" loop).
-    const communityButton = this.add
-      .text(w / 2, h * 0.88, 'Play community puzzles \u25B6', {
+    // Forward navigation so the daily isn't a dead end (keeps the "one more"
+    // loop). Endless is always full of fresh puzzles, so it's the better
+    // post-daily CTA than the (possibly empty) community stream.
+    const morePuzzlesButton = this.add
+      .text(w / 2, h * 0.88, 'More puzzles \u25B6', {
         fontFamily: 'Arial',
         fontSize: '17px',
         fontStyle: 'bold',
@@ -716,7 +776,7 @@ export class GameScene extends Scene {
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    communityButton.on('pointerdown', () => fadeToScene(this, 'CommunityScene'));
+    morePuzzlesButton.on('pointerdown', () => fadeToScene(this, 'EndlessScene'));
 
     const homeButton = this.add
       .text(44, this.hudHeight / 2, '\u2039 Menu', {
@@ -730,7 +790,7 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
 
-    this.fxLayer.add([status, copyButton, communityButton, homeButton]);
+    this.fxLayer.add([status, copyButton, morePuzzlesButton, homeButton]);
     void this.submitSolve(status);
   }
 
@@ -793,6 +853,139 @@ export class GameScene extends Scene {
     panel.setScale(0.92).setAlpha(0);
     this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
     this.time.delayedCall(180, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.32, Math.min(48, w * 0.13)));
+  }
+
+  private onWinEndless(): void {
+    playWin();
+    const stars = computeStars(this.moves, this.par);
+    const blurb = stars === 3 ? 'A clean run!' : stars === 2 ? 'Nicely done!' : 'Got there in the end!';
+    const w = this.scale.width;
+    const h = this.scale.height;
+    this.fxLayer.removeAll(true);
+
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
+    this.fxLayer.add(overlay);
+    if (stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
+
+    const headline = this.add
+      .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        color: COLORS.text,
+        align: 'center',
+        lineSpacing: 6,
+        wordWrap: { width: w - 48 },
+      })
+      .setOrigin(0.5)
+      .setAlpha(0);
+    this.fxLayer.add(headline);
+    this.tweens.add({ targets: headline, alpha: 1, y: h * 0.18, duration: 300, ease: 'Quad.easeOut' });
+
+    // Stars pop in one by one (earned ones spin); empty ones stay dim.
+    const starY = h * 0.32;
+    const gap = Math.min(54, w * 0.16);
+    const outer = Math.min(24, w * 0.07);
+    for (let i = 0; i < 3; i++) {
+      const earned = i < stars;
+      const star = this.add
+        .star(w / 2 + (i - 1) * gap, starY, 5, outer * 0.45, outer, earned ? COLORS.gold : 0x32485c)
+        .setStrokeStyle(2, earned ? 0xffe9a8 : 0x4a6377)
+        .setScale(0);
+      this.fxLayer.add(star);
+      this.tweens.add({ targets: star, scale: 1, duration: 300, delay: 300 + i * 180, ease: 'Back.easeOut' });
+      if (earned) {
+        this.tweens.add({ targets: star, angle: 360, duration: 500, delay: 300 + i * 180, ease: 'Cubic.easeOut' });
+      }
+    }
+
+    const movesText = this.add
+      .text(w / 2, h * 0.44, `${this.moves} moves   (par ${this.par})`, {
+        fontFamily: 'Arial',
+        fontSize: '18px',
+        color: COLORS.text,
+      })
+      .setOrigin(0.5);
+    this.fxLayer.add(movesText);
+
+    // The progression payoff: the lifetime solved count ticks up by one.
+    const fromCount = this.endlessSolved;
+    const countText = this.add
+      .text(w / 2, h * 0.54, `Solved: ${fromCount}`, {
+        fontFamily: 'Arial',
+        fontSize: '20px',
+        fontStyle: 'bold',
+        color: '#ffd166',
+      })
+      .setOrigin(0.5);
+    this.fxLayer.add(countText);
+
+    this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
+
+    const nextButton = this.add
+      .text(w / 2, h * 0.68, 'Next puzzle \u25B6', {
+        fontFamily: 'Arial',
+        fontSize: '17px',
+        fontStyle: 'bold',
+        color: '#062033',
+        backgroundColor: '#ff8a5b',
+        padding: { left: 18, right: 18, top: 10, bottom: 10 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    nextButton.on('pointerdown', () => fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } }));
+
+    const levelButton = this.add
+      .text(w / 2, h * 0.8, 'Change level', {
+        fontFamily: 'Arial',
+        fontSize: '15px',
+        color: '#062033',
+        backgroundColor: '#cfe6f2',
+        padding: { left: 14, right: 14, top: 8, bottom: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    levelButton.on('pointerdown', () => fadeToScene(this, 'EndlessScene'));
+
+    const homeButton = this.add
+      .text(44, this.hudHeight / 2, '\u2039 Menu', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: COLORS.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 11, right: 11, top: 6, bottom: 6 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+
+    this.fxLayer.add([nextButton, levelButton, homeButton]);
+    void this.recordEndless(countText, fromCount);
+  }
+
+  /** Record the endless solve server-side and tick the lifetime count up. */
+  private async recordEndless(countText: Phaser.GameObjects.Text, fromCount: number): Promise<void> {
+    try {
+      const response = await fetch('/api/endless/solved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier: this.endlessTier }),
+      });
+      if (!response.ok) throw new Error(`endless solve failed: ${response.status}`);
+      const result: EndlessSolvedResponse = await response.json();
+      this.endlessSolved = result.solved;
+      const counter = { v: fromCount };
+      this.tweens.add({
+        targets: counter,
+        v: result.solved,
+        duration: 500,
+        ease: 'Cubic.easeOut',
+        onUpdate: () => countText.setText(`Solved: ${Math.round(counter.v)}`),
+        onComplete: () => countText.setText(`Solved: ${result.solved}`),
+      });
+    } catch (error) {
+      console.error(error);
+      // Non-fatal: leave the banner at the pre-solve count.
+    }
   }
 
   private onWinTest(): void {

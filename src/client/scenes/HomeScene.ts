@@ -54,13 +54,16 @@ export class HomeScene extends Scene {
       .setOrigin(0.5)
       .setAlpha(0.85);
 
-    const play = this.makeButton("Play today\u2019s puzzle", '#ff8a5b', '#062033', h * 0.56, true, () =>
+    const play = this.makeButton("Play today\u2019s puzzle", '#ff8a5b', '#062033', h * 0.53, true, () =>
       fadeToScene(this, 'GameScene')
     );
-    const build = this.makeButton('Build a puzzle', '#cfe6f2', '#062033', h * 0.66, false, () =>
+    const endless = this.makeButton('Endless puzzles', '#cfe6f2', '#062033', h * 0.63, false, () =>
+      fadeToScene(this, 'EndlessScene')
+    );
+    const build = this.makeButton('Build a puzzle', '#cfe6f2', '#062033', h * 0.71, false, () =>
       fadeToScene(this, 'EditorScene')
     );
-    const community = this.makeButton('Community puzzles', '#cfe6f2', '#062033', h * 0.74, false, () =>
+    const community = this.makeButton('Community puzzles', '#cfe6f2', '#062033', h * 0.79, false, () =>
       fadeToScene(this, 'CommunityScene')
     );
 
@@ -81,7 +84,7 @@ export class HomeScene extends Scene {
       if (on) playHop();
     });
 
-    this.content.push(peng, title, tag, play, build, community, this.soundButton);
+    this.content.push(peng, title, tag, play, endless, build, community, this.soundButton);
   }
 
   private soundLabel(): string {

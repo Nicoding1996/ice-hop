@@ -33,6 +33,13 @@ retentive, community-run game:
   feed (the ritual). Difficulty ramps across the week (Mon/Tue easy -> weekend
   hard). The daily is always solver-generated; it is NOT sourced from user
   submissions.
+- Endless mode (the "play more" loop): after the daily, the player picks a tier
+  (Easy / Medium / Hard) and gets an unlimited shuffle of freshly generated,
+  solver-verified puzzles from that bucket, with a lifetime "Solved: N" count for
+  a sense of progression. This is the always-full path that solves the cold
+  start: the daily is a single puzzle and a brand-new subreddit has no community
+  puzzles yet, so Endless guarantees a new visitor always has something to do
+  next. It is the primary CTA on the daily win screen.
 - Streak: consecutive days solved; loss aversion brings people back. The first
   solve each day sets a streak-based subreddit flair (e.g. "🔥 7-day streak").
 - Score: moves vs par -> star rating; time is only a tiebreaker.
