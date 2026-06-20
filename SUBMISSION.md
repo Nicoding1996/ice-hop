@@ -36,8 +36,8 @@ That one fact is what makes the rest work:
   as a spoiler-free emoji grid, and a streak flair gives regulars a public badge.
 
 You come back because there's a fresh puzzle every morning, a streak you don't
-want to break, a leaderboard to climb, and a bottomless pile of player-made
-puzzles waiting when you finish the daily.
+want to break, a leaderboard to climb, an Endless mode to dip into any time, and a
+bottomless pile of player-made puzzles waiting when you finish the daily.
 
 ---
 
@@ -52,8 +52,9 @@ puzzles waiting when you finish the daily.
 - **Reddity.** It's community-first, not Reddit-themed. The hook is people
   comparing scores and playing each other's puzzles in the thread, not karma or
   Snoo gimmicks.
-- **The hook.** Daily ritual + streak + leaderboard + an endless, player-fed
-  stream. Something to come back to tomorrow, and something to do right now.
+- **The hook.** Daily ritual + streak + leaderboard + an Endless mode
+  (Easy/Medium/Hard) and a player-fed community stream. Something to come back to
+  tomorrow, and plenty to do right now.
 
 ---
 
@@ -139,13 +140,17 @@ mechanic is an original take on the public peg-solitaire / sliding-logic genre.
 
 1. Open the demo post (link below) on mobile or desktop.
 2. Tap **Play today's puzzle**. Tap a penguin to hop it, drag a seal to slide it.
-   Get all the penguins into the water. You'll get stars vs par.
-3. From the win screen, hit **Play community puzzles** to play player-made boards,
-   or **Menu → Build a puzzle** to make one. The Build screen has a **Test**
-   button so you can play your board, then **Submit** sends it to the stream.
+   Get all the penguins into the water. You'll get stars vs par. Stuck? Every
+   board has **Restart**, and Endless puzzles add a **Hint**.
+3. From the win screen, **Share your result** (a spoiler-free emoji grid), then
+   hit **More puzzles ▶** to jump into **Endless** mode and pick a difficulty.
+   Tap **‹ Menu** for the hub: **Community** puzzles (player-made boards) and
+   **Build a puzzle** — the Build screen has a **Test** button so you can play
+   your board before **Submit** sends it to the stream.
 4. Check the post's pinned comment, that's auto-seeded on every daily.
 
-No sign-in wall, nothing to install. Works in the feed.
+No sign-in wall: play as a guest, and sign in from the win screen to save your
+streak. Works in the feed.
 
 ---
 
@@ -158,9 +163,9 @@ first. Record a clean screen capture and narrate over it.
 | --- | --- | --- |
 | 0:00–0:06 | The daily post in the feed, tap Play, a penguin hops into the water. | "This is Ice Hop, a daily puzzle that lives right inside a Reddit post." |
 | 0:06–0:18 | Finish the daily; stars pop in, score counts up. | "Tap a penguin to hop, drag a seal to slide, get everyone in the water in as few moves as you can." |
-| 0:18–0:26 | Copy result, show it pasted as an emoji grid in the comments. | "Your score shares out spoiler-free, so the thread turns into the scoreboard." |
+| 0:18–0:26 | Hit Share your result; show the spoiler-free emoji grid in a comment. | "Your score shares out spoiler-free, so the thread turns into the scoreboard." |
 | 0:26–0:42 | Open Build, place pieces, the solver shows "solvable, par 5," hit Test then Submit. | "And you can build your own. The solver guarantees it's fair before it ever goes live." |
-| 0:42–0:52 | Community stream: play one, upvote, jump to the next. Show the streak flair. | "Player-made puzzles, a daily streak, leaderboards. Something to do today, and a reason to come back tomorrow." |
+| 0:42–0:52 | Endless tier select, then the community stream: play one, upvote, jump to the next. Show the streak flair. | "Endless puzzles, player-made boards, a daily streak, leaderboards. Something to do today, and a reason to come back tomorrow." |
 | 0:52–0:58 | Title card: Ice Hop, subreddit name. | "Ice Hop. Get every penguin in the water." |
 
 Tips: no long intro, get to gameplay in the first two seconds, keep the cursor

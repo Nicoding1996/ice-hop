@@ -63,11 +63,14 @@ players, and the solver counts moves the same way.
    community stream - is the CTA after a daily solve. Tiers are defined purely by
    the generator levers (par range + piece counts): Easy is trap-free
    (`requireAllPiecesUsed`, par ~2-4), Medium allows decoys (par ~5-8), Hard is
-   brutal-but-fair (more pieces, par ~7-12) but never literally unsolvable.
-   Puzzles are served from a small per-tier Redis pool (`endless:pool:1:{tier}`)
-   refilled off the request path by an every-5-minute scheduler cron plus a
-   warm-up on install, so a request only pops (fast) instead of generating
-   inline; on-the-fly generation stays as the fallback when a pool is empty. The
+   harder (more pieces, par ~5-10) but always solvable. Endless drops the daily's
+   uniqueness gate (it's solo, so a single optimal line doesn't matter) and bounds
+   the solver budget, so generation stays cheap. Puzzles are served from a small
+   per-tier Redis pool (`endless:pool:1:{tier}`, quality generation) refilled off
+   the request path by an every-5-minute scheduler cron (budget spread across the
+   tiers) plus a warm-up on install. When a pool is momentarily empty the request
+   uses a FAST, bounded fallback generator (low attempts, tight solver cap, gates
+   off) so it can never hang - the pool supplies the nicer puzzles. The
    client also prefetches the next puzzle (stashed in the Phaser registry) while
    you solve the current one, so tapping "Next" is instant; the lifetime count is
    kept in the registry so a prefetched board still shows the right banner. A

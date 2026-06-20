@@ -11,10 +11,11 @@ export const triggers = new Hono();
 triggers.post('/on-app-install', async (c) => {
   try {
     const post = await createDailyPost(todayUtc());
-    // Warm a few endless puzzles so the first plays are instant. Isolated so a
-    // warm-up hiccup never fails the install; the cron tops the rest up.
+    // Warm a batch of endless puzzles (spread across tiers) so the first plays
+    // are instant. Isolated so a warm-up hiccup never fails the install; the
+    // cron tops the rest up over time.
     try {
-      await refillEndlessPools(6);
+      await refillEndlessPools(12);
     } catch (warmError) {
       console.error(`endless warm-up on install failed: ${warmError}`);
     }

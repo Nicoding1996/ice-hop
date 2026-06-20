@@ -31,7 +31,7 @@ import {
   fadeInScene,
   fadeToScene,
 } from '../art/theme';
-import { context } from '@devvit/web/client';
+import { context, showLoginPrompt, showShareSheet } from '@devvit/web/client';
 import { playHop, playSlide, playSplash, playWin } from '../audio';
 
 type DragState = {
@@ -81,6 +81,7 @@ export class GameScene extends Scene {
   private hudText!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
   private loadingText!: Phaser.GameObjects.Text;
+  private loadErrorViews: Phaser.GameObjects.GameObject[] = [];
   private pieceViews: Phaser.GameObjects.Container[] = [];
 
   private cell = 0;
@@ -115,6 +116,7 @@ export class GameScene extends Scene {
     this.shareText = '';
     this.hintStage = 0;
     this.hintUsed = false;
+    this.loadErrorViews = [];
   }
 
   create(): void {
@@ -261,6 +263,7 @@ export class GameScene extends Scene {
   }
 
   private async loadPuzzle(): Promise<void> {
+    this.clearLoadError();
     if (this.isTest && this.testBoard) {
       this.board = this.testBoard;
       this.pieces = this.testBoard.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
@@ -313,12 +316,12 @@ export class GameScene extends Scene {
         this.time.delayedCall(500, () => this.prefetchNextEndless());
       } catch (error) {
         console.error(error);
-        this.loadingText.setText('Could not load an endless puzzle.');
+        this.showLoadError('Could not load an endless puzzle.');
       }
       return;
     }
     try {
-      const response = await fetch('/api/init');
+      const response = await this.fetchWithTimeout('/api/init');
       if (!response.ok) throw new Error(`init failed: ${response.status}`);
       const data: InitResponse = await response.json();
       this.board = data.board;
@@ -332,8 +335,50 @@ export class GameScene extends Scene {
       this.updateHud();
     } catch (error) {
       console.error(error);
-      this.loadingText.setText('Could not load today\u2019s puzzle.');
+      this.showLoadError('Could not load today\u2019s puzzle.');
     }
+  }
+
+  /** Show a recovery UI when a puzzle fails to load, so a network/API error is
+   *  never a dead end: the player can retry or head back to the hub. */
+  private showLoadError(message: string): void {
+    this.clearLoadError();
+    if (this.loadingText) this.loadingText.setText(message).setVisible(true);
+    const w = this.scale.width;
+    const h = this.scale.height;
+    const retry = this.add
+      .text(w / 2, h * 0.56, 'Try again', {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        fontStyle: 'bold',
+        color: '#062033',
+        backgroundColor: '#ff8a5b',
+        padding: { left: 18, right: 18, top: 10, bottom: 10 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    retry.on('pointerdown', () => {
+      if (this.loadingText) this.loadingText.setText('Getting the penguins ready\u2026');
+      this.clearLoadError();
+      void this.loadPuzzle();
+    });
+    const menu = this.add
+      .text(w / 2, h * 0.67, '\u2039 Menu', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: COLORS.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 12, right: 12, top: 6, bottom: 6 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    menu.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+    this.loadErrorViews.push(retry, menu);
+  }
+
+  private clearLoadError(): void {
+    for (const v of this.loadErrorViews) v.destroy();
+    this.loadErrorViews = [];
   }
 
   /** Use a prefetched endless puzzle if one is warmed for this tier, else fetch. */
@@ -349,8 +394,21 @@ export class GameScene extends Scene {
     return { data, fromPrefetch: false };
   }
 
+  /** fetch() with an abort timeout, so a stalled request fails fast (-> the
+   *  load-error recovery UI) instead of leaving the player on the loading screen
+   *  forever. */
+  private async fetchWithTimeout(url: string, timeoutMs = 12_000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async fetchEndless(tier: EndlessTier): Promise<EndlessResponse> {
-    const response = await fetch(`/api/endless?tier=${encodeURIComponent(tier)}`);
+    const response = await this.fetchWithTimeout(`/api/endless?tier=${encodeURIComponent(tier)}`);
     if (!response.ok) throw new Error(`endless failed: ${response.status}`);
     const data: EndlessResponse = await response.json();
     return data;
@@ -856,7 +914,27 @@ export class GameScene extends Scene {
     this.hintButton.setVisible(showHint);
     // The board is ready: drop the loading state and reveal the UI.
     if (this.loadingText) this.loadingText.setVisible(false);
+    this.clearLoadError();
     this.uiLayer.setVisible(true);
+  }
+
+  /** A "sign in to save" CTA shown only to logged-out players, placed on a win
+   *  screen (a natural breakpoint). showLoginPrompt reloads the page, so we only
+   *  trigger it here, never mid-puzzle. */
+  private addSignInPrompt(y: number, label: string): void {
+    if (context.username) return; // already signed in - nothing to gain
+    const btn = this.add
+      .text(this.scale.width / 2, y, label, {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#062033',
+        backgroundColor: '#cfe6f2',
+        padding: { left: 14, right: 14, top: 8, bottom: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    btn.on('pointerdown', () => showLoginPrompt());
+    this.fxLayer.add(btn);
   }
 
   private onWin(): void {
@@ -963,7 +1041,7 @@ export class GameScene extends Scene {
       .setOrigin(0.5)
       .setAlpha(0.9);
     const copyButton = this.add
-      .text(w / 2, h * 0.77, 'Copy result to share', {
+      .text(w / 2, h * 0.77, 'Share your result', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: '#062033',
@@ -1005,6 +1083,7 @@ export class GameScene extends Scene {
     homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
 
     this.fxLayer.add([status, copyButton, morePuzzlesButton, homeButton]);
+    this.addSignInPrompt(h * 0.66, 'Sign in to save your streak');
     void this.submitSolve(status);
   }
 
@@ -1149,7 +1228,7 @@ export class GameScene extends Scene {
     } else {
       // Hinted solve: honest and encouraging, but it does not add to the total.
       const note = this.add
-        .text(w / 2, h * 0.36, 'Solved with a hint', {
+        .text(w / 2, h * 0.34, 'Solved with a hint', {
           fontFamily: 'Arial',
           fontSize: '18px',
           fontStyle: 'bold',
@@ -1157,7 +1236,7 @@ export class GameScene extends Scene {
         })
         .setOrigin(0.5);
       const sub = this.add
-        .text(w / 2, h * 0.46, "This one doesn't add to your total \u2014 try the next one solo", {
+        .text(w / 2, h * 0.44, "This one doesn't add to your total \u2014 try the next one solo", {
           fontFamily: 'Arial',
           fontSize: '13px',
           color: COLORS.text,
@@ -1167,7 +1246,7 @@ export class GameScene extends Scene {
         .setOrigin(0.5)
         .setAlpha(0.85);
       const countText = this.add
-        .text(w / 2, h * 0.56, `Solved: ${this.endlessSolved}`, {
+        .text(w / 2, h * 0.54, `Solved: ${this.endlessSolved}`, {
           fontFamily: 'Arial',
           fontSize: '18px',
           color: COLORS.text,
@@ -1177,7 +1256,7 @@ export class GameScene extends Scene {
     }
 
     const nextButton = this.add
-      .text(w / 2, h * 0.68, 'Next puzzle \u25B6', {
+      .text(w / 2, h * 0.7, 'Next puzzle \u25B6', {
         fontFamily: 'Arial',
         fontSize: '17px',
         fontStyle: 'bold',
@@ -1190,7 +1269,7 @@ export class GameScene extends Scene {
     nextButton.on('pointerdown', () => fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } }));
 
     const levelButton = this.add
-      .text(w / 2, h * 0.8, 'Change level', {
+      .text(w / 2, h * 0.82, 'Change level', {
         fontFamily: 'Arial',
         fontSize: '15px',
         color: '#062033',
@@ -1214,6 +1293,7 @@ export class GameScene extends Scene {
     homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
 
     this.fxLayer.add([nextButton, levelButton, homeButton]);
+    this.addSignInPrompt(h * 0.62, 'Sign in to save your progress');
   }
 
   /** Record the endless solve server-side and tick the lifetime count up. */
@@ -1385,7 +1465,7 @@ export class GameScene extends Scene {
       } else if (result.rank > 0) {
         lines.push('You set today\u2019s pace - first one in!');
       } else {
-        lines.push('Sign in to save your score and rank');
+        lines.push('Playing as a guest \u2014 scores aren\u2019t saved.');
       }
       if (result.streak > 1) lines.push(`Streak: ${result.streak} days`);
       if (result.bestMoves < this.moves) lines.push(`Your best today: ${result.bestMoves} moves`);
@@ -1407,12 +1487,22 @@ export class GameScene extends Scene {
 
   private async copyResult(button: Phaser.GameObjects.Text): Promise<void> {
     if (!this.shareText) return;
+    // Prefer the native share sheet (Devvit-recommended; it also shares a link to
+    // the post, which brings new players in). Fall back to the clipboard so the
+    // paste-into-the-comments flow still works on every platform.
+    try {
+      await showShareSheet({ title: 'Ice Hop', text: this.shareText });
+      button.setText('Shared!');
+      return;
+    } catch (error) {
+      console.error(error);
+    }
     try {
       await navigator.clipboard.writeText(this.shareText);
       button.setText('Copied! Paste it in the comments');
     } catch (error) {
       console.error(error);
-      button.setText('Copy failed - select the text manually');
+      button.setText('Copy failed \u2014 select the text manually');
     }
   }
 

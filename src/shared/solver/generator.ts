@@ -24,6 +24,9 @@ export type GenOptions = {
   requireAllPiecesUsed?: boolean;
   /** Seed for deterministic generation (e.g. the daily date). */
   seed?: number;
+  /** Per-attempt solver budget (states explored). Lower = faster but may reject
+   *  deeper-but-valid boards; default 60_000. Endless lowers this to stay fast. */
+  maxStates?: number;
 };
 
 export type Generated = { readonly board: Board; readonly par: number };
@@ -73,6 +76,7 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
   const requireUnique = opts.requireUnique ?? false;
   const rejectInert = opts.rejectInert ?? false;
   const requireAllPiecesUsed = opts.requireAllPiecesUsed ?? false;
+  const maxStates = opts.maxStates ?? 60_000;
   const rng = mulberry32(opts.seed ?? Math.floor(Math.random() * 0x7fffffff));
   const cellCount = width * height;
 
@@ -148,7 +152,7 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
     if (!ok || holes.length < hoppers) continue;
 
     const board: Board = { width, height, holes: holes.sort((a, b) => a - b), pieces };
-    const res = solve(board, { maxStates: 60_000 });
+    const res = solve(board, { maxStates });
     if (!res.solvable || res.par < minPar || res.par > maxPar) continue;
 
     // Quality gates (cheapest first): clutter/decoy roles, then the more
@@ -161,7 +165,7 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
         continue; // a piece nothing ever touches = clutter
       }
     }
-    if (requireUnique && countShortestSolutions(board, { maxStates: 60_000, cap: 2 }) !== 1) {
+    if (requireUnique && countShortestSolutions(board, { maxStates, cap: 2 }) !== 1) {
       continue;
     }
     return { board, par: res.par };

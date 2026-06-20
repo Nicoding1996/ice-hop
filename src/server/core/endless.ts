@@ -38,8 +38,9 @@ const FALLBACK_BOARD: Board = {
 // Each tier offers several board "shapes"; we shuffle them per request for
 // variety. Difficulty is defined by par range + piece counts, the same levers
 // the daily uses. Easy teaches with trap-free boards (requireAllPiecesUsed);
-// Medium and Hard keep uniqueness + no-clutter but allow decoy misdirection.
-// Hard is brutal-but-fair: always solvable, never literally impossible.
+// Medium and Hard keep the no-clutter gate and allow decoy misdirection.
+// (Endless drops the daily's uniqueness gate so generation stays cheap/fast.)
+// Every tier stays solvable; Hard just packs more pieces and a higher par.
 const ENDLESS_TIERS: Record<EndlessTier, ReadonlyArray<GenConfig>> = {
   easy: [
     { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
@@ -52,9 +53,9 @@ const ENDLESS_TIERS: Record<EndlessTier, ReadonlyArray<GenConfig>> = {
     { hoppers: 2, sliders: 2, blockers: 1, minPar: 4, maxPar: 8 },
   ],
   hard: [
-    { hoppers: 3, sliders: 2, blockers: 2, minPar: 7, maxPar: 12 },
-    { hoppers: 3, sliders: 1, blockers: 2, minPar: 7, maxPar: 11 },
-    { hoppers: 2, sliders: 2, blockers: 2, minPar: 6, maxPar: 11 },
+    { hoppers: 3, sliders: 1, blockers: 2, minPar: 6, maxPar: 10 },
+    { hoppers: 2, sliders: 2, blockers: 2, minPar: 6, maxPar: 10 },
+    { hoppers: 2, sliders: 1, blockers: 2, minPar: 5, maxPar: 9 },
   ],
 };
 
@@ -69,28 +70,60 @@ const shuffle = <T>(arr: ReadonlyArray<T>): T[] => {
   return out;
 };
 
+const fallbackResult = (): { board: Board; par: number } => ({
+  board: FALLBACK_BOARD,
+  par: solve(FALLBACK_BOARD, { maxStates: 5_000 }).par,
+});
+
 /**
- * Generate a fresh puzzle for the requested tier. Tries the tier's shapes in a
- * random order, then falls back to the easy tier, then to a guaranteed board,
- * so this never returns null.
+ * Quality generation for the POOL (off the request path: the scheduler cron and
+ * the install warm-up). Drops the expensive uniqueness gate - endless is solo,
+ * so a single optimal line doesn't matter the way it does for the shared daily -
+ * but keeps the no-clutter gate, and bounds attempts + solver budget so even the
+ * cron stays quick. Tries the tier's shapes shuffled, then easy as a safety net.
  */
 export const generateEndlessPuzzle = (tier: EndlessTier): { board: Board; par: number } => {
-  // The chosen tier first (shuffled for variety), then easy shapes as a safety
-  // net so a request always resolves to a real, solver-verified board.
   const configs = [...shuffle(ENDLESS_TIERS[tier]), ...ENDLESS_TIERS.easy];
   for (const config of configs) {
     const generated = generate({
       width: 5,
       height: 5,
-      attempts: 3000,
-      seed: Math.floor(Math.random() * 0x7fffffff),
-      requireUnique: true,
+      requireUnique: false,
       rejectInert: true,
+      maxStates: 40_000,
       ...config,
+      attempts: 500,
+      seed: Math.floor(Math.random() * 0x7fffffff),
     });
     if (generated) return generated;
   }
-  return { board: FALLBACK_BOARD, par: solve(FALLBACK_BOARD).par };
+  return fallbackResult();
+};
+
+/**
+ * Fast, bounded generation for the REQUEST path when the pool is momentarily
+ * empty. Drops every quality gate and uses a small attempt budget + a tight
+ * solver cap so it always returns in well under a second (worst case the
+ * guaranteed board), trading a little polish for never hanging the player. The
+ * pool supplies the nicer puzzles; this only guarantees the request never stalls.
+ */
+export const generateEndlessFallback = (tier: EndlessTier): { board: Board; par: number } => {
+  const configs = [...shuffle(ENDLESS_TIERS[tier]), ...ENDLESS_TIERS.easy];
+  for (const config of configs) {
+    const generated = generate({
+      width: 5,
+      height: 5,
+      ...config,
+      requireUnique: false,
+      rejectInert: false,
+      requireAllPiecesUsed: false,
+      maxStates: 15_000,
+      attempts: 150,
+      seed: Math.floor(Math.random() * 0x7fffffff),
+    });
+    if (generated) return generated;
+  }
+  return fallbackResult();
 };
 
 /** Record one endless solve for a user and return their new lifetime total. */
@@ -150,10 +183,14 @@ export const popPooledPuzzle = async (
 export const refillEndlessPools = async (maxGenerate = 12): Promise<number> => {
   let budget = maxGenerate;
   let added = 0;
+  // Spread the budget across tiers (a per-tier cap) so a single run tops up every
+  // tier rather than draining the whole budget into the first one - otherwise
+  // picking Medium/Hard right after a warm-up could still hit an empty pool.
+  const perTier = Math.max(1, Math.ceil(maxGenerate / ALL_TIERS.length));
   for (const tier of ALL_TIERS) {
     if (budget <= 0) break;
     const have = await redis.hLen(keys.endlessPool(tier));
-    let need = Math.min(POOL_TARGET - have, budget);
+    let need = Math.min(POOL_TARGET - have, perTier, budget);
     while (need > 0) {
       const puzzle = generateEndlessPuzzle(tier);
       const id = String(await redis.incrBy(keys.endlessPoolSeq(tier), 1));

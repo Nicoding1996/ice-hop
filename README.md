@@ -6,7 +6,8 @@ hackathon.
 
 Guide every penguin into the water. Every penguin hops, every seal slides, and
 the ice never moves. Solve the daily in as few moves as possible, keep your
-streak alive, climb the leaderboard, and build puzzles for everyone else to play.
+streak alive, climb the leaderboard, race through Endless mode, and build puzzles
+for everyone else to play.
 
 ---
 
@@ -28,7 +29,7 @@ and open water holes.
   in the water" is the finish line.
 
 That's the whole game. No instructions screen needed: tap a penguin, watch it
-hop, and figure out the order that gets the colony home.
+hop, and figure out the order that gets everyone into the water.
 
 ### Scoring
 
@@ -43,6 +44,16 @@ par:
 The leaderboard ranks by **fewest moves first, fastest time as the tiebreak**, so
 insight matters more than speed.
 
+### While you play
+
+- **Restart** the board any time from the bottom bar to take a fresh run at par —
+  a wrong move is never a dead end.
+- **Endless mode** has an optional **Hint** that glows the next good move when
+  you're stuck, so you keep learning. A hinted solve doesn't count toward your
+  Endless total, so the number stays honest.
+- No sign-in wall: play as a guest, and sign in from the win screen when you want
+  to save your streak and progress.
+
 ---
 
 ## The hook (why you come back)
@@ -50,6 +61,9 @@ insight matters more than speed.
 - **A fresh puzzle every day.** One shared daily puzzle, auto-posted to the feed.
   Difficulty ramps across the week: easy on Monday and Tuesday, medium midweek,
   hardest on the weekend.
+- **Endless mode.** Finished the daily and still want more? Pick Easy, Medium, or
+  Hard and play a never-ending shuffle of fresh, solver-made puzzles, with a
+  running "Solved" count to grow. It's the always-full path when you want one more.
 - **Streaks.** Solve day after day to build a streak. Miss a day and it resets.
   Your first solve each day sets a streak flair on the subreddit ("🔥 7-day
   streak"), a public nudge to keep coming back.
@@ -113,12 +127,12 @@ src/
     solver/   # BFS solver (par), puzzle generator, difficulty, UGC validation
     scoring.ts share.ts date.ts api.ts
   server/   # Hono app on Devvit (Node 22)
-    routes/   # /api (init, solve, leaderboard), /api/ugc, /internal (menu, cron, triggers)
-    core/     # daily puzzle, leaderboard + streaks, UGC, post creation, Redis keys
+    routes/   # /api (init, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
+    core/     # daily puzzle, endless pool, leaderboard + streaks, UGC, post creation, Redis keys
   client/   # runs in the post iframe
     splash.*  # fast inline feed view
     game.*    # expanded Phaser view
-    scenes/   # Boot, GameScene, EditorScene, CommunityScene
+    scenes/   # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene
 ```
 
 See `.kiro/steering/` for the full design, tech, and structure notes.
@@ -162,10 +176,12 @@ npm run launch       # deploy + devvit publish
 
 ## Hackathon notes
 
-- **What to play:** the daily puzzle post in the test subreddit, plus the Build
-  screen and the community puzzle stream reached from the game.
+- **What to play:** the daily puzzle post in the test subreddit, then tap
+  **‹ Menu** for the hub — **Endless** mode (Easy / Medium / Hard), the **Build**
+  screen, and the **Community** puzzle stream.
 - **Retention:** daily puzzle + streaks + daily/all-time leaderboards + a weekly
-  difficulty ramp.
+  difficulty ramp + an always-on Endless mode, plus a win-screen sign-in prompt
+  that turns guests into returning players who can subscribe.
 - **User contributions:** a solver-validated puzzle editor feeding a playable,
   upvotable community stream with creator credit.
 - **Reddity:** every daily auto-seeds a pinned how-to/score-sharing comment,

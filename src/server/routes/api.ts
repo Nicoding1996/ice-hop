@@ -10,7 +10,7 @@ import type {
   SolveSubmission,
 } from '../../shared/api';
 import { getOrCreateDailyPuzzle } from '../core/daily';
-import { generateEndlessPuzzle, getEndlessSolved, popPooledPuzzle, recordEndlessSolve } from '../core/endless';
+import { generateEndlessFallback, getEndlessSolved, popPooledPuzzle, recordEndlessSolve } from '../core/endless';
 import { getDailyLeaderboard, recordSolve } from '../core/leaderboard';
 import { keys } from '../core/keys';
 import { todayUtc } from '../../shared/date';
@@ -106,9 +106,10 @@ api.get('/endless', async (c) => {
     const tier = asTier(c.req.query('tier'));
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
     // Fast path: take a pre-generated puzzle from the pool. Only generate on the
-    // fly when the pool is momentarily empty (keeps the request snappy).
+    // fly when the pool is momentarily empty - and then use the FAST, bounded
+    // generator so the request can never hang (the pool supplies nicer puzzles).
     const pooled = await popPooledPuzzle(tier);
-    const { board, par } = pooled ?? generateEndlessPuzzle(tier);
+    const { board, par } = pooled ?? generateEndlessFallback(tier);
     const solved = await getEndlessSolved(username);
     return c.json<EndlessResponse>({ tier, board, par, solved });
   } catch (error) {
