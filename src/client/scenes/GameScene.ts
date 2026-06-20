@@ -15,6 +15,7 @@ import { legalMoves } from '../../shared/game/moves';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
 import { buildShareText } from '../../shared/share';
+import { solve } from '../../shared/solver/solver';
 import {
   PALETTE as COLORS,
   paintBackdrop,
@@ -66,6 +67,10 @@ export class GameScene extends Scene {
   private endlessBanner!: Phaser.GameObjects.Text;
   private skipButton!: Phaser.GameObjects.Text;
   private resetButton!: Phaser.GameObjects.Text;
+  private hintButton!: Phaser.GameObjects.Text;
+  private hintLayer!: Phaser.GameObjects.Container;
+  private hintStage = 0;
+  private hintUsed = false;
   private dragState: DragState | null = null;
 
   private bgLayer!: Phaser.GameObjects.Container;
@@ -108,6 +113,8 @@ export class GameScene extends Scene {
     this.won = false;
     this.dragState = null;
     this.shareText = '';
+    this.hintStage = 0;
+    this.hintUsed = false;
   }
 
   create(): void {
@@ -118,6 +125,7 @@ export class GameScene extends Scene {
     this.boardLayer = this.add.container(0, 0);
     this.pieceLayer = this.add.container(0, 0);
     this.fxLayer = this.add.container(0, 0);
+    this.hintLayer = this.add.container(0, 0);
     this.uiLayer = this.add.container(0, 0);
 
     this.hudText = this.add
@@ -188,6 +196,21 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     this.resetButton.on('pointerdown', () => this.resetPuzzle());
     this.uiLayer.add(this.resetButton);
+
+    // Hint (Endless only): reveals the solver's best next move. Lives next to
+    // Restart in the bottom strip; using it means the solve won't count.
+    this.hintButton = this.add
+      .text(0, 0, 'Hint', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: COLORS.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 12, right: 12, top: 6, bottom: 6 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.hintButton.on('pointerdown', () => this.showHint());
+    this.uiLayer.add(this.hintButton);
 
     // Tapping empty ice clears the current selection.
     this.input.on(
@@ -487,6 +510,7 @@ export class GameScene extends Scene {
   private renderHighlights(): void {
     if (!this.board) return;
     this.fxLayer.removeAll(true);
+    this.clearHint();
     // Reset selection emphasis on every piece.
     this.pieceViews.forEach((v) => {
       const a: Phaser.GameObjects.Container | undefined = v?.getData('art');
@@ -581,6 +605,7 @@ export class GameScene extends Scene {
     };
     this.selected = null;
     this.fxLayer.removeAll(true);
+    this.clearHint();
   }
 
   private onSealDrag(_obj: Phaser.GameObjects.GameObject, dragX: number, dragY: number): void {
@@ -695,9 +720,112 @@ export class GameScene extends Scene {
     this.pieces = this.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
     this.moves = 0;
     this.selected = null;
+    this.hintUsed = false;
     this.startTime = Date.now();
     this.renderBoard();
     this.updateHud();
+  }
+
+  /**
+   * Reveal the solver's best next move, progressively: the first tap glows the
+   * piece to move, the second shows a translucent ghost of where it goes. The
+   * move is recomputed from the CURRENT board so it stays valid after any number
+   * of moves. Using a hint flags the puzzle so its solve won't count toward the
+   * Endless "Solved" total (cleared by Restart / a new puzzle).
+   */
+  private showHint(): void {
+    if (!this.board || this.busy || this.won) return;
+    const result = solve({ ...this.board, pieces: this.pieces });
+    if (!result.solvable || result.solution.length === 0) {
+      this.showStrandedHint();
+      return;
+    }
+    const move = result.solution[0];
+    this.hintUsed = true;
+    this.selected = null;
+    this.fxLayer.removeAll(true);
+    this.clearHintGraphics();
+    this.hintStage = this.hintStage >= 1 ? 2 : 1;
+    this.glowHintPiece(move.pieceIndex);
+    if (this.hintStage === 1) {
+      this.addHintCaption('Tap Hint again to see the move');
+    } else {
+      this.showHintDestination(move);
+    }
+  }
+
+  /** A pulsing gold outline around the piece the player should move. */
+  private glowHintPiece(pieceIndex: number): void {
+    const piece = this.pieces[pieceIndex];
+    if (!piece) return;
+    const center = this.pieceCenterPx(piece.cells);
+    const orient = piece.orient ?? 'H';
+    const w = piece.kind === 'SLIDER' && orient === 'H' ? this.cell * 1.7 : this.cell * 0.82;
+    const h = piece.kind === 'SLIDER' && orient === 'V' ? this.cell * 1.7 : this.cell * 0.82;
+    const g = this.add.graphics();
+    g.lineStyle(4, COLORS.gold, 1);
+    g.strokeRoundedRect(center.x - w / 2, center.y - h / 2, w, h, Math.min(w, h) * 0.32);
+    this.hintLayer.add(g);
+    this.tweens.add({ targets: g, alpha: 0.25, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  }
+
+  /** A translucent ghost of the piece sitting on its destination cell(s). */
+  private showHintDestination(move: Move): void {
+    const piece = this.pieces[move.pieceIndex];
+    if (!piece) return;
+    const dest = this.pieceCenterPx(move.to);
+    const ghost = this.add.container(dest.x, dest.y);
+    ghost.setAlpha(0.5);
+    if (piece.kind === 'SLIDER') drawSealInto(this, ghost, this.cell, piece.orient ?? 'H');
+    else drawPenguinInto(this, ghost, this.cell);
+    this.hintLayer.add(ghost);
+    this.tweens.add({ targets: ghost, alpha: 0.22, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  }
+
+  private addHintCaption(text: string): void {
+    const caption = this.add
+      .text(this.scale.width / 2, this.scale.height - 58, text, {
+        fontFamily: 'Arial',
+        fontSize: '12px',
+        color: COLORS.text,
+      })
+      .setOrigin(0.5)
+      .setAlpha(0.85);
+    this.hintLayer.add(caption);
+  }
+
+  /** When the board is unsolvable from here, point the player at Restart. */
+  private showStrandedHint(): void {
+    this.clearHintGraphics();
+    const msg = this.add
+      .text(this.scale.width / 2, this.scale.height - 58, 'No way through from here \u2014 tap \u21BA Restart', {
+        fontFamily: 'Arial',
+        fontSize: '12px',
+        color: COLORS.text,
+        align: 'center',
+        wordWrap: { width: this.scale.width - 40 },
+      })
+      .setOrigin(0.5)
+      .setAlpha(0.9);
+    this.hintLayer.add(msg);
+    this.time.delayedCall(2600, () => {
+      if (msg.active) {
+        this.tweens.add({ targets: msg, alpha: 0, duration: 400, onComplete: () => msg.destroy() });
+      }
+    });
+  }
+
+  /** Remove hint visuals (kills their tweens first so nothing tweens a dead node). */
+  private clearHintGraphics(): void {
+    if (!this.hintLayer) return;
+    this.tweens.killTweensOf(this.hintLayer.list);
+    this.hintLayer.removeAll(true);
+  }
+
+  /** Clear hint visuals and reset the progressive stage (next hint starts fresh). */
+  private clearHint(): void {
+    this.clearHintGraphics();
+    this.hintStage = 0;
   }
 
   private updateHud(): void {
@@ -713,9 +841,19 @@ export class GameScene extends Scene {
     this.endlessBanner.setPosition(this.scale.width - 14, this.hudHeight / 2);
     this.endlessBanner.setVisible(this.isEndless && !this.won);
     // Restart sits in the bottom strip and only appears once a move is made
-    // (swaps in for the first-move hint, which hides as soon as moves > 0).
-    this.resetButton.setPosition(this.scale.width / 2, this.scale.height - 26);
-    this.resetButton.setVisible(this.moves > 0 && !this.won);
+    // (swaps in for the first-move hint, which hides as soon as moves > 0). In
+    // Endless it's paired with the Hint button; otherwise it stays centered.
+    const bottomY = this.scale.height - 26;
+    const showReset = this.moves > 0 && !this.won;
+    const showHint = this.isEndless && this.moves > 0 && !this.won;
+    if (showHint) {
+      this.resetButton.setPosition(this.scale.width / 2 - 66, bottomY);
+      this.hintButton.setPosition(this.scale.width / 2 + 66, bottomY);
+    } else {
+      this.resetButton.setPosition(this.scale.width / 2, bottomY);
+    }
+    this.resetButton.setVisible(showReset);
+    this.hintButton.setVisible(showHint);
     // The board is ready: drop the loading state and reveal the UI.
     if (this.loadingText) this.loadingText.setVisible(false);
     this.uiLayer.setVisible(true);
@@ -727,6 +865,8 @@ export class GameScene extends Scene {
     this.skipButton.setVisible(false);
     this.endlessBanner.setVisible(false);
     this.resetButton.setVisible(false);
+    this.hintButton.setVisible(false);
+    this.clearHint();
     if (this.isTest) {
       this.onWinTest();
       return;
@@ -931,15 +1071,22 @@ export class GameScene extends Scene {
 
   private onWinEndless(): void {
     playWin();
+    const counts = !this.hintUsed;
     const stars = computeStars(this.moves, this.par);
-    const blurb = stars === 3 ? 'A clean run!' : stars === 2 ? 'Nicely done!' : 'Got there in the end!';
+    const blurb = counts
+      ? stars === 3
+        ? 'A clean run!'
+        : stars === 2
+          ? 'Nicely done!'
+          : 'Got there in the end!'
+      : 'You found the way with a hint.';
     const w = this.scale.width;
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
 
     const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
     this.fxLayer.add(overlay);
-    if (stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
+    if (counts && stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
 
     const headline = this.add
       .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
@@ -955,48 +1102,79 @@ export class GameScene extends Scene {
     this.fxLayer.add(headline);
     this.tweens.add({ targets: headline, alpha: 1, y: h * 0.18, duration: 300, ease: 'Quad.easeOut' });
 
-    // Stars pop in one by one (earned ones spin); empty ones stay dim.
-    const starY = h * 0.32;
-    const gap = Math.min(54, w * 0.16);
-    const outer = Math.min(24, w * 0.07);
-    for (let i = 0; i < 3; i++) {
-      const earned = i < stars;
-      const star = this.add
-        .star(w / 2 + (i - 1) * gap, starY, 5, outer * 0.45, outer, earned ? COLORS.gold : 0x32485c)
-        .setStrokeStyle(2, earned ? 0xffe9a8 : 0x4a6377)
-        .setScale(0);
-      this.fxLayer.add(star);
-      this.tweens.add({ targets: star, scale: 1, duration: 300, delay: 300 + i * 180, ease: 'Back.easeOut' });
-      if (earned) {
-        this.tweens.add({ targets: star, angle: 360, duration: 500, delay: 300 + i * 180, ease: 'Cubic.easeOut' });
+    if (counts) {
+      // Stars pop in one by one (earned ones spin); empty ones stay dim.
+      const starY = h * 0.32;
+      const gap = Math.min(54, w * 0.16);
+      const outer = Math.min(24, w * 0.07);
+      for (let i = 0; i < 3; i++) {
+        const earned = i < stars;
+        const star = this.add
+          .star(w / 2 + (i - 1) * gap, starY, 5, outer * 0.45, outer, earned ? COLORS.gold : 0x32485c)
+          .setStrokeStyle(2, earned ? 0xffe9a8 : 0x4a6377)
+          .setScale(0);
+        this.fxLayer.add(star);
+        this.tweens.add({ targets: star, scale: 1, duration: 300, delay: 300 + i * 180, ease: 'Back.easeOut' });
+        if (earned) {
+          this.tweens.add({ targets: star, angle: 360, duration: 500, delay: 300 + i * 180, ease: 'Cubic.easeOut' });
+        }
       }
+
+      const movesText = this.add
+        .text(w / 2, h * 0.44, `${this.moves} moves   (par ${this.par})`, {
+          fontFamily: 'Arial',
+          fontSize: '18px',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5);
+      this.fxLayer.add(movesText);
+
+      // The progression payoff: the lifetime solved count ticks up by one.
+      const fromCount = this.endlessSolved;
+      // Optimistically record the increment so a fast "Next" (before the solve
+      // POST resolves) still shows the correct banner; recordEndless reconciles it.
+      this.registry.set('endless.solved', fromCount + 1);
+      const countText = this.add
+        .text(w / 2, h * 0.54, `Solved: ${fromCount}`, {
+          fontFamily: 'Arial',
+          fontSize: '20px',
+          fontStyle: 'bold',
+          color: '#ffd166',
+        })
+        .setOrigin(0.5);
+      this.fxLayer.add(countText);
+
+      this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
+      void this.recordEndless(countText, fromCount);
+    } else {
+      // Hinted solve: honest and encouraging, but it does not add to the total.
+      const note = this.add
+        .text(w / 2, h * 0.36, 'Solved with a hint', {
+          fontFamily: 'Arial',
+          fontSize: '18px',
+          fontStyle: 'bold',
+          color: '#ffd166',
+        })
+        .setOrigin(0.5);
+      const sub = this.add
+        .text(w / 2, h * 0.46, "This one doesn't add to your total \u2014 try the next one solo", {
+          fontFamily: 'Arial',
+          fontSize: '13px',
+          color: COLORS.text,
+          align: 'center',
+          wordWrap: { width: w - 60 },
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.85);
+      const countText = this.add
+        .text(w / 2, h * 0.56, `Solved: ${this.endlessSolved}`, {
+          fontFamily: 'Arial',
+          fontSize: '18px',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5);
+      this.fxLayer.add([note, sub, countText]);
     }
-
-    const movesText = this.add
-      .text(w / 2, h * 0.44, `${this.moves} moves   (par ${this.par})`, {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: COLORS.text,
-      })
-      .setOrigin(0.5);
-    this.fxLayer.add(movesText);
-
-    // The progression payoff: the lifetime solved count ticks up by one.
-    const fromCount = this.endlessSolved;
-    // Optimistically record the increment so a fast "Next" (before the solve
-    // POST resolves) still shows the correct banner; recordEndless reconciles it.
-    this.registry.set('endless.solved', fromCount + 1);
-    const countText = this.add
-      .text(w / 2, h * 0.54, `Solved: ${fromCount}`, {
-        fontFamily: 'Arial',
-        fontSize: '20px',
-        fontStyle: 'bold',
-        color: '#ffd166',
-      })
-      .setOrigin(0.5);
-    this.fxLayer.add(countText);
-
-    this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
 
     const nextButton = this.add
       .text(w / 2, h * 0.68, 'Next puzzle \u25B6', {
@@ -1036,7 +1214,6 @@ export class GameScene extends Scene {
     homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
 
     this.fxLayer.add([nextButton, levelButton, homeButton]);
-    void this.recordEndless(countText, fromCount);
   }
 
   /** Record the endless solve server-side and tick the lifetime count up. */

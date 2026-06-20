@@ -70,15 +70,23 @@ players, and the solver counts moves the same way.
    inline; on-the-fly generation stays as the fallback when a pool is empty. The
    client also prefetches the next puzzle (stashed in the Phaser registry) while
    you solve the current one, so tapping "Next" is instant; the lifetime count is
-   kept in the registry so a prefetched board still shows the right banner.
+   kept in the registry so a prefetched board still shows the right banner. A
+   progressive **Hint** (Endless only) reveals the solver's best next move - first
+   tap glows the piece, second shows a translucent ghost of where it goes,
+   recomputed from the current board so it is always valid - but using it flags
+   the puzzle so that solve does NOT count toward the Solved total (Restart or a
+   new puzzle clears the flag). The daily has no hint, to protect its leaderboard
+   and the "how'd you do it in N" comment culture; there, stuck players use
+   Restart and the community shares approaches in the comments.
 
 ## Solver is the linchpin
 
 BFS over board states (state = positions of all pieces), in `src/shared/solver`
 as pure TS. Used to: compute par (`solver.ts`), count optimal solutions for
 uniqueness (`countShortestSolutions`), generate graded puzzles (`generator.ts` +
-`difficulty.ts`), classify each piece's role (`quality.ts`), and validate that
-user submissions are solvable before they are accepted (`validate.ts`).
+`difficulty.ts`), classify each piece's role (`quality.ts`), validate that
+user submissions are solvable before they are accepted (`validate.ts`), and power
+the Endless hint (the best next move recomputed from the current board state).
 
 ## Generated puzzle quality (not just "solvable")
 
@@ -177,8 +185,9 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 - In play, the HUD nav is a single "‹ Menu" button (top-left) back to the hub
   plus a "↺ Restart" button (bottom strip) that restores the current board to its
   start; Restart only appears once a move has been made (it swaps in for the
-  first-move hint), so a stranded/unsolvable board is never a dead end. Endless
-  play also shows a top-right "Solved: N" progression banner.
+  first-move hint), so a stranded/unsolvable board is never a dead end. In Endless
+  a "Hint" button sits beside Restart (best next move; the solve then won't
+  count). Endless play also shows a top-right "Solved: N" progression banner.
 - No dead ends: the daily win screen offers Copy result, More puzzles (-> Endless
   tier select), and Menu; endless wins offer Next puzzle (same tier) / Change
   level / Menu; community wins offer Upvote / Next / Back to daily; test wins
