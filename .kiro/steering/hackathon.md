@@ -29,7 +29,8 @@ Reddit "Games with a Hook" hackathon. Submission window June 17 - July 15, 2026
 - Literal "hook" (fishing). Hook = retention.
 - Common ideas: trivia, clones of popular games, simple platformers, space
   shooters, generic collaborative storytelling. Our differentiator (solver-
-  validated UGC + community-curated daily) is what lifts us out of "clone".
+  validated UGC + a playable community puzzle stream, on top of a fresh daily)
+  is what lifts us out of "clone".
 
 ## IP / identity guardrail (important)
 

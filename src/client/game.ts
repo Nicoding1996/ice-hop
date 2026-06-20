@@ -2,6 +2,8 @@ import * as Phaser from 'phaser';
 import { AUTO, Game, Scale } from 'phaser';
 import { Boot } from './scenes/Boot';
 import { GameScene } from './scenes/GameScene';
+import { EditorScene } from './scenes/EditorScene';
+import { CommunityScene } from './scenes/CommunityScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: AUTO,
@@ -13,7 +15,7 @@ const config: Phaser.Types.Core.GameConfig = {
     width: 1024,
     height: 768,
   },
-  scene: [Boot, GameScene],
+  scene: [Boot, GameScene, EditorScene, CommunityScene],
 };
 
 const startGame = (parent: string): Game => new Game({ ...config, parent });

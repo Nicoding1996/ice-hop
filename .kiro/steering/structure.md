@@ -11,43 +11,57 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
 ├── tsconfig.json            # project references -> tools/*
 ├── tools/                   # tsconfig.{base,client,server,shared,vite}.json
 ├── public/                  # static assets served to the client
+├── README.md                # game overview + how to play (hackathon requirement)
 ├── .kiro/steering/          # these docs
 └── src/
     ├── shared/              # PURE TS, unit-testable, no platform imports
     │   ├── game/
-    │   │   ├── types.ts     # Board, Piece, Move, PieceKind, etc.
-    │   │   ├── board.ts     # board encode/decode, helpers
-    │   │   ├── moves.ts     # legal-move generation (hop + slide)
-    │   │   └── rules.ts     # apply move, win detection
+    │   │   ├── types.ts      # Board, Piece, Move, PieceKind, etc.
+    │   │   ├── board.ts      # encode/decode, occupancy, isSolved (win detection)
+    │   │   ├── moves.ts      # legal-move generation (hop + slide)
+    │   │   └── rules.ts      # applyMove; re-exports isSolved
     │   ├── solver/
-    │   │   ├── solver.ts    # BFS optimal solution + solvability/uniqueness
-    │   │   ├── generator.ts # procedural puzzle generation
-    │   │   └── difficulty.ts# grade a puzzle (par length, branching)
-    │   └── api.ts           # client<->server DTOs
+    │   │   ├── solver.ts     # BFS optimal solution + par
+    │   │   ├── generator.ts  # procedural puzzle generation (solver-filtered)
+    │   │   ├── difficulty.ts # grade a puzzle (par length, branching)
+    │   │   └── validate.ts   # validate a user-built board (size/counts/solvable/par)
+    │   ├── __tests__/        # vitest: engine, scoring, share, validate
+    │   ├── api.ts            # client<->server DTOs
+    │   ├── scoring.ts        # moves-vs-par -> stars; leaderboard score encode/decode
+    │   ├── share.ts          # spoiler-free emoji share text
+    │   └── date.ts           # daily date key + deterministic seed helpers
     ├── server/
     │   ├── index.ts         # Hono entry (mounts /api and /internal)
     │   ├── routes/
-    │   │   ├── api.ts        # /api/* client-facing endpoints
+    │   │   ├── api.ts        # /api/* (init, solve, leaderboard)
+    │   │   ├── ugc.ts        # /api/ugc/* (submit, list, vote)
     │   │   ├── menu.ts       # /internal/menu/*
     │   │   ├── triggers.ts   # /internal/triggers/* (onAppInstall)
     │   │   └── scheduler.ts  # /internal/scheduler/* (daily puzzle cron)
     │   └── core/
     │       ├── post.ts       # submitCustomPost helpers
-    │       ├── daily.ts      # daily puzzle storage/selection (Redis)
-    │       ├── scoring.ts    # moves-vs-par -> stars
-    │       ├── leaderboard.ts# Redis sorted sets
-    │       └── ugc.ts        # user puzzle submit + solver validation
+    │       ├── daily.ts      # daily puzzle generation/storage (Redis)
+    │       ├── leaderboard.ts# Redis sorted sets + streaks
+    │       ├── ugc.ts        # user puzzle submit/list/vote + solver validation
+    │       └── keys.ts       # single source of truth for Redis keys
     └── client/
         ├── splash.html/.css/.ts   # inline feed view (fast, light)
-        ├── game.html/.css/.ts     # expanded Phaser view
-        └── scenes/                # Phaser scenes (Boot, Preloader, Game, ...)
+        ├── game.html/.css/.ts     # expanded Phaser view (game.ts bootstraps Phaser)
+        └── scenes/                # Phaser scenes
+            ├── Boot.ts            # boot + launch GameScene
+            ├── GameScene.ts       # play the daily or a community puzzle
+            ├── EditorScene.ts     # build + live-validate a puzzle
+            └── CommunityScene.ts  # load the community stream, hand off to GameScene
 ```
 
 ## Conventions
 
 - Engine pieces are theme-agnostic: `HOPPER` (jumps), `SLIDER` (moves along an
   axis), `BLOCKER` (fixed), and `HOLE`/`GOAL` targets. Theme/art is a skin on top
-  so we can repaint without touching logic (and to keep our own identity).
-- Redis key naming: `daily:{date}` (puzzle), `solve:{date}:{userId}`,
-  `lb:{date}` and `lb:all` (sorted sets), `streak:{userId}`,
-  `ugc:queue` / `ugc:{id}` (submissions). Keep a single source of truth for keys.
+  (penguin / seal / ice rock / water) so we can repaint without touching logic.
+- Redis keys live in one place (`src/server/core/keys.ts`). Current keys:
+  `daily:5:{date}` (puzzle; the `5` is a schema version bumped to force regen),
+  `post:{postId}` (post -> date), `solve:{date}:{user}`, `lb:{date}` and `lb:all`
+  (leaderboard sorted sets), `streak:{user}`, and for UGC: `ugc:counter`,
+  `ugc:sub:{id}`, `ugc:index` (sorted set by votes), `ugc:voters:{id}` (hash for
+  one-vote-per-user).

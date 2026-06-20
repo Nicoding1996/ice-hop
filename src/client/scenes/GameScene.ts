@@ -1,7 +1,7 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { Board, Move, Piece } from '../../shared/game/types';
-import type { InitResponse, LeaderboardResponse, SolveResultDTO } from '../../shared/api';
+import type { InitResponse, LeaderboardResponse, SolveResultDTO, UgcSubmission, VoteResponse } from '../../shared/api';
 import { legalMoves } from '../../shared/game/moves';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
@@ -48,6 +48,11 @@ export class GameScene extends Scene {
   private won = false;
   private startTime = 0;
   private shareText = '';
+  private buildButton!: Phaser.GameObjects.Text;
+  private communityButton!: Phaser.GameObjects.Text;
+  private communityPuzzle?: { id: string; board: Board; par: number; creator: string };
+  private isCommunity = false;
+  private skipButton!: Phaser.GameObjects.Text;
   private dragState: DragState | null = null;
 
   private boardLayer!: Phaser.GameObjects.Container;
@@ -65,6 +70,19 @@ export class GameScene extends Scene {
 
   constructor() {
     super('GameScene');
+  }
+
+  init(data?: { community?: { id: string; board: Board; par: number; creator: string } }): void {
+    this.communityPuzzle = data?.community;
+    this.isCommunity = Boolean(data?.community);
+    // Scene instances are reused across restarts, so reset transient state here.
+    this.pieces = [];
+    this.moves = 0;
+    this.selected = null;
+    this.busy = false;
+    this.won = false;
+    this.dragState = null;
+    this.shareText = '';
   }
 
   create(): void {
@@ -86,6 +104,45 @@ export class GameScene extends Scene {
       .setOrigin(0.5)
       .setAlpha(0.7);
     this.uiLayer.add([this.hudText, this.hintText]);
+
+    this.buildButton = this.add
+      .text(0, 0, '+ Build a puzzle', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#062033',
+        backgroundColor: '#aef0d2',
+        padding: { left: 10, right: 10, top: 5, bottom: 5 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.buildButton.on('pointerdown', () => this.scene.start('EditorScene'));
+    this.uiLayer.add(this.buildButton);
+
+    this.communityButton = this.add
+      .text(0, 0, 'Community', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#062033',
+        backgroundColor: '#aef0d2',
+        padding: { left: 10, right: 10, top: 5, bottom: 5 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.communityButton.on('pointerdown', () => this.scene.start('CommunityScene'));
+    this.uiLayer.add(this.communityButton);
+
+    this.skipButton = this.add
+      .text(0, 0, 'Skip \u25B6', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#062033',
+        backgroundColor: '#ffe08a',
+        padding: { left: 10, right: 10, top: 5, bottom: 5 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.skipButton.on('pointerdown', () => this.nextCommunity());
+    this.uiLayer.add(this.skipButton);
 
     // Tapping empty ice clears the current selection.
     this.input.on(
@@ -122,6 +179,18 @@ export class GameScene extends Scene {
   }
 
   private async loadPuzzle(): Promise<void> {
+    if (this.communityPuzzle) {
+      this.board = this.communityPuzzle.board;
+      this.pieces = this.communityPuzzle.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+      this.par = this.communityPuzzle.par;
+      this.date = '';
+      this.moves = 0;
+      this.startTime = Date.now();
+      this.layout();
+      this.renderBoard();
+      this.updateHud();
+      return;
+    }
     try {
       const response = await fetch('/api/init');
       if (!response.ok) throw new Error(`init failed: ${response.status}`);
@@ -436,11 +505,25 @@ export class GameScene extends Scene {
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
     this.hudText.setPosition(this.scale.width / 2, this.hudHeight / 2);
     this.hintText.setPosition(this.scale.width / 2, this.scale.height - 18);
-    this.hintText.setVisible(this.moves === 0 && !this.won);
+    this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
+    const showNav = !this.won && !this.isCommunity;
+    this.buildButton.setPosition(this.scale.width - 72, this.hudHeight / 2);
+    this.buildButton.setVisible(showNav);
+    this.communityButton.setPosition(72, this.hudHeight / 2);
+    this.communityButton.setVisible(showNav);
+    this.skipButton.setPosition(this.scale.width - 52, this.hudHeight / 2);
+    this.skipButton.setVisible(this.isCommunity && !this.won);
   }
 
   private onWin(): void {
     this.won = true;
+    this.buildButton.setVisible(false);
+    this.communityButton.setVisible(false);
+    this.skipButton.setVisible(false);
+    if (this.isCommunity) {
+      this.onWinCommunity();
+      return;
+    }
     const stars = computeStars(this.moves, this.par);
     const starStr = '\u2605'.repeat(stars) + '\u2606'.repeat(3 - stars);
     const blurb = stars === 3 ? 'A clean run!' : stars === 2 ? 'Nicely done.' : 'You got them home - can you do it in fewer?';
@@ -493,6 +576,119 @@ export class GameScene extends Scene {
 
     this.fxLayer.add([overlay, panel, status, copyButton]);
     void this.submitSolve(status);
+  }
+
+  private onWinCommunity(): void {
+    const w = this.scale.width;
+    const h = this.scale.height;
+    this.fxLayer.removeAll(true);
+    const creator = this.communityPuzzle?.creator ?? 'a redditor';
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
+    const panel = this.add
+      .text(w / 2, h * 0.32, `Solved ${creator}'s puzzle!\n${this.moves} moves`, {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        color: COLORS.text,
+        align: 'center',
+        lineSpacing: 8,
+      })
+      .setOrigin(0.5);
+    const voteButton = this.add
+      .text(w / 2, h * 0.54, 'Upvote this puzzle', {
+        fontFamily: 'Arial',
+        fontSize: '18px',
+        color: '#062033',
+        backgroundColor: '#aef0d2',
+        padding: { left: 16, right: 16, top: 10, bottom: 10 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    voteButton.on('pointerdown', () => void this.upvoteCurrent(voteButton));
+    const moreButton = this.add
+      .text(w / 2, h * 0.68, 'Next puzzle \u25B6', {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: '#062033',
+        backgroundColor: '#aef0d2',
+        padding: { left: 14, right: 14, top: 8, bottom: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    moreButton.on('pointerdown', () => this.nextCommunity());
+    const dailyButton = this.add
+      .text(w / 2, h * 0.8, 'Back to daily', { fontFamily: 'Arial', fontSize: '16px', color: COLORS.text })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    dailyButton.on('pointerdown', () => this.scene.start('GameScene'));
+    this.fxLayer.add([overlay, panel, voteButton, moreButton, dailyButton]);
+  }
+
+  private async upvoteCurrent(button: Phaser.GameObjects.Text): Promise<void> {
+    const id = this.communityPuzzle?.id;
+    if (!id) return;
+    try {
+      const response = await fetch('/api/ugc/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data: VoteResponse = await response.json();
+      button.setText(data.ok ? `Upvoted! (${data.votes})` : 'Already upvoted');
+      button.disableInteractive();
+    } catch (error) {
+      console.error(error);
+      button.setText('Could not upvote');
+    }
+  }
+
+  private nextCommunity(): void {
+    const queue: UgcSubmission[] = this.registry.get('ugc.queue') ?? [];
+    const idx = (this.registry.get('ugc.index') ?? 0) + 1;
+    this.registry.set('ugc.index', idx);
+    if (idx < queue.length) {
+      const next = queue[idx];
+      this.scene.start('GameScene', {
+        community: { id: next.id, board: next.board, par: next.par, creator: next.creator },
+      });
+    } else {
+      this.showStreamDone();
+    }
+  }
+
+  private showStreamDone(): void {
+    const w = this.scale.width;
+    const h = this.scale.height;
+    this.won = true;
+    this.skipButton.setVisible(false);
+    this.fxLayer.removeAll(true);
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
+    const panel = this.add
+      .text(w / 2, h * 0.36, "That's all the community puzzles for now!", {
+        fontFamily: 'Arial',
+        fontSize: '20px',
+        color: COLORS.text,
+        align: 'center',
+        lineSpacing: 8,
+        wordWrap: { width: w - 48 },
+      })
+      .setOrigin(0.5);
+    const buildBtn = this.add
+      .text(w / 2, h * 0.56, 'Build a puzzle', {
+        fontFamily: 'Arial',
+        fontSize: '17px',
+        color: '#062033',
+        backgroundColor: '#aef0d2',
+        padding: { left: 14, right: 14, top: 9, bottom: 9 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    buildBtn.on('pointerdown', () => this.scene.start('EditorScene'));
+    const dailyBtn = this.add
+      .text(w / 2, h * 0.68, 'Back to daily', { fontFamily: 'Arial', fontSize: '16px', color: COLORS.text })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    dailyBtn.on('pointerdown', () => this.scene.start('GameScene'));
+    this.fxLayer.add([overlay, panel, buildBtn, dailyBtn]);
   }
 
   private async submitSolve(status: Phaser.GameObjects.Text): Promise<void> {

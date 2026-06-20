@@ -7,22 +7,29 @@
 
 ## Pieces
 
-- HOPPER: moves only by jumping in a straight line (up/down/left/right) over
-  exactly one or more contiguous occupied cells, landing on the first empty cell
-  beyond them. Cannot move into an adjacent empty cell without jumping.
-- SLIDER: occupies a 1xN footprint and slides along its axis any number of free
-  cells. Cannot jump. (The movable obstacle, like a fox/car.)
-- BLOCKER: never moves (like a mushroom/wall). Pure obstacle.
+- HOPPER (penguin): moves only by jumping in a straight line (up/down/left/right)
+  over a contiguous run of one or more occupied cells, landing on the first empty
+  cell beyond them. Cannot step into an adjacent empty cell without jumping. A
+  hole is a valid landing cell (the goal). Occupies 1 cell.
+- SLIDER (seal): occupies a 1x2 footprint and slides along its axis (horizontal
+  or vertical) any number of free cells. Cannot jump, cannot pass through another
+  piece, and cannot slide onto or across a HOLE (a seal won't slide into open
+  water). The movable obstacle.
+- BLOCKER (ice rock): never moves. Pure obstacle that hoppers jump over and
+  sliders cannot pass through.
 
-Define "a move" precisely: one piece relocation. A multi-jump chain by a single
-hopper in one turn counts as ONE move (the solver enforces this consistently so
-move counts are comparable across players). Decide and lock this in `rules.ts`.
+Define "a move" precisely: one piece relocation (`applyMove` in `rules.ts`). One
+hop is a single straight-line jump over one contiguous run; hops do NOT auto-chain
+into a multi-direction combo, so each landing is its own move. One slide is a
+single relocation of a slider. This keeps move counts directly comparable across
+players, and the solver counts moves the same way.
 
 ## Scoring (moves, not time)
 
 - The solver computes `par` = optimal move count for the puzzle.
-- Player score is relative to par (golf): par -> 3 stars, par+1..+2 -> 2 stars,
-  solved over that -> 1 star.
+- Player score is relative to par (golf), tuned to stay encouraging: moves <=
+  par+1 -> 3 stars, moves <= 2*par -> 2 stars, any other solve -> 1 star. Logic
+  lives in `src/shared/scoring.ts` (shared by client + server so they agree).
 - Leaderboard sort: primary = fewest moves, tiebreak = fastest time. This avoids
   a giant tie at optimal and rewards insight first, speed second.
 - Moves-based scoring also drives comment discussion ("how did you do it in 8?"),
@@ -34,16 +41,22 @@ move counts are comparable across players). Decide and lock this in `rules.ts`.
 2. Competition: daily + all-time leaderboards; reset gives a fresh daily race.
 3. Completion: hit par, get clean closure, anticipate tomorrow (healthier than
    time-grinding the same board).
-4. Endless mode: solver-generated puzzles for "one more".
-5. Community-curated daily (the differentiator): users submit puzzles (validated
-   by the solver), community upvotes, top pick becomes tomorrow's official daily
-   with creator credit. Infinite free content + creators return to see results.
+4. Difficulty ladder: the daily ramps across the week (Mon/Tue easy -> Wed-Fri
+   medium -> weekend hard) so regulars get a build-up, not a flat experience.
+5. Build + community stream (the differentiator): users build puzzles in the
+   in-app editor; the solver validates each is solvable (and computes its par)
+   before it is accepted; accepted puzzles join a community stream others can
+   play (solve -> next, or skip) and upvote, with creator credit. Infinite free
+   content + creators return to see plays and votes. (Future option: promote a
+   top-voted community puzzle into a curated daily. Today the daily and the
+   community stream are independent: the daily is always freshly generated.)
 
 ## Solver is the linchpin
 
-BFS over board states (state = positions of all pieces). Used to: compute par,
-prove solvability + (optionally) uniqueness for UGC, and grade difficulty
-(solution length + branching factor). Keep it in `src/shared/solver` as pure TS.
+BFS over board states (state = positions of all pieces), in `src/shared/solver`
+as pure TS. Used to: compute par (`solver.ts`), generate graded puzzles
+(`generator.ts` + `difficulty.ts`), and validate that user submissions are
+solvable before they are accepted (`validate.ts`).
 
 ## Sharing format
 
@@ -51,16 +64,34 @@ Spoiler-free emoji grid summarizing the solution path / score (Wordle-style) for
 pasting into the post's comments. No board spoilers before a user solves.
 
 
-## Theme (LOCKED): "Floe" - penguins on the ice
+## Theme (LOCKED): "Ice Hop" - penguins on the ice
 
 Two animals + one inanimate obstacle (three animals tested as too confusing).
 The engine stays theme-agnostic; this is purely the art skin.
 
-- HOPPER  = penguin (1 cell). Hops over obstacles/animals; goal is to dive into a water hole.
-- SLIDER  = seal (1x2). Slides along its axis on the ice (the most natural slider mapping).
+- HOPPER  = penguin (1 cell). Hops over rocks/seals; goal is to dive into a water hole.
+- SLIDER  = seal (1x2). Slides along its axis on the ice; cannot enter the water.
 - BLOCKER = ice rock (fixed). The thing penguins hop over; seals cannot slide through it.
 - GOAL    = water hole. Land every penguin in a hole = solved (the colony dives in).
 
 Daily framing / stakes: "Get the whole colony into the water." Number of penguins
 always equals the number of water holes so "everyone in" reads instantly.
-Working title "Floe" (package/app still named rabbits-n-foxes until rename is confirmed).
+
+Display name "Ice Hop"; app slug and package name `ice-hop`.
+
+## Board size & piece counts
+
+- Grid is 5x5 for the daily. Boards stay small so they read on mobile.
+- Penguins (hoppers): 1-3. Seals (sliders): 0-2. Ice rocks (blockers): 1-2.
+  Counts ramp with the weekly difficulty tier (see `daily.ts`), echoing the
+  variety of Jump In'-style boards. #penguins always == #water holes.
+
+## Editor & controls
+
+- Build screen (`EditorScene`): place Penguin / Seal / Rock / Hole, or Erase.
+  "Random" drops a solver-made starter to riff on. Live solver feedback reports
+  whether the board is solvable and its par before the player submits.
+- Seal orientation: tap the Seal tool again to rotate it between horizontal
+  (<->) and vertical. Generated dailies can use either orientation too.
+- Undo: an in-editor history stack reverts the last placement.
+- Play controls: tap a penguin to hop it; drag a seal along its axis to slide it.

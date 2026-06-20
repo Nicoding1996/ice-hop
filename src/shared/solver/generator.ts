@@ -80,9 +80,16 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
       }
       const col = c % width;
       const right = c + 1;
-      if (col <= width - 2 && !used[right]) {
+      const down = c + width;
+      const canH = col <= width - 2 && !used[right];
+      const canV = down < cellCount && !used[down];
+      const preferH = rng() < 0.5;
+      if (canH && (preferH || !canV)) {
         used[right] = true;
         pieces.push({ kind: 'SLIDER', cells: [c, right], orient: 'H' });
+      } else if (canV) {
+        used[down] = true;
+        pieces.push({ kind: 'SLIDER', cells: [c, down], orient: 'V' });
       } else {
         ok = false;
       }

@@ -2,14 +2,20 @@
 
 ## What we are building
 
-A daily logic-puzzle game that runs natively inside a Reddit post via Devvit Web,
-built for Reddit's "Games with a Hook" hackathon (June 17 - July 15, 2026).
+**Ice Hop** - a daily logic-puzzle game that runs natively inside a Reddit post
+via Devvit Web, built for Reddit's "Games with a Hook" hackathon (June 17 - July
+15, 2026). Display name "Ice Hop"; app slug `ice-hop`.
 
 Core mechanic (genre, not a clone): a small grid where "hopper" pieces must jump
-over adjacent pieces to land in empty target holes, while "slider" pieces move
+over occupied cells to land in empty target holes, while "slider" pieces move
 along an axis and "blocker" pieces stay fixed. A puzzle is solved when every
 hopper occupies a hole. This is a peg-solitaire / sliding-logic hybrid. Every
 puzzle is deterministic with a known optimal solution computed by our solver.
+
+Theme (the art skin over the abstract engine): penguins (hoppers) hop over ice
+rocks (blockers) and seals (sliders) to dive into water holes (goals). The number
+of penguins always equals the number of water holes, so "get the whole colony in
+the water" reads at a glance.
 
 ## Why it can win
 
@@ -23,15 +29,21 @@ retentive, community-run game:
 
 ## The player loop (the "hook")
 
-- Daily puzzle: one shared puzzle per day, auto-posted to the feed (the ritual).
+- Daily puzzle: one shared, freshly generated puzzle per day, auto-posted to the
+  feed (the ritual). Difficulty ramps across the week (Mon/Tue easy -> weekend
+  hard). The daily is always solver-generated; it is NOT sourced from user
+  submissions.
 - Streak: consecutive days solved; loss aversion brings people back.
 - Score: moves vs par -> star rating; time is only a tiebreaker.
 - Share: a spoiler-free emoji-grid of your solution path, pasted into comments.
-- Leaderboard: daily + all-time.
-- Endless mode: solver-generated puzzles for "one more" after the daily.
-- Community-curated daily: players build puzzles; the community upvotes them;
-  the top pick becomes tomorrow's official daily, credited to its creator.
-  This single feature fuses Hook + User Contributions + Reddity.
+- Leaderboard: daily + all-time, sorted by fewest moves then fastest time.
+- Build + Community stream (the differentiator): players build their own puzzles
+  in the editor; the solver validates each one is solvable before it is accepted;
+  accepted puzzles enter a community stream that anyone can play (solve -> next,
+  or skip), upvoting the ones they like and seeing the creator credited. This
+  fuses Hook + User Contributions + Reddity. (A future step could promote a
+  top-voted community puzzle into a curated daily, but today the daily and the
+  community stream are independent.)
 
 ## Success criteria (hackathon)
 

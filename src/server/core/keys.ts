@@ -2,7 +2,7 @@
 
 export const keys = {
   /** Stored daily puzzle (JSON DailyPuzzle). */
-  dailyPuzzle: (date: string): string => `daily:3:${date}`,
+  dailyPuzzle: (date: string): string => `daily:5:${date}`,
   /** Maps a post id to the puzzle date it shows. */
   postDate: (postId: string): string => `post:${postId}`,
   /** A user's solve record for a given day (JSON). */

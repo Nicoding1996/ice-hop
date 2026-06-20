@@ -38,13 +38,15 @@ Key sections: `post.entrypoints` (default = `splash.html` inline feed view,
 
 ## Commands
 
-- `npm run login` -> `devvit login`
-- `npm run dev` -> `devvit playtest` (live test in a subreddit)
+- `npm run login`      -> `devvit login`
+- `npm run dev`        -> `devvit playtest` (live test in a subreddit)
+- `npm run build`      -> `vite build`
 - `npm run type-check` -> `tsc --build`
-- `npm run lint` -> eslint
-- `npm run deploy` -> type-check + lint + `devvit upload`
-- `npm run launch` -> deploy + `devvit publish`
-- `npm run test -- <file>` -> vitest for a single file
+- `npm run test`       -> `vitest run` (all tests); `npm run test -- <file>` for one
+- `npm run deploy`     -> type-check + `devvit upload`
+- `npm run launch`     -> deploy + `devvit publish`
+
+(No `lint` script is configured; type-check is the gate before upload.)
 
 ## Hard rules (from official AGENTS.md)
 

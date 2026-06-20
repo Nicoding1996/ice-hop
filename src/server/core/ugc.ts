@@ -64,27 +64,3 @@ export const votePuzzle = async (id: string): Promise<VoteResponse> => {
   const votes = await redis.zIncrBy(keys.ugcIndex(), id, 1);
   return { ok: true, votes };
 };
-
-/**
- * Pops the top-voted submission to become a daily puzzle (the community-curated
- * daily). Removing it from the index ensures it is used only once.
- */
-export const consumeTopSubmissionForDaily = async (): Promise<{
-  board: Board;
-  par: number;
-  creator: string;
-} | null> => {
-  const count = await redis.zCard(keys.ugcIndex());
-  if (count === 0) return null;
-
-  const rows = await redis.zRange(keys.ugcIndex(), 0, count - 1, { by: 'rank' });
-  if (rows.length === 0) return null;
-  const top = rows[rows.length - 1]; // highest votes
-
-  const raw = await redis.get(keys.ugcSubmission(top.member));
-  await redis.zRem(keys.ugcIndex(), [top.member]);
-  if (!raw) return null;
-
-  const sub: UgcSubmission = JSON.parse(raw);
-  return { board: sub.board, par: sub.par, creator: sub.creator };
-};
