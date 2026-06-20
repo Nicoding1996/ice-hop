@@ -11,12 +11,30 @@
   </head>
   <body>
     <main class="wrap">
-      <div class="ice"></div>
+      <div class="hero">
+        <svg class="penguin" viewBox="0 0 160 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A happy penguin on an ice block">
+          <rect x="24" y="132" width="112" height="26" rx="11" fill="#bfe3f2" stroke="#7fb4d4" stroke-width="2" />
+          <rect x="32" y="136" width="96" height="8" rx="4" fill="#e8f7ff" opacity="0.6" />
+          <ellipse cx="66" cy="132" rx="13" ry="6" fill="#f6a623" />
+          <ellipse cx="94" cy="132" rx="13" ry="6" fill="#f6a623" />
+          <ellipse cx="36" cy="86" rx="12" ry="34" fill="#2b3440" />
+          <ellipse cx="124" cy="86" rx="12" ry="34" fill="#2b3440" />
+          <ellipse cx="80" cy="84" rx="44" ry="54" fill="#2b3440" />
+          <ellipse cx="80" cy="92" rx="28" ry="40" fill="#f4f9fc" />
+          <circle cx="66" cy="64" r="12" fill="#ffffff" />
+          <circle cx="94" cy="64" r="12" fill="#ffffff" />
+          <circle cx="69" cy="66" r="6.5" fill="#15202b" />
+          <circle cx="91" cy="66" r="6.5" fill="#15202b" />
+          <circle cx="66" cy="61" r="2.6" fill="#ffffff" />
+          <circle cx="88" cy="61" r="2.6" fill="#ffffff" />
+          <polygon points="80,70 72,80 88,80" fill="#f6a623" />
+        </svg>
+      </div>
       <h1 class="title">ICE HOP</h1>
       <p class="tag">Get the whole colony into the water.</p>
-      <p class="greeting" id="greeting">A daily ice puzzle</p>
       <button class="start" id="start-button">Play today's puzzle</button>
-      <p class="how">Tap a penguin to hop it over things. Drag a seal to slide it. Get the whole colony into the water.</p>
+      <p class="meta" id="meta">Daily puzzle</p>
+      <p class="how">Tap a penguin to hop it over things. Drag a seal to slide. Land every penguin in the water.</p>
     </main>
     <script type="module" src="splash.ts" defer></script>
   </body>

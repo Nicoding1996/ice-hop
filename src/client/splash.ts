@@ -6,7 +6,12 @@ startButton?.addEventListener('click', (e) => {
   requestExpandedMode(e, 'game');
 });
 
-const greeting = document.getElementById('greeting');
-if (greeting) {
-  greeting.textContent = context.username ? `Hi ${context.username} - ready to dive in?` : 'A daily ice puzzle';
+const meta = document.getElementById('meta');
+if (meta) {
+  const date = new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+  meta.textContent = context.username ? `${date}  -  hi ${context.username}` : date;
 }

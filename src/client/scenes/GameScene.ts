@@ -6,26 +6,16 @@ import { legalMoves } from '../../shared/game/moves';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
 import { buildShareText } from '../../shared/share';
-
-const COLORS = {
-  bg: 0x0a2a43,
-  ice: 0xa7d8ec,
-  iceEdge: 0xd6f0fa,
-  water: 0x0c3f59,
-  waterRing: 0x14628a,
-  rock: 0x8b97a4,
-  rockTop: 0xbcc6d0,
-  seal: 0x556471,
-  sealBelly: 0x8b9aa7,
-  penguin: 0x232b33,
-  penguinBelly: 0xf3f7fa,
-  beak: 0xf2a33c,
-  eye: 0x10151a,
-  select: 0xffe08a,
-  hint: 0x7ee0b8,
-  text: '#eaf6fb',
-  arrow: '#ffe08a',
-};
+import {
+  PALETTE as COLORS,
+  paintBackdrop,
+  paintIceSheet,
+  makeWaterHole,
+  drawPenguinInto,
+  drawSealInto,
+  drawRockInto,
+  splashBurst,
+} from '../art/theme';
 
 type DragState = {
   pieceIndex: number;
@@ -55,6 +45,7 @@ export class GameScene extends Scene {
   private skipButton!: Phaser.GameObjects.Text;
   private dragState: DragState | null = null;
 
+  private bgLayer!: Phaser.GameObjects.Container;
   private boardLayer!: Phaser.GameObjects.Container;
   private pieceLayer!: Phaser.GameObjects.Container;
   private fxLayer!: Phaser.GameObjects.Container;
@@ -87,6 +78,8 @@ export class GameScene extends Scene {
 
   create(): void {
     this.cameras.main.setBackgroundColor(COLORS.bg);
+    this.bgLayer = this.add.container(0, 0);
+    paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
     this.boardLayer = this.add.container(0, 0);
     this.pieceLayer = this.add.container(0, 0);
     this.fxLayer = this.add.container(0, 0);
@@ -169,6 +162,7 @@ export class GameScene extends Scene {
     );
 
     this.scale.on('resize', () => {
+      paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       if (!this.board) return;
       this.layout();
       this.renderBoard();
@@ -255,25 +249,37 @@ export class GameScene extends Scene {
     const s = this.cell;
     const holes = new Set(this.board.holes);
 
-    for (let i = 0; i < this.board.width * this.board.height; i++) {
-      const { x, y } = this.cellCenter(i);
-      const tile = this.add.rectangle(x, y, s * 0.94, s * 0.94, COLORS.ice).setStrokeStyle(2, COLORS.iceEdge);
-      this.boardLayer.add(tile);
-      if (holes.has(i)) {
-        this.boardLayer.add(this.add.circle(x, y, s * 0.37, COLORS.waterRing));
-        this.boardLayer.add(this.add.circle(x, y, s * 0.3, COLORS.water));
-      }
+    // One connected ice sheet under the whole grid (not loose tiles).
+    paintIceSheet(this, this.boardLayer, this.originX, this.originY, this.board.width, this.board.height, s);
+    // Carve the water holes into the sheet.
+    for (const hole of holes) {
+      const { x, y } = this.cellCenter(hole);
+      this.boardLayer.add(makeWaterHole(this, x, y, s));
     }
 
     this.pieces.forEach((piece, idx) => {
       const { x, y } = this.pieceCenterPx(piece.cells);
       const container = this.add.container(x, y);
+      // Inner art node: idle/hop animation lives here so the outer container is
+      // free to own position, hit-area, and dragging.
+      const art = this.add.container(0, 0);
+      container.add(art);
+      container.setData('art', art);
+
       if (piece.kind === 'HOPPER') {
-        this.drawPenguin(container);
+        drawPenguinInto(this, art, s);
         this.makeSelectable(container, s * 0.82, s * 0.82, idx);
+        this.tweens.add({
+          targets: art,
+          y: -s * 0.05,
+          duration: 1300 + (idx % 3) * 180,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
       } else if (piece.kind === 'SLIDER') {
         const orient = piece.orient ?? 'H';
-        this.drawSeal(container, orient);
+        drawSealInto(this, art, s, orient);
         const w = orient === 'H' ? s * 1.8 : s * 0.82;
         const hgt = orient === 'H' ? s * 0.82 : s * 1.8;
         this.makeSelectable(container, w, hgt, idx);
@@ -281,41 +287,13 @@ export class GameScene extends Scene {
         container.setData('slider', true);
         this.input.setDraggable(container);
       } else {
-        this.drawRock(container);
+        drawRockInto(this, art, s);
       }
       this.pieceLayer.add(container);
       this.pieceViews[idx] = container;
     });
 
     this.renderHighlights();
-  }
-
-  private drawPenguin(c: Phaser.GameObjects.Container): void {
-    const s = this.cell;
-    c.add(this.add.ellipse(0, 0, s * 0.62, s * 0.74, COLORS.penguin));
-    c.add(this.add.ellipse(0, s * 0.06, s * 0.4, s * 0.54, COLORS.penguinBelly));
-    c.add(this.add.triangle(0, s * 0.04, -s * 0.07, 0, s * 0.07, 0, 0, s * 0.12, COLORS.beak));
-    c.add(this.add.circle(-s * 0.1, -s * 0.18, s * 0.045, COLORS.eye));
-    c.add(this.add.circle(s * 0.1, -s * 0.18, s * 0.045, COLORS.eye));
-  }
-
-  private drawSeal(c: Phaser.GameObjects.Container, orient: 'H' | 'V'): void {
-    const s = this.cell;
-    const long = s * 1.66;
-    const short = s * 0.5;
-    const w = orient === 'H' ? long : short;
-    const h = orient === 'H' ? short : long;
-    c.add(this.add.ellipse(0, 0, w, h, COLORS.seal));
-    c.add(this.add.ellipse(0, 0, w * 0.7, h * 0.6, COLORS.sealBelly));
-    const headX = orient === 'H' ? w * 0.42 : 0;
-    const headY = orient === 'H' ? 0 : -h * 0.42;
-    c.add(this.add.circle(headX, headY, s * 0.2, COLORS.seal));
-  }
-
-  private drawRock(c: Phaser.GameObjects.Container): void {
-    const s = this.cell;
-    c.add(this.add.rectangle(0, s * 0.08, s * 0.7, s * 0.46, COLORS.rock));
-    c.add(this.add.ellipse(0, -s * 0.12, s * 0.62, s * 0.3, COLORS.rockTop));
   }
 
   private makeSelectable(
@@ -338,7 +316,15 @@ export class GameScene extends Scene {
   private renderHighlights(): void {
     if (!this.board) return;
     this.fxLayer.removeAll(true);
+    // Reset selection emphasis on every piece.
+    this.pieceViews.forEach((v) => {
+      const a: Phaser.GameObjects.Container | undefined = v?.getData('art');
+      if (a) a.setScale(1);
+    });
     if (this.selected === null) return;
+
+    const selArt: Phaser.GameObjects.Container | undefined = this.pieceViews[this.selected]?.getData('art');
+    if (selArt) selArt.setScale(1.1);
 
     const sel = this.pieces[this.selected];
     const selCenter = this.pieceCenterPx(sel.cells);
@@ -479,9 +465,11 @@ export class GameScene extends Scene {
     this.fxLayer.removeAll(true);
     const view = this.pieceViews[move.pieceIndex];
     const target = this.pieceCenterPx(move.to);
+    const landsInWater = move.to.every((cell) => this.board?.holes.includes(cell));
 
     const commit = (): void => {
       if (!this.board) return;
+      if (landsInWater) splashBurst(this, this.fxLayer, target.x, target.y, this.cell);
       this.pieces = applyMove(this.pieces, move);
       this.moves += 1;
       this.selected = null;
@@ -491,25 +479,37 @@ export class GameScene extends Scene {
       if (isSolved(this.board, this.pieces)) this.onWin();
     };
 
-    if (view) {
-      this.tweens.add({ targets: view, x: target.x, y: target.y, duration: 160, ease: 'Quad.easeOut', onComplete: commit });
-      if (move.kind === 'HOPPER') {
-        this.tweens.add({ targets: view, scaleX: 1.12, scaleY: 1.12, duration: 80, yoyo: true });
-      }
-    } else {
+    if (!view) {
       commit();
+      return;
+    }
+
+    const art: Phaser.GameObjects.Container | undefined = view.getData('art');
+    if (art) this.tweens.killTweensOf(art);
+
+    const duration = move.kind === 'HOPPER' ? 240 : 200;
+    this.tweens.add({ targets: view, x: target.x, y: target.y, duration, ease: 'Quad.easeOut', onComplete: commit });
+
+    if (art && move.kind === 'HOPPER') {
+      // Lift through an arc with a squash on take-off and landing.
+      this.tweens.add({ targets: art, y: -this.cell * 0.45, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
+      this.tweens.add({ targets: art, scaleX: 0.86, scaleY: 1.2, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
+    } else if (art) {
+      // Seal slide: a brief squash in the direction of travel.
+      this.tweens.add({ targets: art, scaleX: 1.12, scaleY: 0.9, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
     }
   }
 
   private updateHud(): void {
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
     this.hudText.setPosition(this.scale.width / 2, this.hudHeight / 2);
-    this.hintText.setPosition(this.scale.width / 2, this.scale.height - 18);
+    this.hintText.setPosition(this.scale.width / 2, this.scale.height - 44);
     this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
     const showNav = !this.won && !this.isCommunity;
-    this.buildButton.setPosition(this.scale.width - 72, this.hudHeight / 2);
+    const navY = this.scale.height - 18;
+    this.buildButton.setPosition(this.scale.width - 70, navY);
     this.buildButton.setVisible(showNav);
-    this.communityButton.setPosition(72, this.hudHeight / 2);
+    this.communityButton.setPosition(70, navY);
     this.communityButton.setVisible(showNav);
     this.skipButton.setPosition(this.scale.width - 52, this.hudHeight / 2);
     this.skipButton.setVisible(this.isCommunity && !this.won);
