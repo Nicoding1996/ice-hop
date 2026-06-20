@@ -136,8 +136,10 @@ Anti-spam / integrity on submit + vote:
 
 ## Sharing format
 
-Spoiler-free emoji grid summarizing the solution path / score (Wordle-style) for
-pasting into the post's comments. No board spoilers before a user solves.
+Spoiler-free emoji grid summarizing the solution path / score (Wordle-style),
+shared via the native share sheet (`showShareSheet`, which also links back to the
+post) with a clipboard fallback so the paste-into-comments flow works everywhere.
+No board spoilers before a user solves.
 
 
 ## Theme (LOCKED): "Ice Hop" - penguins on the ice
@@ -191,10 +193,18 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   first-move hint), so a stranded/unsolvable board is never a dead end. In Endless
   a "Hint" button sits beside Restart (best next move; the solve then won't
   count). Endless play also shows a top-right "Solved: N" progression banner.
-- No dead ends: the daily win screen offers Copy result, More puzzles (-> Endless
-  tier select), and Menu; endless wins offer Next puzzle (same tier) / Change
-  level / Menu; community wins offer Upvote / Next / Back to daily; test wins
-  offer Back to editing.
+- No dead ends: the daily win screen offers Share result (native share sheet,
+  clipboard fallback), More puzzles (-> Endless tier select), and Menu; endless
+  wins offer Next puzzle (same tier) / Change level / Menu; community wins offer
+  Upvote / Next / Back to daily; test wins offer Back to editing. Logged-out
+  players also get a "Sign in to save your streak / progress" CTA on the win
+  screens (`showLoginPrompt`, a natural breakpoint). A failed puzzle load (network
+  / API) shows a "Try again" + Menu recovery instead of hanging on the loader.
+- Returning to a solved daily: re-opening a daily you've already solved shows a
+  recap (your moves + stars, "a fresh puzzle drops tomorrow") that funnels onward
+  to Endless / Community, with a quiet "Play today's again" to replay - never
+  silently dropping you back onto a board you've beaten. First/unsolved visits
+  still drop straight into the board (feed-first; no menu wall).
 - Loading state: the board hides behind a calm "Getting the penguins ready..."
   message until the puzzle is fetched and rendered, so no half-built frame flashes.
 - Scene transitions: a shared camera fade (`fadeToScene` / `fadeInScene` in

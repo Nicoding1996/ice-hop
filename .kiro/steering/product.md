@@ -43,7 +43,12 @@ retentive, community-run game:
 - Streak: consecutive days solved; loss aversion brings people back. The first
   solve each day sets a streak-based subreddit flair (e.g. "🔥 7-day streak").
 - Score: moves vs par -> star rating; time is only a tiebreaker.
-- Share: a spoiler-free emoji-grid of your solution path, pasted into comments.
+- Share: a spoiler-free emoji-grid of your result, via the native share sheet
+  (clipboard fallback) to paste into comments or send to a friend.
+- Returning + sign-in: re-opening a solved daily shows a recap that routes you
+  onward to Endless / Community (never a silent replay of a beaten board);
+  logged-out players get a win-screen "sign in to save your streak / progress"
+  prompt (showLoginPrompt) to convert guests into returning, subscribable players.
 - Comment hub: each daily post auto-seeds a pinned how-to-play comment that
   invites players to drop their scores, so the comment section is part of play.
 - Leaderboard: daily + all-time, sorted by fewest moves then fastest time.

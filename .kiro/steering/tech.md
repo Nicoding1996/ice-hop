@@ -12,7 +12,8 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 ## Two execution contexts
 
 - Client (`src/client`): runs in an iframe on reddit.com. Import from
-  `@devvit/web/client` (e.g. `navigateTo`, `showToast`, `showForm`).
+  `@devvit/web/client` (e.g. `navigateTo`, `showToast`, `showForm`,
+  `showLoginPrompt`, `showShareSheet`, `requestExpandedMode`).
 - Server (`src/server`): secure serverless Node 22. A Hono app. Import from
   `@devvit/web/server`: `context` (postId, subredditName, userId...), `redis`,
   `reddit`, `createServer`, `getServerPort`.
@@ -22,9 +23,10 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 ## Client architecture
 
 - Phaser 4 game (the `game.html` expanded view) with scenes: `Boot` (loads the
-  sound pref, launches the game), `HomeScene` (the hub), `GameScene` (daily /
-  community / test play), `EditorScene` (build), `CommunityScene` (loads the
-  stream and hands off to GameScene).
+  sound pref, launches `GameScene`), `HomeScene` (the hub), `GameScene` (daily /
+  endless / community / test play), `EditorScene` (build), `CommunityScene` (loads
+  the stream and hands off to GameScene), `EndlessScene` (Easy/Medium/Hard tier
+  select).
 - All art is drawn in code as vector graphics - no image/sprite assets. One
   palette + helper module, `src/client/art/theme.ts`, holds the penguin / seal /
   rock / water, the connected ice sheet, the backdrop, win FX, and the scene
