@@ -35,4 +35,12 @@ export const keys = {
   // --- Endless mode ---
   /** Lifetime count of endless puzzles a user has solved (progression banner). */
   endlessSolved: (user: string): string => `endless:${user}`,
+  /**
+   * Pre-generated puzzle pool for a tier (hash of id -> JSON {board,par}). The
+   * `1` is a pool schema version: bump it to abandon stale pools after a tier
+   * definition change.
+   */
+  endlessPool: (tier: string): string => `endless:pool:1:${tier}`,
+  /** Monotonic id sequence for a tier's pool entries. */
+  endlessPoolSeq: (tier: string): string => `endless:poolseq:1:${tier}`,
 };

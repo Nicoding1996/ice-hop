@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { OnAppInstallRequest, TriggerResponse } from '@devvit/web/shared';
 import { context } from '@devvit/web/server';
 import { createDailyPost } from '../core/post';
+import { refillEndlessPools } from '../core/endless';
 import { todayUtc } from '../../shared/date';
 
 export const triggers = new Hono();
@@ -10,6 +11,13 @@ export const triggers = new Hono();
 triggers.post('/on-app-install', async (c) => {
   try {
     const post = await createDailyPost(todayUtc());
+    // Warm a few endless puzzles so the first plays are instant. Isolated so a
+    // warm-up hiccup never fails the install; the cron tops the rest up.
+    try {
+      await refillEndlessPools(6);
+    } catch (warmError) {
+      console.error(`endless warm-up on install failed: ${warmError}`);
+    }
     const input = await c.req.json<OnAppInstallRequest>();
     return c.json<TriggerResponse>(
       {

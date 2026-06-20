@@ -65,6 +65,7 @@ export class GameScene extends Scene {
   private endlessSolved = 0;
   private endlessBanner!: Phaser.GameObjects.Text;
   private skipButton!: Phaser.GameObjects.Text;
+  private resetButton!: Phaser.GameObjects.Text;
   private dragState: DragState | null = null;
 
   private bgLayer!: Phaser.GameObjects.Container;
@@ -173,6 +174,21 @@ export class GameScene extends Scene {
       .setOrigin(1, 0.5);
     this.uiLayer.add(this.endlessBanner);
 
+    // Restart the current board (bottom strip). Only relevant once a move has
+    // been made, so it stays hidden on a fresh board and swaps in for the hint.
+    this.resetButton = this.add
+      .text(0, 0, '\u21BA Restart', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: COLORS.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 12, right: 12, top: 6, bottom: 6 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.resetButton.on('pointerdown', () => this.resetPuzzle());
+    this.uiLayer.add(this.resetButton);
+
     // Tapping empty ice clears the current selection.
     this.input.on(
       'pointerdown',
@@ -248,19 +264,30 @@ export class GameScene extends Scene {
     }
     if (this.isEndless) {
       try {
-        const response = await fetch(`/api/endless?tier=${encodeURIComponent(this.endlessTier)}`);
-        if (!response.ok) throw new Error(`endless failed: ${response.status}`);
-        const data: EndlessResponse = await response.json();
+        const { data, fromPrefetch } = await this.takeOrFetchEndless();
         this.board = data.board;
         this.pieces = data.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
         this.par = data.par;
-        this.endlessSolved = data.solved;
+        // On a fresh fetch the server count is authoritative; on a prefetched
+        // board it predates this session's solves, so prefer the locally tracked
+        // count (kept in the registry, updated on every solve).
+        if (fromPrefetch) {
+          const known = this.registry.get('endless.solved');
+          this.endlessSolved = typeof known === 'number' ? known : data.solved;
+        } else {
+          this.endlessSolved = data.solved;
+        }
+        this.registry.set('endless.solved', this.endlessSolved);
         this.date = '';
         this.moves = 0;
         this.startTime = Date.now();
         this.layout();
         this.renderBoard();
         this.updateHud();
+        // Warm the next puzzle in the background so "Next" is instant. The short
+        // delay avoids competing with this board's first render and skips the
+        // fetch if the player immediately bounces.
+        this.time.delayedCall(500, () => this.prefetchNextEndless());
       } catch (error) {
         console.error(error);
         this.loadingText.setText('Could not load an endless puzzle.');
@@ -284,6 +311,37 @@ export class GameScene extends Scene {
       console.error(error);
       this.loadingText.setText('Could not load today\u2019s puzzle.');
     }
+  }
+
+  /** Use a prefetched endless puzzle if one is warmed for this tier, else fetch. */
+  private async takeOrFetchEndless(): Promise<{ data: EndlessResponse; fromPrefetch: boolean }> {
+    const stash: EndlessResponse | undefined = this.registry.get('endless.prefetch');
+    if (stash && stash.tier === this.endlessTier && stash.board) {
+      this.registry.remove('endless.prefetch');
+      return { data: stash, fromPrefetch: true };
+    }
+    // A stash for a different tier is stale (the player changed level) - drop it.
+    if (stash) this.registry.remove('endless.prefetch');
+    const data = await this.fetchEndless(this.endlessTier);
+    return { data, fromPrefetch: false };
+  }
+
+  private async fetchEndless(tier: EndlessTier): Promise<EndlessResponse> {
+    const response = await fetch(`/api/endless?tier=${encodeURIComponent(tier)}`);
+    if (!response.ok) throw new Error(`endless failed: ${response.status}`);
+    const data: EndlessResponse = await response.json();
+    return data;
+  }
+
+  /** Fetch the next puzzle for the current tier and stash it so "Next" is instant. */
+  private prefetchNextEndless(): void {
+    if (!this.isEndless) return;
+    const existing: EndlessResponse | undefined = this.registry.get('endless.prefetch');
+    if (existing && existing.tier === this.endlessTier) return; // already warmed
+    const tier = this.endlessTier;
+    void this.fetchEndless(tier)
+      .then((data) => this.registry.set('endless.prefetch', data))
+      .catch((error) => console.error(error));
   }
 
   private layout(): void {
@@ -631,6 +689,17 @@ export class GameScene extends Scene {
     }
   }
 
+  /** Restore the current board to its starting layout (moves -> 0, timer reset). */
+  private resetPuzzle(): void {
+    if (!this.board || this.busy || this.won || this.moves === 0) return;
+    this.pieces = this.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+    this.moves = 0;
+    this.selected = null;
+    this.startTime = Date.now();
+    this.renderBoard();
+    this.updateHud();
+  }
+
   private updateHud(): void {
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
     this.hudText.setPosition(this.scale.width / 2, this.hudHeight / 2);
@@ -643,6 +712,10 @@ export class GameScene extends Scene {
     this.endlessBanner.setText(`Solved: ${this.endlessSolved}`);
     this.endlessBanner.setPosition(this.scale.width - 14, this.hudHeight / 2);
     this.endlessBanner.setVisible(this.isEndless && !this.won);
+    // Restart sits in the bottom strip and only appears once a move is made
+    // (swaps in for the first-move hint, which hides as soon as moves > 0).
+    this.resetButton.setPosition(this.scale.width / 2, this.scale.height - 26);
+    this.resetButton.setVisible(this.moves > 0 && !this.won);
     // The board is ready: drop the loading state and reveal the UI.
     if (this.loadingText) this.loadingText.setVisible(false);
     this.uiLayer.setVisible(true);
@@ -653,6 +726,7 @@ export class GameScene extends Scene {
     this.menuButton.setVisible(false);
     this.skipButton.setVisible(false);
     this.endlessBanner.setVisible(false);
+    this.resetButton.setVisible(false);
     if (this.isTest) {
       this.onWinTest();
       return;
@@ -909,6 +983,9 @@ export class GameScene extends Scene {
 
     // The progression payoff: the lifetime solved count ticks up by one.
     const fromCount = this.endlessSolved;
+    // Optimistically record the increment so a fast "Next" (before the solve
+    // POST resolves) still shows the correct banner; recordEndless reconciles it.
+    this.registry.set('endless.solved', fromCount + 1);
     const countText = this.add
       .text(w / 2, h * 0.54, `Solved: ${fromCount}`, {
         fontFamily: 'Arial',
@@ -973,6 +1050,9 @@ export class GameScene extends Scene {
       if (!response.ok) throw new Error(`endless solve failed: ${response.status}`);
       const result: EndlessSolvedResponse = await response.json();
       this.endlessSolved = result.solved;
+      // Persist the authoritative count so the next puzzle (which may load from
+      // the prefetch cache, whose own count is stale) shows the right banner.
+      this.registry.set('endless.solved', result.solved);
       const counter = { v: fromCount };
       this.tweens.add({
         targets: counter,

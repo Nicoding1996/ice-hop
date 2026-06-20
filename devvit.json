@@ -35,6 +35,10 @@
       "daily-puzzle": {
         "endpoint": "/internal/scheduler/daily-puzzle",
         "cron": "0 12 * * *"
+      },
+      "endless-refill": {
+        "endpoint": "/internal/scheduler/endless-refill",
+        "cron": "*/5 * * * *"
       }
     }
   },

@@ -105,3 +105,63 @@ export const getEndlessSolved = async (user: string): Promise<number> => {
   const n = Number.parseInt(stored, 10);
   return Number.isFinite(n) ? n : 0;
 };
+
+// --- Pre-generated pool ---
+// Generating a graded puzzle on the fly is the slow part of an endless request.
+// To keep requests fast we keep a small pre-generated pool per tier in Redis
+// (a hash of id -> JSON) and just pop one per request. The pool is refilled off
+// the request path (a scheduler cron + a warm-up on install). On-the-fly
+// generation stays as the fallback when a pool is momentarily empty, so endless
+// is never broken - the worst case is simply the old (slower) behaviour.
+
+const POOL_TARGET = 12;
+const ALL_TIERS: ReadonlyArray<EndlessTier> = ['easy', 'medium', 'hard'];
+
+/**
+ * Pop one pre-generated puzzle from a tier's pool, or null when it is empty (the
+ * caller then generates one on the fly). A random field is taken so concurrent
+ * players rarely get the same board.
+ */
+export const popPooledPuzzle = async (
+  tier: EndlessTier
+): Promise<{ board: Board; par: number } | null> => {
+  const poolKey = keys.endlessPool(tier);
+  const fields = await redis.hKeys(poolKey);
+  if (fields.length === 0) return null;
+  const field = fields[Math.floor(Math.random() * fields.length)];
+  const json = await redis.hGet(poolKey, field);
+  await redis.hDel(poolKey, [field]);
+  if (!json) return null;
+  try {
+    const parsed: { board: Board; par: number } = JSON.parse(json);
+    if (!parsed || !parsed.board || typeof parsed.par !== 'number') return null;
+    return { board: parsed.board, par: parsed.par };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Top each tier's pool up toward POOL_TARGET, generating at most `maxGenerate`
+ * puzzles across all tiers in a single call (so one cron run is bounded). Once a
+ * pool is full this generates nothing, so the cost is only paid when puzzles
+ * have actually been consumed. Returns how many were added.
+ */
+export const refillEndlessPools = async (maxGenerate = 12): Promise<number> => {
+  let budget = maxGenerate;
+  let added = 0;
+  for (const tier of ALL_TIERS) {
+    if (budget <= 0) break;
+    const have = await redis.hLen(keys.endlessPool(tier));
+    let need = Math.min(POOL_TARGET - have, budget);
+    while (need > 0) {
+      const puzzle = generateEndlessPuzzle(tier);
+      const id = String(await redis.incrBy(keys.endlessPoolSeq(tier), 1));
+      await redis.hSet(keys.endlessPool(tier), { [id]: JSON.stringify(puzzle) });
+      need -= 1;
+      budget -= 1;
+      added += 1;
+    }
+  }
+  return added;
+};

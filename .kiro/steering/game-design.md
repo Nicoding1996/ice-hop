@@ -64,6 +64,13 @@ players, and the solver counts moves the same way.
    the generator levers (par range + piece counts): Easy is trap-free
    (`requireAllPiecesUsed`, par ~2-4), Medium allows decoys (par ~5-8), Hard is
    brutal-but-fair (more pieces, par ~7-12) but never literally unsolvable.
+   Puzzles are served from a small per-tier Redis pool (`endless:pool:1:{tier}`)
+   refilled off the request path by an every-5-minute scheduler cron plus a
+   warm-up on install, so a request only pops (fast) instead of generating
+   inline; on-the-fly generation stays as the fallback when a pool is empty. The
+   client also prefetches the next puzzle (stashed in the Phaser registry) while
+   you solve the current one, so tapping "Next" is instant; the lifetime count is
+   kept in the registry so a prefetched board still shows the right banner.
 
 ## Solver is the linchpin
 
@@ -167,9 +174,11 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   toggle.
 - Endless tier select (`EndlessScene`): pick Easy / Medium / Hard; shows the
   lifetime "Solved so far" banner and routes into `GameScene` in endless mode.
-- In play, the only HUD nav is a single "‹ Menu" button (top-left) back to the
-  hub; Build/Community live on the hub, not crowding the board. Endless play also
-  shows a top-right "Solved: N" progression banner.
+- In play, the HUD nav is a single "‹ Menu" button (top-left) back to the hub
+  plus a "↺ Restart" button (bottom strip) that restores the current board to its
+  start; Restart only appears once a move has been made (it swaps in for the
+  first-move hint), so a stranded/unsolvable board is never a dead end. Endless
+  play also shows a top-right "Solved: N" progression banner.
 - No dead ends: the daily win screen offers Copy result, More puzzles (-> Endless
   tier select), and Menu; endless wins offer Next puzzle (same tier) / Change
   level / Menu; community wins offer Upvote / Next / Back to daily; test wins

@@ -40,10 +40,14 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 - One Hono app. Mount public routes at `/api` (called by the client) and
   internal routes at `/internal` (menu, form, triggers, scheduler).
 - Post creation: `reddit.submitCustomPost({ title, ... })`.
-- Persistence: `redis` (get/set/incrBy; sorted sets for leaderboards via the
-  zAdd/zRange family - verify exact signatures in docs at implementation time).
-- Daily content: `scheduler.tasks` in devvit.json with a `cron` expression
-  pointing at an `/internal/scheduler/...` endpoint.
+- Persistence: `redis` (get/set/incrBy; hashes via hSet/hGet/hKeys/hDel/hLen for
+  the endless pool; sorted sets for leaderboards via the zAdd/zRange family -
+  verify exact signatures in docs at implementation time). No list ops
+  (lPush/rPop) are available in the Devvit redis client.
+- Scheduled jobs: `scheduler.tasks` in devvit.json, each a `cron` expression
+  pointing at an `/internal/scheduler/...` endpoint - the daily puzzle post and
+  an every-5-minutes endless pool refill (the scheduler resolves ~once a minute;
+  up to 10 recurring tasks per install).
 
 ## devvit.json (config, schema v1)
 

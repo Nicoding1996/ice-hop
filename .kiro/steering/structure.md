@@ -40,11 +40,11 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
     │   │   ├── ugc.ts        # /api/ugc/* (submit, list, vote)
     │   │   ├── menu.ts       # /internal/menu/*
     │   │   ├── triggers.ts   # /internal/triggers/* (onAppInstall)
-    │   │   └── scheduler.ts  # /internal/scheduler/* (daily puzzle cron)
+    │   │   └── scheduler.ts  # /internal/scheduler/* (daily puzzle + endless pool refill crons)
     │   └── core/
     │       ├── post.ts       # create daily post + seed the pinned how-to comment
     │       ├── daily.ts      # daily puzzle generation/storage (Redis)
-    │       ├── endless.ts    # endless-mode tiered generation + lifetime solve counter
+    │       ├── endless.ts    # endless-mode tiered generation + pre-generated pool + solve counter
     │       ├── leaderboard.ts# Redis sorted sets + streaks
     │       ├── ugc.ts        # user puzzle submit/list/vote + solver validation
     │       └── keys.ts       # single source of truth for Redis keys
@@ -74,6 +74,8 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
   `ugc:sub:{id}`, `ugc:index` (sorted set by votes), `ugc:recent` (sorted set by
   createdAt), `ugc:voters:{id}` (hash, one-vote-per-user), `ugc:boards` (hash of
   board signatures for dedup), `ugc:played:{user}` (sorted set of solved puzzles),
-  `ugc:subs:{user}:{date}` (per-day submission counter for the rate limit), and
+  `ugc:subs:{user}:{date}` (per-day submission counter for the rate limit),
   `endless:{user}` (lifetime count of endless puzzles solved - the progression
-  banner).
+  banner), and `endless:pool:1:{tier}` + `endless:poolseq:1:{tier}` (the
+  pre-generated endless puzzle pool per tier - a hash of id -> JSON {board,par} -
+  and its id sequence; the `1` is a pool schema version).
