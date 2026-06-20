@@ -217,8 +217,10 @@ export const drawSealInto = (
   const OUT = PALETTE.sealOutline;
   const BODY = PALETTE.seal;
   const sw = Math.max(1.5, s * 0.04);
-  // Tail fluke (left end).
-  c.add(scene.add.triangle(-s * 0.74, 0, 0, -s * 0.18, 0, s * 0.18, -s * 0.24, 0, BODY).setStrokeStyle(Math.max(1, s * 0.03), OUT));
+  // Tail fluke: two rounded paddles fanning out (drawn before the body so the
+  // body overlaps the inner edge and it reads as attached).
+  c.add(scene.add.ellipse(-s * 0.64, -s * 0.13, s * 0.34, s * 0.2, BODY).setStrokeStyle(Math.max(1, s * 0.03), OUT).setRotation(0.55));
+  c.add(scene.add.ellipse(-s * 0.64, s * 0.13, s * 0.34, s * 0.2, BODY).setStrokeStyle(Math.max(1, s * 0.03), OUT).setRotation(-0.55));
   // Body.
   c.add(scene.add.ellipse(0, 0, s * 1.4, s * 0.62, BODY).setStrokeStyle(sw, OUT));
   // Lighter belly.

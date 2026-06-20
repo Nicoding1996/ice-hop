@@ -68,6 +68,7 @@ export class EditorScene extends Scene {
   private statusText!: Phaser.GameObjects.Text;
   private backButton!: Phaser.GameObjects.Text;
   private toolChips: ToolChip[] = [];
+  private testButton!: Phaser.GameObjects.Text;
   private submitButton!: Phaser.GameObjects.Text;
   private actionButtons: Phaser.GameObjects.Text[] = [];
 
@@ -88,6 +89,15 @@ export class EditorScene extends Scene {
     this.submitting = false;
     this.touched = false;
 
+    // Restore an in-progress board if we are returning from "Test".
+    const draft: { pieces: Piece[]; holes: number[] } | undefined = this.registry.get('editor.draft');
+    if (draft) {
+      this.pieces = draft.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+      this.holes = new Set(draft.holes);
+      this.registry.remove('editor.draft');
+      this.touched = true;
+    }
+
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
     this.bgLayer = this.add.container(0, 0);
@@ -105,11 +115,13 @@ export class EditorScene extends Scene {
 
     this.toolChips = TOOLS.map(({ tool, label }) => this.makeToolChip(tool, label));
 
+    this.testButton = this.makeButton('Test', UI.submitMuted, '#ffffff', () => this.testPuzzle());
     this.submitButton = this.makeButton('Submit', UI.submitMuted, '#ffffff', () => void this.submit());
     this.actionButtons = [
       this.makeButton('Random', UI.action, UI.actionText, () => this.randomFill()),
       this.makeButton('Undo', UI.action, UI.actionText, () => this.undo()),
       this.makeButton('Clear', UI.action, UI.actionText, () => this.clearAll()),
+      this.testButton,
       this.submitButton,
     ];
 
@@ -124,9 +136,11 @@ export class EditorScene extends Scene {
     this.layoutAll();
     this.render();
     this.revalidate();
-    // Friendly first nudge before any edits.
-    this.statusText.setText('Pick a tool, then tap the ice to build.');
-    this.statusText.setColor(UI.text);
+    // Friendly first nudge (unless we restored a draft, which shows its status).
+    if (!this.touched) {
+      this.statusText.setText('Pick a tool, then tap the ice to build.');
+      this.statusText.setColor(UI.text);
+    }
   }
 
   private makeButton(
@@ -362,6 +376,17 @@ export class EditorScene extends Scene {
     }
     this.submitButton.setBackgroundColor(this.canSubmit ? UI.submit : UI.submitMuted);
     this.submitButton.setColor(this.canSubmit ? '#062033' : '#ffffff');
+    this.testButton.setBackgroundColor(this.canSubmit ? UI.action : UI.submitMuted);
+    this.testButton.setColor(this.canSubmit ? UI.actionText : '#ffffff');
+  }
+
+  /** Save the current board and jump into GameScene to play-test it. */
+  private testPuzzle(): void {
+    if (!this.canSubmit) return;
+    const board = this.currentBoard();
+    const validation = validateSubmission(board);
+    this.registry.set('editor.draft', { pieces: this.pieces, holes: [...this.holes].sort((a, b) => a - b) });
+    fadeToScene(this, 'GameScene', { test: { board, par: validation.ok ? validation.par : 0 } });
   }
 
   private setTool(tool: Tool): void {
@@ -371,11 +396,17 @@ export class EditorScene extends Scene {
       chip.bg.setFillStyle(active ? UI.chipActive : UI.chipIdle);
       chip.label.setColor(active ? UI.toolLabelActive : UI.toolLabelIdle);
     }
+    if (tool === 'SEAL') {
+      this.statusText.setText(`Seal is ${this.sealOrient === 'H' ? 'horizontal \u2194' : 'vertical \u2195'} - tap Seal again to rotate`);
+      this.statusText.setColor(UI.text);
+    }
   }
 
   private onSealToolTap(): void {
     if (this.currentTool === 'SEAL') {
       this.sealOrient = this.sealOrient === 'H' ? 'V' : 'H';
+      this.statusText.setText(`Seal is now ${this.sealOrient === 'H' ? 'horizontal \u2194' : 'vertical \u2195'} - tap to rotate`);
+      this.statusText.setColor(UI.text);
     } else {
       this.setTool('SEAL');
     }

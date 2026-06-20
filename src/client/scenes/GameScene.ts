@@ -48,6 +48,9 @@ export class GameScene extends Scene {
   private menuButton!: Phaser.GameObjects.Text;
   private communityPuzzle?: { id: string; board: Board; par: number; creator: string };
   private isCommunity = false;
+  private testBoard?: Board;
+  private testPar = 0;
+  private isTest = false;
   private skipButton!: Phaser.GameObjects.Text;
   private dragState: DragState | null = null;
 
@@ -69,9 +72,15 @@ export class GameScene extends Scene {
     super('GameScene');
   }
 
-  init(data?: { community?: { id: string; board: Board; par: number; creator: string } }): void {
+  init(data?: {
+    community?: { id: string; board: Board; par: number; creator: string };
+    test?: { board: Board; par: number };
+  }): void {
     this.communityPuzzle = data?.community;
     this.isCommunity = Boolean(data?.community);
+    this.testBoard = data?.test?.board;
+    this.testPar = data?.test?.par ?? 0;
+    this.isTest = Boolean(data?.test);
     // Scene instances are reused across restarts, so reset transient state here.
     this.pieces = [];
     this.moves = 0;
@@ -108,7 +117,7 @@ export class GameScene extends Scene {
     this.uiLayer.add([this.hudText, this.hintText]);
 
     this.menuButton = this.add
-      .text(0, 0, '\u2039 Menu', {
+      .text(0, 0, this.isTest ? '\u2039 Edit' : '\u2039 Menu', {
         fontFamily: 'Arial',
         fontSize: '14px',
         color: COLORS.text,
@@ -117,7 +126,7 @@ export class GameScene extends Scene {
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    this.menuButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+    this.menuButton.on('pointerdown', () => fadeToScene(this, this.isTest ? 'EditorScene' : 'HomeScene'));
     this.uiLayer.add(this.menuButton);
 
     this.skipButton = this.add
@@ -169,6 +178,18 @@ export class GameScene extends Scene {
   }
 
   private async loadPuzzle(): Promise<void> {
+    if (this.isTest && this.testBoard) {
+      this.board = this.testBoard;
+      this.pieces = this.testBoard.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+      this.par = this.testPar;
+      this.date = '';
+      this.moves = 0;
+      this.startTime = Date.now();
+      this.layout();
+      this.renderBoard();
+      this.updateHud();
+      return;
+    }
     if (this.communityPuzzle) {
       this.board = this.communityPuzzle.board;
       this.pieces = this.communityPuzzle.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
@@ -557,6 +578,10 @@ export class GameScene extends Scene {
     this.won = true;
     this.menuButton.setVisible(false);
     this.skipButton.setVisible(false);
+    if (this.isTest) {
+      this.onWinTest();
+      return;
+    }
     if (this.isCommunity) {
       this.onWinCommunity();
       return;
@@ -721,6 +746,39 @@ export class GameScene extends Scene {
     panel.setScale(0.92).setAlpha(0);
     this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
     this.time.delayedCall(180, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.32, Math.min(48, w * 0.13)));
+  }
+
+  private onWinTest(): void {
+    playWin();
+    const w = this.scale.width;
+    const h = this.scale.height;
+    this.fxLayer.removeAll(true);
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
+    const panel = this.add
+      .text(w / 2, h * 0.36, `Your puzzle works!\nSolvable in ${this.moves} moves`, {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        color: COLORS.text,
+        align: 'center',
+        lineSpacing: 8,
+        wordWrap: { width: w - 48 },
+      })
+      .setOrigin(0.5);
+    const back = this.add
+      .text(w / 2, h * 0.56, 'Back to editing', {
+        fontFamily: 'Arial',
+        fontSize: '18px',
+        color: '#062033',
+        backgroundColor: '#ff8a5b',
+        padding: { left: 18, right: 18, top: 10, bottom: 10 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    back.on('pointerdown', () => fadeToScene(this, 'EditorScene'));
+    this.fxLayer.add([overlay, panel, back]);
+    panel.setScale(0.92).setAlpha(0);
+    this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
+    this.time.delayedCall(150, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.36, Math.min(48, w * 0.13)));
   }
 
   private async markPlayed(id: string): Promise<void> {
