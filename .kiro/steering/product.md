@@ -40,10 +40,13 @@ retentive, community-run game:
 - Build + Community stream (the differentiator): players build their own puzzles
   in the editor; the solver validates each one is solvable before it is accepted;
   accepted puzzles enter a community stream that anyone can play (solve -> next,
-  or skip), upvoting the ones they like and seeing the creator credited. This
-  fuses Hook + User Contributions + Reddity. (A future step could promote a
-  top-voted community puzzle into a curated daily, but today the daily and the
-  community stream are independent.)
+  or skip), upvoting the ones they like and seeing the creator credited. Each
+  player's stream excludes puzzles they have already solved and interleaves the
+  top-voted with the newest, so popular puzzles stay visible while fresh ones
+  still get exposure. Submissions are de-duplicated and rate-limited (a few per
+  day) to keep the stream spam-free. This fuses Hook + User Contributions +
+  Reddity. (A future step could promote a top-voted community puzzle into a
+  curated daily, but today the daily and the community stream are independent.)
 
 ## Success criteria (hackathon)
 

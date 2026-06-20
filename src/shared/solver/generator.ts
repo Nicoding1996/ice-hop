@@ -1,5 +1,6 @@
 import type { Board, Piece } from '../game/types';
-import { solve } from './solver';
+import { countShortestSolutions, solve } from './solver';
+import { analyzeRoles } from './quality';
 
 export type GenOptions = {
   width?: number;
@@ -10,6 +11,17 @@ export type GenOptions = {
   minPar?: number;
   maxPar?: number;
   attempts?: number;
+  /** Reject boards with more than one optimal solution (default false). A single
+   *  intended solution is what makes a puzzle feel designed rather than mushy. */
+  requireUnique?: boolean;
+  /** Reject boards containing an inert piece, i.e. a piece nothing ever touches
+   *  along the solution path (default false). Kills "why is this here" clutter
+   *  while still allowing decoys. */
+  rejectInert?: boolean;
+  /** Reject boards unless every piece is on the optimal path (default false):
+   *  no decoys and no clutter. Use on easy tiers for clean, trap-free boards;
+   *  leave off on harder tiers so misdirection is allowed. */
+  requireAllPiecesUsed?: boolean;
   /** Seed for deterministic generation (e.g. the daily date). */
   seed?: number;
 };
@@ -43,6 +55,11 @@ const shuffled = (n: number, rng: () => number): number[] => {
  * Returns null if no board in the requested par range is found within the
  * attempt budget. Every returned board is guaranteed solvable (the solver
  * confirms it) and not pre-solved (holes are distinct from hopper starts).
+ *
+ * Optional quality gates raise boards from "merely solvable" to "feels
+ * designed": `requireUnique` (one optimal solution), `rejectInert` (no dead
+ * clutter pieces, decoys still allowed), and `requireAllPiecesUsed` (every
+ * piece on the optimal path, i.e. no decoys and no clutter).
  */
 export const generate = (opts: GenOptions = {}): Generated | null => {
   const width = opts.width ?? 5;
@@ -53,6 +70,9 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
   const minPar = opts.minPar ?? 3;
   const maxPar = opts.maxPar ?? 12;
   const attempts = opts.attempts ?? 500;
+  const requireUnique = opts.requireUnique ?? false;
+  const rejectInert = opts.rejectInert ?? false;
+  const requireAllPiecesUsed = opts.requireAllPiecesUsed ?? false;
   const rng = mulberry32(opts.seed ?? Math.floor(Math.random() * 0x7fffffff));
   const cellCount = width * height;
 
@@ -129,9 +149,22 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
 
     const board: Board = { width, height, holes: holes.sort((a, b) => a - b), pieces };
     const res = solve(board, { maxStates: 60_000 });
-    if (res.solvable && res.par >= minPar && res.par <= maxPar) {
-      return { board, par: res.par };
+    if (!res.solvable || res.par < minPar || res.par > maxPar) continue;
+
+    // Quality gates (cheapest first): clutter/decoy roles, then the more
+    // expensive uniqueness proof only on boards that already passed.
+    if (requireAllPiecesUsed || rejectInert) {
+      const roles = analyzeRoles(board, res.solution);
+      if (requireAllPiecesUsed) {
+        if (roles.used.size !== pieces.length) continue; // every piece on the path
+      } else if (roles.inert.size > 0) {
+        continue; // a piece nothing ever touches = clutter
+      }
     }
+    if (requireUnique && countShortestSolutions(board, { maxStates: 60_000, cap: 2 }) !== 1) {
+      continue;
+    }
+    return { board, par: res.par };
   }
 
   return null;

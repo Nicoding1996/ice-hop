@@ -1,12 +1,14 @@
 import { Hono } from 'hono';
+import { reddit } from '@devvit/web/server';
 import type {
+  MarkPlayedRequest,
   SubmitPuzzleRequest,
   SubmitPuzzleResponse,
   UgcListResponse,
   VoteRequest,
   VoteResponse,
 } from '../../shared/api';
-import { listSubmissions, submitPuzzle, votePuzzle } from '../core/ugc';
+import { listStreamForUser, recordPlayed, submitPuzzle, votePuzzle } from '../core/ugc';
 
 // Mounted at /api/ugc by the api router.
 export const ugc = new Hono();
@@ -18,7 +20,8 @@ ugc.post('/submit', async (c) => {
 });
 
 ugc.get('/list', async (c) => {
-  const submissions = await listSubmissions(20);
+  const username = (await reddit.getCurrentUsername()) ?? 'anon';
+  const submissions = await listStreamForUser(username, 20);
   return c.json<UgcListResponse>({ submissions });
 });
 
@@ -26,4 +29,11 @@ ugc.post('/vote', async (c) => {
   const body = await c.req.json<VoteRequest>();
   const result = await votePuzzle(body.id);
   return c.json<VoteResponse>(result);
+});
+
+ugc.post('/played', async (c) => {
+  const body = await c.req.json<MarkPlayedRequest>();
+  const username = (await reddit.getCurrentUsername()) ?? 'anon';
+  await recordPlayed(username, body.id);
+  return c.json<{ ok: boolean }>({ ok: true });
 });

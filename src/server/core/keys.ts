@@ -21,6 +21,14 @@ export const keys = {
   ugcSubmission: (id: string): string => `ugc:sub:${id}`,
   /** Index/queue of pending submissions (sorted set, score = votes). */
   ugcIndex: (): string => `ugc:index`,
+  /** Submissions ordered by creation time (sorted set, score = createdAt). */
+  ugcRecent: (): string => `ugc:recent`,
   /** Per-submission voter set (hash username -> "1") for one-vote-per-user. */
   ugcVoters: (id: string): string => `ugc:voters:${id}`,
+  /** Known board signatures (hash signature -> creator) to reject duplicates. */
+  ugcBoards: (): string => `ugc:boards`,
+  /** Submissions a user has solved (sorted set, score = solve time). */
+  ugcPlayed: (user: string): string => `ugc:played:${user}`,
+  /** How many puzzles a user has submitted on a given UTC day (rate limit). */
+  ugcDailyCount: (user: string, date: string): string => `ugc:subs:${user}:${date}`,
 };

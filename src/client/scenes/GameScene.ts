@@ -579,6 +579,8 @@ export class GameScene extends Scene {
   }
 
   private onWinCommunity(): void {
+    const playedId = this.communityPuzzle?.id;
+    if (playedId) void this.markPlayed(playedId);
     const w = this.scale.width;
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
@@ -621,6 +623,18 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     dailyButton.on('pointerdown', () => this.scene.start('GameScene'));
     this.fxLayer.add([overlay, panel, voteButton, moreButton, dailyButton]);
+  }
+
+  private async markPlayed(id: string): Promise<void> {
+    try {
+      await fetch('/api/ugc/played', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   private async upvoteCurrent(button: Phaser.GameObjects.Text): Promise<void> {

@@ -54,9 +54,49 @@ players, and the solver counts moves the same way.
 ## Solver is the linchpin
 
 BFS over board states (state = positions of all pieces), in `src/shared/solver`
-as pure TS. Used to: compute par (`solver.ts`), generate graded puzzles
-(`generator.ts` + `difficulty.ts`), and validate that user submissions are
-solvable before they are accepted (`validate.ts`).
+as pure TS. Used to: compute par (`solver.ts`), count optimal solutions for
+uniqueness (`countShortestSolutions`), generate graded puzzles (`generator.ts` +
+`difficulty.ts`), classify each piece's role (`quality.ts`), and validate that
+user submissions are solvable before they are accepted (`validate.ts`).
+
+## Generated puzzle quality (not just "solvable")
+
+Daily boards are random placements filtered by the solver, but "solvable + par
+in range" alone does not feel designed. The generator applies extra gates (the
+`generate` options in `generator.ts`):
+
+- `requireUnique`: exactly one optimal solution (no mushy many-solution boards).
+- `rejectInert`: drop boards with an inert piece, one the player can never even
+  touch along the solution path (the "why is this rock here" clutter that reads
+  as randomly assembled).
+- `requireAllPiecesUsed`: every piece sits on the optimal path (no decoys).
+
+`quality.ts` classifies each piece as **used** (on the optimal path), a **decoy**
+(touchable along the path but not used - fair misdirection), or **inert** (never
+touchable - clutter). Difficulty then has three independent levers: par length,
+solution uniqueness, and decoys. Easy tiers use `requireAllPiecesUsed` for clean,
+trap-free teaching boards; harder tiers keep uniqueness + no-clutter but allow
+decoys. UGC puzzles are deliberately NOT held to these gates (only solvable +
+sane size/par) so player creativity is not over-constrained.
+
+## Community stream: fairness & anti-spam
+
+The community stream is built per player (`listStreamForUser` + the pure
+`orderCommunityStream` in `community.ts`):
+
+- Excludes puzzles the player has already solved (tracked in `ugc:played:{user}`,
+  recorded when a community puzzle is solved). Skips do NOT mark a puzzle played,
+  so a skipped puzzle can resurface later.
+- Excludes the player's own puzzles.
+- Interleaves the top-voted pool with the newest pool, so favourites stay visible
+  and new submissions still get seen (no pure vote-ranking that buries new work).
+
+Anti-spam on submit (`submitPuzzle`):
+
+- Rate limit: at most 5 accepted submissions per user per UTC day.
+- De-duplication: identical boards are rejected via a canonical `boardSignature`
+  (a player cannot flood the queue with the same puzzle).
+- Plus the existing gate: must be signed in and pass solver validation.
 
 ## Sharing format
 

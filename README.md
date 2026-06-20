@@ -76,7 +76,10 @@ Open the **Build** screen from the game to design a board:
   and its **par** before you submit, so you never publish a dead end.
 
 A valid submission is a 4-6 wide/tall board with 1-4 penguins, an equal number of
-water holes, a real solution, and a par of at least 2.
+water holes, a real solution, and a par of at least 2. You can submit up to 5
+puzzles a day and exact duplicates are rejected. When you play the community
+stream it skips puzzles you've already solved and mixes popular picks with fresh
+new ones, so there's always something new and every creator gets a fair shot.
 
 ---
 

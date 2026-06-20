@@ -28,17 +28,21 @@ type GenConfig = {
   blockers: number;
   minPar: number;
   maxPar: number;
+  /** Easy tiers keep every piece on the solution path (no decoys); harder tiers
+   *  leave this off so the generator can include tempting wrong moves. */
+  requireAllPiecesUsed?: boolean;
 };
 
 // Difficulty ramps across the week like a daily crossword: Mon/Tue easy,
 // Wed-Fri medium, weekends hard. Higher tiers add more penguins and seals
-// (up to 3 penguins / 2 seals, like Jump In'). The solver still guarantees a
-// fair par for every accepted board.
+// (up to 3 penguins / 2 seals, like Jump In') and allow decoy pieces for
+// misdirection. Every accepted board is solvable, has a single optimal
+// solution, and contains no inert clutter (the solver guarantees all three).
 const LADDERS: ReadonlyArray<ReadonlyArray<GenConfig>> = [
   [
-    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 6 },
-    { hoppers: 2, sliders: 0, blockers: 2, minPar: 2, maxPar: 5 },
-    { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 5 },
+    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 6, requireAllPiecesUsed: true },
+    { hoppers: 2, sliders: 0, blockers: 2, minPar: 2, maxPar: 5, requireAllPiecesUsed: true },
+    { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 5, requireAllPiecesUsed: true },
   ],
   [
     { hoppers: 3, sliders: 1, blockers: 1, minPar: 4, maxPar: 8 },
@@ -66,7 +70,15 @@ const generateDaily = (date: string): { board: Board; par: number } => {
   const configs = [...LADDERS[tier], ...LADDERS[0]];
   for (let i = 0; i < configs.length; i++) {
     const config = configs[i];
-    const generated = generate({ width: 5, height: 5, attempts: 2500, seed: seed + i, ...config });
+    const generated = generate({
+      width: 5,
+      height: 5,
+      attempts: 2500,
+      seed: seed + i,
+      requireUnique: true,
+      rejectInert: true,
+      ...config,
+    });
     if (generated) return generated;
   }
   return { board: FALLBACK_BOARD, par: solve(FALLBACK_BOARD).par };

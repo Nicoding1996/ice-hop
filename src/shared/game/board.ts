@@ -41,3 +41,12 @@ export const isSolved = (board: Board, pieces: readonly Piece[]): boolean => {
   }
   return true;
 };
+
+/**
+ * Canonical content signature for a whole puzzle (dimensions + holes + pieces),
+ * used to detect duplicate user submissions regardless of array ordering.
+ */
+export const boardSignature = (board: Board): string => {
+  const holes = [...board.holes].sort((a, b) => a - b).join(',');
+  return `${board.width}x${board.height}|h:${holes}|p:${stateKey(board.pieces)}`;
+};

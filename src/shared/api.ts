@@ -64,3 +64,6 @@ export type UgcListResponse = { readonly submissions: readonly UgcSubmission[] }
 export type VoteRequest = { readonly id: string };
 
 export type VoteResponse = { readonly ok: boolean; readonly votes: number };
+
+/** Client -> server (POST /api/ugc/played) to mark a community puzzle solved. */
+export type MarkPlayedRequest = { readonly id: string };

@@ -21,12 +21,14 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
     │   │   ├── moves.ts      # legal-move generation (hop + slide)
     │   │   └── rules.ts      # applyMove; re-exports isSolved
     │   ├── solver/
-    │   │   ├── solver.ts     # BFS optimal solution + par
-    │   │   ├── generator.ts  # procedural puzzle generation (solver-filtered)
+    │   │   ├── solver.ts     # BFS optimal solution + par; optimal-solution count
+    │   │   ├── generator.ts  # procedural generation (solver-filtered + quality gates)
     │   │   ├── difficulty.ts # grade a puzzle (par length, branching)
+    │   │   ├── quality.ts    # classify pieces: used / decoy / inert (no-clutter gate)
     │   │   └── validate.ts   # validate a user-built board (size/counts/solvable/par)
-    │   ├── __tests__/        # vitest: engine, scoring, share, validate
+    │   ├── __tests__/        # vitest: engine, scoring, share, validate, quality, community
     │   ├── api.ts            # client<->server DTOs
+    │   ├── community.ts      # pure community-stream ordering (interleave + filter)
     │   ├── scoring.ts        # moves-vs-par -> stars; leaderboard score encode/decode
     │   ├── share.ts          # spoiler-free emoji share text
     │   └── date.ts           # daily date key + deterministic seed helpers
@@ -63,5 +65,7 @@ for this game. Keep `src/shared` pure (no Devvit/Phaser imports).
   `daily:5:{date}` (puzzle; the `5` is a schema version bumped to force regen),
   `post:{postId}` (post -> date), `solve:{date}:{user}`, `lb:{date}` and `lb:all`
   (leaderboard sorted sets), `streak:{user}`, and for UGC: `ugc:counter`,
-  `ugc:sub:{id}`, `ugc:index` (sorted set by votes), `ugc:voters:{id}` (hash for
-  one-vote-per-user).
+  `ugc:sub:{id}`, `ugc:index` (sorted set by votes), `ugc:recent` (sorted set by
+  createdAt), `ugc:voters:{id}` (hash, one-vote-per-user), `ugc:boards` (hash of
+  board signatures for dedup), `ugc:played:{user}` (sorted set of solved puzzles),
+  and `ugc:subs:{user}:{date}` (per-day submission counter for the rate limit).
