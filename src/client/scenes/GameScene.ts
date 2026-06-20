@@ -631,7 +631,7 @@ export class GameScene extends Scene {
     if (stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
 
     const headline = this.add
-      .text(w / 2, h * 0.24, `Everyone made it in!\n${blurb}`, {
+      .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
         fontFamily: 'Arial',
         fontSize: '22px',
         color: COLORS.text,
@@ -642,10 +642,10 @@ export class GameScene extends Scene {
       .setOrigin(0.5)
       .setAlpha(0);
     this.fxLayer.add(headline);
-    this.tweens.add({ targets: headline, alpha: 1, y: h * 0.22, duration: 300, ease: 'Quad.easeOut' });
+    this.tweens.add({ targets: headline, alpha: 1, y: h * 0.18, duration: 300, ease: 'Quad.easeOut' });
 
     // Stars pop in one by one (earned spin); empty ones stay dim.
-    const starY = h * 0.37;
+    const starY = h * 0.32;
     const gap = Math.min(54, w * 0.16);
     const outer = Math.min(24, w * 0.07);
     for (let i = 0; i < 3; i++) {
@@ -663,7 +663,7 @@ export class GameScene extends Scene {
 
     // Moves count up to the final tally.
     const movesText = this.add
-      .text(w / 2, h * 0.5, `0 moves   (par ${this.par})`, { fontFamily: 'Arial', fontSize: '20px', color: COLORS.text })
+      .text(w / 2, h * 0.44, `0 moves   (par ${this.par})`, { fontFamily: 'Arial', fontSize: '20px', color: COLORS.text })
       .setOrigin(0.5);
     this.fxLayer.add(movesText);
     const counter = { v: 0 };
@@ -680,7 +680,7 @@ export class GameScene extends Scene {
     this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
 
     const status = this.add
-      .text(w / 2, h * 0.63, 'Saving your score...', {
+      .text(w / 2, h * 0.56, 'Saving your score...', {
         fontFamily: 'Arial',
         fontSize: '15px',
         color: COLORS.text,
@@ -691,12 +691,12 @@ export class GameScene extends Scene {
       .setOrigin(0.5)
       .setAlpha(0.9);
     const copyButton = this.add
-      .text(w / 2, h * 0.88, 'Copy result to share', {
+      .text(w / 2, h * 0.77, 'Copy result to share', {
         fontFamily: 'Arial',
-        fontSize: '17px',
+        fontSize: '16px',
         color: '#062033',
         backgroundColor: '#ffd166',
-        padding: { left: 18, right: 18, top: 10, bottom: 10 },
+        padding: { left: 16, right: 16, top: 9, bottom: 9 },
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
@@ -704,7 +704,33 @@ export class GameScene extends Scene {
       void this.copyResult(copyButton);
     });
 
-    this.fxLayer.add([status, copyButton]);
+    // Forward navigation so the daily isn't a dead end (keeps the "one more" loop).
+    const communityButton = this.add
+      .text(w / 2, h * 0.88, 'Play community puzzles \u25B6', {
+        fontFamily: 'Arial',
+        fontSize: '17px',
+        fontStyle: 'bold',
+        color: '#062033',
+        backgroundColor: '#ff8a5b',
+        padding: { left: 18, right: 18, top: 10, bottom: 10 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    communityButton.on('pointerdown', () => fadeToScene(this, 'CommunityScene'));
+
+    const homeButton = this.add
+      .text(44, this.hudHeight / 2, '\u2039 Menu', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: COLORS.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 11, right: 11, top: 6, bottom: 6 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+
+    this.fxLayer.add([status, copyButton, communityButton, homeButton]);
     void this.submitSolve(status);
   }
 
