@@ -1,6 +1,7 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import { PALETTE, paintBackdrop, drawPenguinInto, fadeInScene, fadeToScene } from '../art/theme';
+import { showHowToPlay } from '../howToPlay';
 import { isSoundOn, setSoundOn, playHop } from '../audio';
 
 /** The hub: pick the daily, build a puzzle, or browse the community stream. */
@@ -8,6 +9,8 @@ export class HomeScene extends Scene {
   private bgLayer!: Phaser.GameObjects.Container;
   private soundButton!: Phaser.GameObjects.Text;
   private content: Phaser.GameObjects.GameObject[] = [];
+  /** The "How to play" overlay, when open (so we can close it on rebuild). */
+  private rules?: Phaser.GameObjects.Container;
 
   constructor() {
     super('HomeScene');
@@ -28,6 +31,10 @@ export class HomeScene extends Scene {
   private build(): void {
     this.content.forEach((o) => o.destroy());
     this.content = [];
+    // A resize rebuilds the hub; close any open rules card so it can't linger
+    // stale (it isn't tracked in `content`).
+    this.rules?.destroy();
+    this.rules = undefined;
     const w = this.scale.width;
     const h = this.scale.height;
 
@@ -84,11 +91,35 @@ export class HomeScene extends Scene {
       if (on) playHop();
     });
 
-    this.content.push(peng, title, tag, play, endless, build, community, this.soundButton);
+    // Optional "How to play" entry point (top-left). The game is built to read
+    // without instructions, so this is a discoverable safety net, not a wall.
+    const help = this.add
+      .text(14, 14, '?', {
+        fontFamily: 'Arial',
+        fontSize: '15px',
+        fontStyle: 'bold',
+        color: PALETTE.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 12, right: 12, top: 5, bottom: 5 },
+      })
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    help.on('pointerdown', () => this.showRules());
+
+    this.content.push(peng, title, tag, play, endless, build, community, this.soundButton, help);
   }
 
   private soundLabel(): string {
     return isSoundOn() ? 'Sound: on' : 'Sound: off';
+  }
+
+  /** Open the shared "How to play" overlay (the same card the play screen uses).
+   *  Guarded so the "?" chip can't stack duplicates. */
+  private showRules(): void {
+    if (this.rules) return; // already open
+    this.rules = showHowToPlay(this, () => {
+      this.rules = undefined;
+    });
   }
 
   private makeButton(

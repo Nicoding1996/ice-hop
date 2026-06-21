@@ -12,6 +12,12 @@ export type InitResponse = {
   /** The viewer's prior result for this daily, when they've already solved it
    *  (drives the "solved today" recap). Absent for a first/unsolved visit. */
   readonly solvedResult?: { readonly moves: number; readonly stars: number };
+  /** Whether we've recorded this viewer as subscribed to the community via the
+   *  in-app Join button. Reddit exposes no API to read live subscription state,
+   *  so this reflects only app-driven joins - enough to stop re-prompting. */
+  readonly subscribed: boolean;
+  /** Current subreddit name, for the "Join r/{name}" win-screen CTA label. */
+  readonly subredditName?: string;
 };
 
 /** Client -> server (POST /api/solve) when a player completes a puzzle. */

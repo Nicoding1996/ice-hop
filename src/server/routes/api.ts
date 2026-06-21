@@ -47,6 +47,7 @@ api.get('/init', async (c) => {
       const rec: { moves: number; timeMs: number; stars: number } = JSON.parse(solveRecord);
       solvedResult = { moves: rec.moves, stars: rec.stars };
     }
+    const subscribed = username !== 'anon' && Boolean(await redis.get(keys.subscribed(username)));
 
     return c.json<InitResponse>({
       type: 'init',
@@ -56,6 +57,8 @@ api.get('/init', async (c) => {
       username,
       solved: Boolean(solveRecord),
       solvedResult,
+      subscribed,
+      subredditName: context.subredditName,
     });
   } catch (error) {
     console.error(`/api/init failed: ${error}`);
@@ -89,6 +92,26 @@ api.post('/solve', async (c) => {
     console.error(`/api/solve failed: ${error}`);
     const message = error instanceof Error ? error.message : 'solve failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// Subscribe the viewer to the community on their behalf. Triggered only by an
+// explicit "Join" tap on the win screen (Reddit's user-actions policy: a
+// distinct, opt-in action that never gates play). There's no API to read live
+// subscription state, so we also record an app-side flag to stop re-prompting.
+api.post('/subscribe', async (c) => {
+  try {
+    const username = (await reddit.getCurrentUsername()) ?? 'anon';
+    if (username === 'anon') {
+      return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
+    }
+    await reddit.subscribeToCurrentSubreddit();
+    await redis.set(keys.subscribed(username), '1');
+    return c.json({ status: 'success' });
+  } catch (error) {
+    console.error(`/api/subscribe failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'subscribe failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 500);
   }
 });
 

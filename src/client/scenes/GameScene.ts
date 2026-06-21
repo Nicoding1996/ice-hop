@@ -31,8 +31,9 @@ import {
   fadeInScene,
   fadeToScene,
 } from '../art/theme';
-import { context, showLoginPrompt, showShareSheet } from '@devvit/web/client';
+import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { playHop, playSlide, playSplash, playWin } from '../audio';
+import { showHowToPlay } from '../howToPlay';
 
 type DragState = {
   pieceIndex: number;
@@ -55,6 +56,10 @@ export class GameScene extends Scene {
   private won = false;
   private startTime = 0;
   private shareText = '';
+  /** Whether we've recorded the viewer as subscribed (drives the Join CTA). */
+  private subscribed = false;
+  /** Current subreddit name, for the "Join r/{name}" CTA label. */
+  private subredditName = '';
   private menuButton!: Phaser.GameObjects.Text;
   private communityPuzzle?: { id: string; board: Board; par: number; creator: string };
   private isCommunity = false;
@@ -68,6 +73,9 @@ export class GameScene extends Scene {
   private skipButton!: Phaser.GameObjects.Text;
   private resetButton!: Phaser.GameObjects.Text;
   private hintButton!: Phaser.GameObjects.Text;
+  private helpButton!: Phaser.GameObjects.Text;
+  /** The shared "How to play" overlay, when open (guards against stacking). */
+  private howTo?: Phaser.GameObjects.Container;
   private hintLayer!: Phaser.GameObjects.Container;
   private hintStage = 0;
   private hintUsed = false;
@@ -116,6 +124,7 @@ export class GameScene extends Scene {
     this.shareText = '';
     this.hintStage = 0;
     this.hintUsed = false;
+    this.howTo = undefined;
     this.loadErrorViews = [];
   }
 
@@ -213,6 +222,23 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     this.hintButton.on('pointerdown', () => this.showHint());
     this.uiLayer.add(this.hintButton);
+
+    // "?" help chip (top-right). Shown on the daily/test screen, where a
+    // first-time player lands (Boot opens GameScene directly, so they never see
+    // the hub's "?"). Opens the same shared How-to-play card.
+    this.helpButton = this.add
+      .text(0, 0, '?', {
+        fontFamily: 'Arial',
+        fontSize: '15px',
+        fontStyle: 'bold',
+        color: COLORS.text,
+        backgroundColor: '#1f3f59',
+        padding: { left: 12, right: 12, top: 6, bottom: 6 },
+      })
+      .setOrigin(1, 0.5)
+      .setInteractive({ useHandCursor: true });
+    this.helpButton.on('pointerdown', () => this.openHowTo());
+    this.uiLayer.add(this.helpButton);
 
     // Tapping empty ice clears the current selection.
     this.input.on(
@@ -328,12 +354,15 @@ export class GameScene extends Scene {
       this.pieces = data.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.par = data.par;
       this.date = data.date;
+      this.subscribed = data.subscribed;
+      this.subredditName = data.subredditName ?? '';
       this.moves = 0;
       this.startTime = Date.now();
       this.layout();
       this.renderBoard();
       this.updateHud();
       if (data.solved) this.showDailySolvedRecap(data.solvedResult);
+      else this.maybeAutoShowHowTo();
     } catch (error) {
       console.error(error);
       this.showLoadError('Could not load today\u2019s puzzle.');
@@ -380,6 +409,34 @@ export class GameScene extends Scene {
   private clearLoadError(): void {
     for (const v of this.loadErrorViews) v.destroy();
     this.loadErrorViews = [];
+  }
+
+  /** Open the shared How-to-play overlay (guarded against stacking). */
+  private openHowTo(): void {
+    if (this.howTo) return;
+    this.howTo = showHowToPlay(this, () => {
+      this.howTo = undefined;
+    });
+  }
+
+  /** Show the rules once for a first-time player. They land on the daily (Boot
+   *  opens GameScene directly), so this is their first touch-point; a
+   *  localStorage flag means returning players drop straight into the board. */
+  private maybeAutoShowHowTo(): void {
+    if (this.isEndless || this.isCommunity || this.isTest) return;
+    let seen = false;
+    try {
+      seen = localStorage.getItem('icehop.howto.seen') === '1';
+    } catch {
+      /* localStorage unavailable - just skip the one-time intro */
+    }
+    if (seen) return;
+    try {
+      localStorage.setItem('icehop.howto.seen', '1');
+    } catch {
+      /* ignore */
+    }
+    this.openHowTo();
   }
 
   /** Use a prefetched endless puzzle if one is warmed for this tier, else fetch. */
@@ -899,6 +956,11 @@ export class GameScene extends Scene {
     this.endlessBanner.setText(`Solved: ${this.endlessSolved}`);
     this.endlessBanner.setPosition(this.scale.width - 14, this.hudHeight / 2);
     this.endlessBanner.setVisible(this.isEndless && !this.won);
+    // "?" help chip (top-right), shown on the daily/test screen where the corner
+    // is free. Endless owns that corner with the Solved banner and community
+    // with Skip, and players reach those via the hub (which has its own "?").
+    this.helpButton.setPosition(this.scale.width - 12, this.hudHeight / 2);
+    this.helpButton.setVisible(!this.isEndless && !this.isCommunity && !this.won);
     // Restart sits in the bottom strip and only appears once a move is made
     // (swaps in for the first-move hint, which hides as soon as moves > 0). In
     // Endless it's paired with the Hint button; otherwise it stays centered.
@@ -936,6 +998,49 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     btn.on('pointerdown', () => showLoginPrompt());
     this.fxLayer.add(btn);
+  }
+
+  /** A "Join the community" CTA on the daily win screen, shown to a signed-in
+   *  player we haven't already recorded as subscribed. Per Reddit's user-actions
+   *  policy it's a distinct, optional action that never gates play; tapping
+   *  subscribes them to the subreddit on their behalf so tomorrow's daily finds
+   *  them. Sits in the same slot as the (logged-out-only) sign-in prompt, so the
+   *  two are mutually exclusive. */
+  private addSubscribePrompt(y: number): void {
+    if (!context.username || this.subscribed) return;
+    const label = this.subredditName ? `Join r/${this.subredditName}` : 'Join the community';
+    const btn = this.add
+      .text(this.scale.width / 2, y, label, {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#062033',
+        backgroundColor: '#cfe6f2',
+        padding: { left: 14, right: 14, top: 8, bottom: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    btn.on('pointerdown', () => void this.subscribeToCommunity(btn));
+    this.fxLayer.add(btn);
+  }
+
+  /** Calls the server to subscribe the viewer, then confirms and hides the CTA. */
+  private async subscribeToCommunity(btn: Phaser.GameObjects.Text): Promise<void> {
+    btn.disableInteractive();
+    btn.setText('Joining\u2026');
+    try {
+      const response = await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) throw new Error(`subscribe failed: ${response.status}`);
+      this.subscribed = true;
+      btn.setText('Joined \u2713');
+      showToast('Thanks for joining \u2014 see you tomorrow!');
+    } catch (error) {
+      console.error(error);
+      btn.setText('Tap to try again');
+      btn.setInteractive({ useHandCursor: true });
+    }
   }
 
   /** Returning-player recap: when you re-open a daily you've already solved,
@@ -1029,6 +1134,7 @@ export class GameScene extends Scene {
     this.endlessBanner.setVisible(false);
     this.resetButton.setVisible(false);
     this.hintButton.setVisible(false);
+    this.helpButton.setVisible(false);
     this.clearHint();
     if (this.isTest) {
       this.onWinTest();
@@ -1169,6 +1275,7 @@ export class GameScene extends Scene {
 
     this.fxLayer.add([status, copyButton, morePuzzlesButton, homeButton]);
     this.addSignInPrompt(h * 0.66, 'Sign in to save your streak');
+    this.addSubscribePrompt(h * 0.66);
     void this.submitSolve(status);
   }
 

@@ -13,6 +13,10 @@ export const keys = {
   allTimeLeaderboard: (): string => `lb:all`,
   /** A user's current streak record (JSON). */
   streak: (user: string): string => `streak:${user}`,
+  /** Flag set when a user joins (subscribes to) the community via the in-app
+   *  Join button. Reddit has no API to read live subscription state, so this is
+   *  our app-side record, used only to stop re-prompting. */
+  subscribed: (user: string): string => `subscribed:${user}`,
 
   // --- User-generated content ---
   /** Monotonic id counter for submissions. */
