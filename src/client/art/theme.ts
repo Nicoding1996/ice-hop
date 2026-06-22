@@ -286,16 +286,43 @@ export const splashBurst = (
   }
 };
 
-/** Fade the camera out, then start another scene (pair with fadeIn on create). */
+/** Fade the camera out, then start another scene (pair with fadeIn on create).
+ *
+ *  Hardened so a transition can NEVER strand the player on a dimmed screen:
+ *  - a guard so we start the next scene exactly once;
+ *  - the fade's own progress callback (fires when progress hits 1) AND the
+ *    `camerafadeoutcomplete` event, so a missed event still advances;
+ *  - a time-based fail-safe in case neither fires.
+ *  This matters most for endless, which restarts the SAME GameScene over and
+ *  over via "Next puzzle"; if the fade-out completion were ever missed the old
+ *  scene would sit faded-to-black and look frozen. */
 export const fadeToScene = (scene: Phaser.Scene, key: string, data?: object): void => {
-  scene.cameras.main.fadeOut(160, 11, 31, 58);
-  // Always pass a fresh object: Phaser keeps the scene's PREVIOUS data when started
-  // with undefined, which would otherwise reload a stale community puzzle.
-  scene.cameras.main.once('camerafadeoutcomplete', () => scene.scene.start(key, data ?? {}));
+  const cam = scene.cameras.main;
+  let advanced = false;
+  const go = (): void => {
+    if (advanced) return;
+    advanced = true;
+    // Always pass a fresh object: Phaser keeps the scene's PREVIOUS data when
+    // started with undefined, which would otherwise reload a stale puzzle.
+    scene.scene.start(key, data ?? {});
+  };
+  cam.once('camerafadeoutcomplete', go);
+  cam.fadeOut(160, 11, 31, 58, (_camera: Phaser.Cameras.Scene2D.Camera, progress: number) => {
+    if (progress >= 1) go();
+  });
+  // Fail-safe: advance even if the completion signals are missed, so the screen
+  // never gets stuck dimmed. (Cleared automatically once the scene shuts down.)
+  scene.time.delayedCall(400, go);
 };
 
-/** Standard fade-in for a scene's create(), matching the dawn backdrop. */
+/** Standard fade-in for a scene's create(), matching the dawn backdrop.
+ *
+ *  resetFX() first: restarting a scene does NOT reset its camera fade effect
+ *  (a long-standing Phaser behaviour), so a prior fade-out can linger and leave
+ *  the restarted scene stuck dark/dimmed. Clearing it before fading in
+ *  guarantees the scene actually becomes visible. */
 export const fadeInScene = (scene: Phaser.Scene): void => {
+  scene.cameras.main.resetFX();
   scene.cameras.main.fadeIn(200, 11, 31, 58);
 };
 

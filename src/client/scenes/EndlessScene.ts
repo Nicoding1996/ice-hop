@@ -42,10 +42,14 @@ export class EndlessScene extends Scene {
     this.bgLayer = this.add.container(0, 0);
     paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
     this.build();
-    this.scale.on('resize', () => {
+    const onResize = (): void => {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       this.build();
-    });
+    };
+    this.scale.on('resize', onResize);
+    // The ScaleManager is global; drop our listener on shutdown so it doesn't
+    // accumulate across scene visits and fire on destroyed objects.
+    this.events.once('shutdown', () => this.scale.off('resize', onResize));
     void this.loadSolved();
   }
 

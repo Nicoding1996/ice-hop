@@ -243,14 +243,20 @@ export class GameScene extends Scene {
       this.onSealDragEnd(obj)
     );
 
-    this.scale.on('resize', () => {
+    const onResize = (): void => {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       if (this.loadingText) this.loadingText.setPosition(this.scale.width / 2, this.scale.height / 2);
       if (!this.board) return;
       this.layout();
       this.renderBoard();
       this.updateHud();
-    });
+    };
+    this.scale.on('resize', onResize);
+    // The ScaleManager is global and outlives the scene, so a listener left
+    // attached would pile up on every scene (re)start - endless restarts this
+    // same scene on each "Next" - firing stale handlers on destroyed objects.
+    // Remove it when the scene shuts down.
+    this.events.once('shutdown', () => this.scale.off('resize', onResize));
 
     // Hide the UI behind a calm loading state until the board is ready, so the
     // half-built frame (empty backdrop + unpositioned HUD) never flashes.
@@ -823,7 +829,12 @@ export class GameScene extends Scene {
    */
   private showHint(): void {
     if (!this.board || this.busy || this.won) return;
-    const result = solve({ ...this.board, pieces: this.pieces });
+    // Bound the search so the hint can never block the main thread on a
+    // pathological board (a long synchronous solve would freeze input and could
+    // stall an in-flight scene fade). Real endless boards explore only a few
+    // thousand states, far under this cap; if it is ever exceeded the position
+    // is effectively stuck, so the stranded hint (-> Restart) is the right call.
+    const result = solve({ ...this.board, pieces: this.pieces }, { maxStates: 60_000 });
     if (!result.solvable || result.solution.length === 0) {
       this.showStrandedHint();
       return;

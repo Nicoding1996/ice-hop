@@ -129,11 +129,15 @@ export class EditorScene extends Scene {
       this.submitButton,
     ];
 
-    this.scale.on('resize', () => {
+    const onResize = (): void => {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       this.layoutAll();
       this.render();
-    });
+    };
+    this.scale.on('resize', onResize);
+    // The ScaleManager is global; drop our listener on shutdown so it doesn't
+    // accumulate across scene visits and fire on destroyed objects.
+    this.events.once('shutdown', () => this.scale.off('resize', onResize));
 
     this.setTool('PENGUIN');
     this.updateSealLabel();
