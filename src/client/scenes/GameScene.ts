@@ -932,22 +932,43 @@ export class GameScene extends Scene {
   private updateHud(): void {
     const w = this.scale.width;
     const midY = this.hudHeight / 2;
-    this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
-    this.hudText.setPosition(w / 2, midY);
-    this.hintText.setPosition(w / 2, this.scale.height - 26);
-    this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
+    // Place the left + right HUD chrome first, then fit the centre readout into
+    // whatever horizontal space is left between them.
     this.menuButton.setPosition(SPACE.md + this.menuButton.width / 2, midY);
     this.menuButton.setVisible(!this.won);
+    const skipVisible = this.isCommunity && !this.won;
     this.skipButton.setPosition(w - SPACE.md - this.skipButton.width / 2, midY);
-    this.skipButton.setVisible(this.isCommunity && !this.won);
+    this.skipButton.setVisible(skipVisible);
+    const bannerVisible = this.isEndless && !this.won;
     this.endlessBanner.setLabelText(`Solved: ${this.endlessSolved}`);
     this.endlessBanner.setPosition(w - SPACE.md - this.endlessBanner.width / 2, midY);
-    this.endlessBanner.setVisible(this.isEndless && !this.won);
+    this.endlessBanner.setVisible(bannerVisible);
     // "?" help chip (top-right), shown on the daily/test screen where the corner
     // is free. Endless owns that corner with the Solved banner and community
     // with Skip, and players reach those via the hub (which has its own "?").
+    const helpVisible = !this.isEndless && !this.isCommunity && !this.won;
     this.helpButton.setPosition(w - SPACE.md - this.helpButton.width / 2, midY);
-    this.helpButton.setVisible(!this.isEndless && !this.isCommunity && !this.won);
+    this.helpButton.setVisible(helpVisible);
+
+    // Centre "Moves / Par" on screen, but keep it clear of the menu chip and the
+    // right-slot element. A growing "Solved: 120" badge is right-anchored and
+    // widens leftward, so a hard w/2 centre would let it creep into "Par"; nudge
+    // the readout left to stay clear, and only shrink it as a last resort on very
+    // narrow screens, so the two never touch.
+    this.hudText.setScale(1);
+    this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
+    const leftBound = this.menuButton.x + this.menuButton.width / 2 + SPACE.sm;
+    let rightObstacle = w - SPACE.md;
+    if (bannerVisible) rightObstacle = this.endlessBanner.x - this.endlessBanner.width / 2;
+    else if (skipVisible) rightObstacle = this.skipButton.x - this.skipButton.width / 2;
+    else if (helpVisible) rightObstacle = this.helpButton.x - this.helpButton.width / 2;
+    const rightBound = rightObstacle - SPACE.sm;
+    const avail = rightBound - leftBound;
+    if (avail > 0 && this.hudText.width > avail) this.hudText.setScale(avail / this.hudText.width);
+    const half = this.hudText.displayWidth / 2;
+    this.hudText.setPosition(Phaser.Math.Clamp(w / 2, leftBound + half, rightBound - half), midY);
+    this.hintText.setPosition(w / 2, this.scale.height - 26);
+    this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
     // Restart sits in the bottom strip and only appears once a move is made
     // (swaps in for the first-move hint, which hides as soon as moves > 0). In
     // Endless it's paired with the Hint button; otherwise it stays centered.
