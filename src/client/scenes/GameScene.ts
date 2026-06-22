@@ -1569,14 +1569,24 @@ export class GameScene extends Scene {
       // Persist the authoritative count so the next puzzle (which may load from
       // the prefetch cache, whose own count is stale) shows the right banner.
       this.registry.set('endless.solved', result.solved);
+      // If the player already moved on (tapped Next / Menu) before this POST
+      // resolved, the win-screen text is destroyed. Adding a tween that writes to
+      // it would throw from inside the game loop and permanently kill Phaser's
+      // render loop - the next puzzle would load and then freeze. Bail out; the
+      // count is already stored above.
+      if (!countText.scene) return;
       const counter = { v: fromCount };
       this.tweens.add({
         targets: counter,
         v: result.solved,
         duration: 500,
         ease: 'Cubic.easeOut',
-        onUpdate: () => countText.setText(`Solved: ${Math.round(counter.v)}`),
-        onComplete: () => countText.setText(`Solved: ${result.solved}`),
+        onUpdate: () => {
+          if (countText.scene) countText.setText(`Solved: ${Math.round(counter.v)}`);
+        },
+        onComplete: () => {
+          if (countText.scene) countText.setText(`Solved: ${result.solved}`);
+        },
       });
     } catch (error) {
       console.error(error);

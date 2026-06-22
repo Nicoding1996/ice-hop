@@ -63,7 +63,10 @@ export class EndlessScene extends Scene {
       console.error(error);
     } finally {
       this.solvedLoaded = true;
-      this.build();
+      // If the player already picked a tier (scene shutting down) before this
+      // request resolved, don't rebuild a dead scene - that throws and spams the
+      // console.
+      if (this.sys.isActive()) this.build();
     }
   }
 

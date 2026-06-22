@@ -23,6 +23,29 @@ const config: Phaser.Types.Core.GameConfig = {
 const startGame = (parent: string): Game => new Game({ ...config, parent });
 
 /**
+ * Keep the Phaser loop alive across focus / visibility changes.
+ *
+ * Phaser puts its game loop to sleep when the page is hidden or the window is
+ * blurred, and wakes it again on the matching "visible" / "focus" event. Inside
+ * the Reddit webview (an iframe) that wake event often never arrives - switching
+ * tabs or windows and coming back leaves the loop asleep, so the game looks
+ * frozen and unresponsive. We listen on every "we're back" signal and force the
+ * loop awake; wake() is a no-op when it never slept, so this is safe to call
+ * eagerly.
+ */
+const keepAwake = (game: Game): void => {
+  const wake = (): void => {
+    const loop = game.loop;
+    if (loop && typeof loop.wake === 'function') loop.wake();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) wake();
+  });
+  window.addEventListener('focus', wake);
+  window.addEventListener('pageshow', wake);
+};
+
+/**
  * Wait for the web fonts (Fredoka + Nunito) to load before booting Phaser, so
  * the first frame renders in the real fonts rather than the fallback (Phaser
  * does not reflow Text when a font loads later). Capped by a short timeout so a
@@ -49,5 +72,8 @@ const ensureFonts = async (): Promise<void> => {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-  void ensureFonts().finally(() => startGame('game-container'));
+  void ensureFonts().finally(() => {
+    const game = startGame('game-container');
+    keepAwake(game);
+  });
 });
