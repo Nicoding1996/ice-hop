@@ -1,6 +1,7 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { MyPuzzlesResponse, UgcSubmission } from '../../shared/api';
+import type { Board } from '../../shared/game/types';
 import {
   PALETTE,
   FONT,
@@ -14,7 +15,8 @@ import {
 } from '../art/theme';
 
 const GOLD = '#ffd166';
-const ROW_H = 54;
+const ROW_H = 56;
+const PAGER_H = 42;
 
 /** A short "x ago" label from a timestamp (creator-facing, no need for a date). */
 const ago = (ts: number): string => {
@@ -29,9 +31,66 @@ const ago = (ts: number): string => {
 };
 
 /**
+ * A tiny schematic of a board so a creator can recognise which puzzle is which
+ * at a glance: ice backing, water holes, and a coloured dot per piece. Drawn
+ * centred on (0,0) into `container`. Purely a glyph - not the full character art.
+ */
+const drawBoardThumb = (
+  scene: Phaser.Scene,
+  container: Phaser.GameObjects.Container,
+  board: Board,
+  size: number
+): void => {
+  const { width: cols, height: rows } = board;
+  const cell = size / Math.max(cols, rows);
+  // Size the backing to the actual grid extent so non-square boards aren't
+  // letterboxed inside a square with uneven padding.
+  const gw = cols * cell;
+  const gh = rows * cell;
+  const ox = -gw / 2;
+  const oy = -gh / 2;
+  const g = scene.add.graphics();
+  g.fillStyle(PALETTE.iceSheet, 1);
+  g.fillRoundedRect(ox, oy, gw, gh, 4);
+  g.lineStyle(1, PALETTE.iceEdge, 0.8);
+  g.strokeRoundedRect(ox, oy, gw, gh, 4);
+
+  const holes = new Set(board.holes);
+  const kindAt = new Map<number, string>();
+  for (const p of board.pieces) for (const c of p.cells) kindAt.set(c, p.kind);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      const x = ox + c * cell + cell / 2;
+      const y = oy + r * cell + cell / 2;
+      if (holes.has(idx)) {
+        g.fillStyle(PALETTE.water, 1);
+        g.fillCircle(x, y, cell * 0.32);
+      }
+      const kind = kindAt.get(idx);
+      if (kind === 'HOPPER') {
+        g.fillStyle(PALETTE.penguin, 1);
+        g.fillCircle(x, y, cell * 0.34);
+      } else if (kind === 'SLIDER') {
+        g.fillStyle(PALETTE.seal, 1);
+        g.fillRoundedRect(x - cell * 0.4, y - cell * 0.32, cell * 0.8, cell * 0.64, 2);
+      } else if (kind === 'BLOCKER') {
+        g.fillStyle(PALETTE.rock, 1);
+        g.fillRoundedRect(x - cell * 0.36, y - cell * 0.36, cell * 0.72, cell * 0.72, 2);
+      }
+    }
+  }
+  container.add(g);
+};
+
+/**
  * "My puzzles": the creator feedback loop. Shows how many times each puzzle the
  * player built has been solved and upvoted, with headline totals on top - the
- * reason a builder comes back. Data comes from GET /api/ugc/mine.
+ * reason a builder comes back. The list is PAGINATED (Prev / Next) rather than
+ * scrolled: it only ever renders the rows that fit, so nothing overlaps the
+ * header or footer and it needs no clipping mask (Phaser 4 geometry masks are a
+ * no-op under the WebGL renderer this game runs). Data from GET /api/ugc/mine.
  */
 export class MyPuzzlesScene extends Scene {
   private bgLayer!: Phaser.GameObjects.Container;
@@ -40,6 +99,7 @@ export class MyPuzzlesScene extends Scene {
   private totals: MyPuzzlesResponse['totals'] = { puzzles: 0, solves: 0, votes: 0 };
   private loaded = false;
   private loadError = false;
+  private page = 0;
 
   constructor() {
     super('MyPuzzlesScene');
@@ -48,14 +108,18 @@ export class MyPuzzlesScene extends Scene {
   create(): void {
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
+    this.page = 0;
     this.bgLayer = this.add.container(0, 0);
     paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
     this.build();
+
     const onResize = (): void => {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       this.build();
     };
     this.scale.on('resize', onResize);
+    // The ScaleManager is global; drop our listener on shutdown so it doesn't
+    // accumulate across scene visits and fire on destroyed objects.
     this.events.once('shutdown', () => this.scale.off('resize', onResize));
     void this.loadPuzzles();
   }
@@ -135,7 +199,7 @@ export class MyPuzzlesScene extends Scene {
       return;
     }
 
-    // Footer CTA pinned to the bottom; the list fills the space above it.
+    // Footer CTA pinned to the bottom; the paginated list fills the gap above.
     const buildBtn = makePill(this, {
       label: 'Build another',
       variant: 'primary',
@@ -145,66 +209,140 @@ export class MyPuzzlesScene extends Scene {
     buildBtn.setPosition(cx, h - SPACE.xl - buildBtn.height / 2);
     this.content.push(buildBtn);
 
-    const listTop = sub.y + sub.height / 2 + SPACE.lg;
-    const listBottom = buildBtn.y - buildBtn.height / 2 - SPACE.md;
-    const available = listBottom - listTop;
-    const step = ROW_H + SPACE.sm;
-    const maxRows = Math.max(1, Math.floor((available + SPACE.sm) / step));
-
-    // Reserve the last slot for a "+N more" note when the list overflows.
-    const overflowing = this.subs.length > maxRows;
-    const visibleCount = overflowing ? Math.max(1, maxRows - 1) : this.subs.length;
-    const rowW = Math.min(440, w - SPACE.lg * 2);
-
-    let y = listTop + ROW_H / 2;
-    for (let i = 0; i < visibleCount; i++) {
-      this.buildRow(this.subs[i], cx, y, rowW);
-      y += step;
-    }
-    if (overflowing) {
-      const more = this.subs.length - visibleCount;
-      const moreText = this.add
-        .text(cx, y, `+ ${more} more`, {
-          fontFamily: FONT.ui,
-          fontSize: '13px',
-          fontStyle: '700',
-          color: PALETTE.text,
-        })
-        .setOrigin(0.5)
-        .setAlpha(0.6);
-      this.content.push(moreText);
-    }
+    this.buildList(cx, sub.y + sub.height / 2 + SPACE.lg, buildBtn.y - buildBtn.height / 2);
   }
 
-  /** One puzzle row: a soft card with par/age on the left, solves/votes right. */
+  /** Render the current page of puzzles between [top, footerTop], adding Prev/
+   *  Next controls only when they're needed. Pagination (not scrolling) keeps
+   *  every row inside the band, so rows can never overlap the header or footer. */
+  private buildList(cx: number, top: number, footerTop: number): void {
+    const w = this.scale.width;
+    const gap = SPACE.sm;
+    const step = ROW_H + gap;
+    const rowW = Math.min(440, w - SPACE.lg * 2);
+
+    // How many rows fit if there were no pager, then again once we reserve
+    // space for the pager (only needed when the puzzles actually overflow).
+    const fullBottom = footerTop - SPACE.md;
+    const capNoPager = Math.max(1, Math.floor((fullBottom - top + gap) / step));
+
+    const paginated = this.subs.length > capNoPager;
+    const listBottom = paginated ? fullBottom - PAGER_H - SPACE.md : fullBottom;
+    const perPage = paginated
+      ? Math.max(1, Math.floor((listBottom - top + gap) / step))
+      : capNoPager;
+    const pageCount = Math.max(1, Math.ceil(this.subs.length / perPage));
+    this.page = Math.min(Math.max(0, this.page), pageCount - 1);
+
+    const startIdx = this.page * perPage;
+    const pageRows = this.subs.slice(startIdx, startIdx + perPage);
+    let y = top + ROW_H / 2;
+    for (const s of pageRows) {
+      this.buildRow(s, cx, y, rowW);
+      y += step;
+    }
+
+    if (pageCount > 1) this.buildPager(cx, fullBottom - PAGER_H / 2, pageCount);
+  }
+
+  /** Prev / "page x of y" / Next, centred. Arrows disable at the ends. */
+  private buildPager(cx: number, cy: number, pageCount: number): void {
+    const prev = makePill(this, {
+      label: '\u2039',
+      variant: 'chip',
+      size: 'sm',
+      minWidth: 48,
+      onClick: () => this.goToPage(this.page - 1),
+    });
+    const next = makePill(this, {
+      label: '\u203A',
+      variant: 'chip',
+      size: 'sm',
+      minWidth: 48,
+      onClick: () => this.goToPage(this.page + 1),
+    });
+    const label = this.add
+      .text(cx, cy, `Page ${this.page + 1} of ${pageCount}`, {
+        fontFamily: FONT.ui,
+        fontSize: '13px',
+        fontStyle: '700',
+        color: PALETTE.text,
+      })
+      .setOrigin(0.5);
+
+    const gap = SPACE.md;
+    const total = prev.width + gap + label.width + gap + next.width;
+    let x = cx - total / 2;
+    prev.setPosition(x + prev.width / 2, cy);
+    x += prev.width + gap;
+    label.setPosition(x + label.width / 2, cy);
+    x += label.width + gap;
+    next.setPosition(x + next.width / 2, cy);
+
+    prev.setEnabled(this.page > 0);
+    next.setEnabled(this.page < pageCount - 1);
+    this.content.push(prev, label, next);
+  }
+
+  private goToPage(page: number): void {
+    this.page = page;
+    this.build();
+  }
+
+  /** One puzzle row: a board thumbnail, par/age, and solves/votes. */
   private buildRow(subm: UgcSubmission, cx: number, cy: number, rowW: number): void {
-    const pad = SPACE.lg;
+    const pad = SPACE.md;
     const card = this.add.graphics();
     card.fillStyle(0x123047, 0.92);
     card.fillRoundedRect(cx - rowW / 2, cy - ROW_H / 2, rowW, ROW_H, RADIUS.button);
     card.lineStyle(1.5, 0x2f5c7a, 0.9);
     card.strokeRoundedRect(cx - rowW / 2, cy - ROW_H / 2, rowW, ROW_H, RADIUS.button);
+    this.content.push(card);
 
-    const left = this.add
-      .text(cx - rowW / 2 + pad, cy, `Par ${subm.par}  \u00B7  ${ago(subm.createdAt)}`, {
+    const thumbSize = ROW_H - 14;
+    const thumb = this.add.container(cx - rowW / 2 + pad + thumbSize / 2, cy);
+    drawBoardThumb(this, thumb, subm.board, thumbSize);
+    this.content.push(thumb);
+
+    const textX = cx - rowW / 2 + pad + thumbSize + SPACE.md;
+    const parText = this.add
+      .text(textX, cy - 9, `Par ${subm.par}`, {
         fontFamily: FONT.ui,
-        fontSize: '14px',
+        fontSize: '15px',
         fontStyle: '700',
         color: PALETTE.text,
       })
       .setOrigin(0, 0.5);
+    const ageText = this.add
+      .text(textX, cy + 11, ago(subm.createdAt), {
+        fontFamily: FONT.ui,
+        fontSize: '11px',
+        fontStyle: '600',
+        color: PALETTE.text,
+      })
+      .setOrigin(0, 0.5)
+      .setAlpha(0.6);
+    this.content.push(parText, ageText);
 
     const solveLabel = subm.solves === 1 ? '1 solve' : `${subm.solves} solves`;
-    const right = this.add
-      .text(cx + rowW / 2 - pad, cy, `\u25B2 ${subm.votes}    ${solveLabel}`, {
+    const solvesText = this.add
+      .text(cx + rowW / 2 - pad, cy - 9, solveLabel, {
         fontFamily: FONT.ui,
         fontSize: '14px',
         fontStyle: '700',
         color: GOLD,
       })
       .setOrigin(1, 0.5);
-
-    this.content.push(card, left, right);
+    const votesText = this.add
+      .text(cx + rowW / 2 - pad, cy + 11, `\u25B2 ${subm.votes}`, {
+        fontFamily: FONT.ui,
+        fontSize: '12px',
+        fontStyle: '700',
+        color: GOLD,
+      })
+      .setOrigin(1, 0.5)
+      .setAlpha(0.85);
+    this.content.push(solvesText, votesText);
   }
 
   private buildErrorState(): void {
