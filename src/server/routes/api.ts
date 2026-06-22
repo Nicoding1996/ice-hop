@@ -10,7 +10,7 @@ import type {
   SolveSubmission,
 } from '../../shared/api';
 import { getOrCreateDailyPuzzle } from '../core/daily';
-import { generateEndlessFallback, getEndlessSolved, popPooledPuzzle, recordEndlessSolve } from '../core/endless';
+import { generateEndlessFallback, getEndlessSolved, getEndlessStats, popPooledPuzzle, recordEndlessSolve } from '../core/endless';
 import { getDailyLeaderboard, recordSolve } from '../core/leaderboard';
 import { keys } from '../core/keys';
 import { todayUtc } from '../../shared/date';
@@ -148,12 +148,13 @@ api.get('/endless', async (c) => {
   }
 });
 
-// Lightweight lifetime count for the tier-select banner (no puzzle generation).
+// Lightweight lifetime count for the tier-select banner (no puzzle generation):
+// the total (the banner) plus the per-tier split (the Easy/Medium/Hard labels).
 api.get('/endless/stats', async (c) => {
   try {
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    const solved = await getEndlessSolved(username);
-    return c.json<EndlessSolvedResponse>({ solved });
+    const stats = await getEndlessStats(username);
+    return c.json<EndlessSolvedResponse>(stats);
   } catch (error) {
     console.error(`/api/endless/stats failed: ${error}`);
     const message = error instanceof Error ? error.message : 'endless stats failed';
@@ -161,12 +162,14 @@ api.get('/endless/stats', async (c) => {
   }
 });
 
-// Records one endless solve and returns the new lifetime total.
+// Records one endless solve (for the tier in the body) and returns the new
+// lifetime total plus the per-tier split.
 api.post('/endless/solved', async (c) => {
   try {
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    const solved = await recordEndlessSolve(username);
-    return c.json<EndlessSolvedResponse>({ solved });
+    const body = await c.req.json<{ tier?: EndlessTier }>().catch(() => ({ tier: undefined }));
+    const stats = await recordEndlessSolve(username, asTier(body.tier));
+    return c.json<EndlessSolvedResponse>(stats);
   } catch (error) {
     console.error(`/api/endless/solved failed: ${error}`);
     const message = error instanceof Error ? error.message : 'endless solve failed';

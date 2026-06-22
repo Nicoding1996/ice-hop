@@ -6,6 +6,7 @@ import { EditorScene } from './scenes/EditorScene';
 import { CommunityScene } from './scenes/CommunityScene';
 import { EndlessScene } from './scenes/EndlessScene';
 import { HomeScene } from './scenes/HomeScene';
+import { MyPuzzlesScene } from './scenes/MyPuzzlesScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: AUTO,
@@ -17,7 +18,7 @@ const config: Phaser.Types.Core.GameConfig = {
     width: 1024,
     height: 768,
   },
-  scene: [Boot, GameScene, EditorScene, CommunityScene, EndlessScene, HomeScene],
+  scene: [Boot, GameScene, EditorScene, CommunityScene, EndlessScene, HomeScene, MyPuzzlesScene],
 };
 
 const startGame = (parent: string): Game => new Game({ ...config, parent });

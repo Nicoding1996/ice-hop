@@ -59,6 +59,8 @@ export type UgcSubmission = {
   readonly board: Board;
   readonly par: number;
   readonly votes: number;
+  /** How many players have solved this puzzle (the creator feedback signal). */
+  readonly solves: number;
   readonly createdAt: number;
 };
 
@@ -69,6 +71,13 @@ export type SubmitPuzzleResponse =
   | { readonly ok: false; readonly reason: string };
 
 export type UgcListResponse = { readonly submissions: readonly UgcSubmission[] };
+
+/** Response from GET /api/ugc/mine: the player's own puzzles plus totals, for
+ *  the "My puzzles" creator-feedback view. */
+export type MyPuzzlesResponse = {
+  readonly submissions: readonly UgcSubmission[];
+  readonly totals: { readonly puzzles: number; readonly solves: number; readonly votes: number };
+};
 
 export type VoteRequest = { readonly id: string };
 
@@ -91,5 +100,17 @@ export type EndlessResponse = {
   readonly solved: number;
 };
 
-/** Server -> client after recording an endless solve. */
-export type EndlessSolvedResponse = { readonly solved: number };
+/** Lifetime endless solves split by difficulty tier (for the tier-select labels). */
+export type EndlessTierCounts = {
+  readonly easy: number;
+  readonly medium: number;
+  readonly hard: number;
+};
+
+/** Server -> client after recording an endless solve, and from GET
+ *  /api/endless/stats. `solved` is the lifetime total (the progression banner);
+ *  `byTier` is the per-tier split shown on the Easy/Medium/Hard buttons. */
+export type EndlessSolvedResponse = {
+  readonly solved: number;
+  readonly byTier: EndlessTierCounts;
+};

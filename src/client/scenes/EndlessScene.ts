@@ -1,6 +1,6 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
-import type { EndlessSolvedResponse, EndlessTier } from '../../shared/api';
+import type { EndlessSolvedResponse, EndlessTier, EndlessTierCounts } from '../../shared/api';
 import {
   PALETTE,
   FONT,
@@ -30,6 +30,7 @@ export class EndlessScene extends Scene {
   private bgLayer!: Phaser.GameObjects.Container;
   private content: Phaser.GameObjects.GameObject[] = [];
   private solved = 0;
+  private byTier: EndlessTierCounts = { easy: 0, medium: 0, hard: 0 };
   private solvedLoaded = false;
 
   constructor() {
@@ -59,6 +60,7 @@ export class EndlessScene extends Scene {
       if (!response.ok) throw new Error(`stats failed: ${response.status}`);
       const data: EndlessSolvedResponse = await response.json();
       this.solved = data.solved;
+      this.byTier = data.byTier;
     } catch (error) {
       console.error(error);
     } finally {
@@ -138,8 +140,14 @@ export class EndlessScene extends Scene {
       minWidth: Math.min(260, w - 64),
       onClick: () => fadeToScene(this, 'GameScene', { endless: { tier: info.tier } }),
     });
+    // Quietly fold the per-tier solved count into the blurb (muted, no extra
+    // accent, so the gold total banner stays the one highlight). Hidden until
+    // the player has a solve in this tier - which also sidesteps the migration
+    // case where a pre-existing total has no per-tier history yet.
+    const count = this.byTier[info.tier];
+    const blurbText = count > 0 ? `${info.blurb}   \u00B7   ${count} solved` : info.blurb;
     const blurb = this.add
-      .text(w / 2, y + btn.height / 2 + SPACE.sm, info.blurb, {
+      .text(w / 2, y + btn.height / 2 + SPACE.sm, blurbText, {
         fontFamily: FONT.ui,
         fontSize: '12px',
         fontStyle: '600',

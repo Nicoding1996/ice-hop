@@ -8,6 +8,7 @@ import type {
   InitResponse,
   LeaderboardResponse,
   SolveResultDTO,
+  UgcListResponse,
   UgcSubmission,
   VoteResponse,
 } from '../../shared/api';
@@ -68,7 +69,7 @@ export class GameScene extends Scene {
   /** Current subreddit name, for the "Join r/{name}" CTA label. */
   private subredditName = '';
   private menuButton!: PillButton;
-  private communityPuzzle?: { id: string; board: Board; par: number; creator: string };
+  private communityPuzzle?: { id: string; board: Board; par: number; creator: string; votes: number; solves: number };
   private isCommunity = false;
   private testBoard?: Board;
   private testPar = 0;
@@ -113,7 +114,7 @@ export class GameScene extends Scene {
   }
 
   init(data?: {
-    community?: { id: string; board: Board; par: number; creator: string };
+    community?: { id: string; board: Board; par: number; creator: string; votes: number; solves: number };
     test?: { board: Board; par: number };
     endless?: { tier: EndlessTier };
   }): void {
@@ -179,7 +180,7 @@ export class GameScene extends Scene {
       label: 'Skip \u25B6',
       variant: 'chip',
       size: 'sm',
-      onClick: () => this.nextCommunity(),
+      onClick: () => void this.nextCommunity(),
     });
     this.uiLayer.add(this.skipButton);
 
@@ -1148,6 +1149,11 @@ export class GameScene extends Scene {
     this.resetButton.setVisible(false);
     this.hintButton.setVisible(false);
     this.helpButton.setVisible(false);
+    // Hide the play HUD readout too: it lives in uiLayer, which renders above
+    // the win card (in fxLayer), so it would otherwise float over the win
+    // screen. (Every win type funnels through here, so this covers all of them.)
+    this.hudText.setVisible(false);
+    this.hintText.setVisible(false);
     this.clearHint();
     if (this.isTest) {
       this.onWinTest();
@@ -1398,7 +1404,7 @@ export class GameScene extends Scene {
       label: 'Next puzzle \u25B6',
       variant: 'primary',
       minWidth: Math.min(240, contentW),
-      onClick: () => this.nextCommunity(),
+      onClick: () => void this.nextCommunity(),
     });
     const dailyButton = makePill(this, {
       label: 'Back to daily',
@@ -1409,9 +1415,16 @@ export class GameScene extends Scene {
     buttons.push(moreButton, dailyButton);
 
     const extras: Phaser.GameObjects.GameObject[] = [];
+    // Social proof from the stream-load snapshot: how this puzzle is doing.
+    const votes = this.communityPuzzle?.votes ?? 0;
+    const solves = this.communityPuzzle?.solves ?? 0;
+    const statBits: string[] = [];
+    if (solves > 0) statBits.push(`${solves} ${solves === 1 ? 'solve' : 'solves'}`);
+    if (votes > 0) statBits.push(`\u25B2 ${votes}`);
+    const statText = statBits.join('   \u00B7   ');
     if (isMine) {
       const note = this.add
-        .text(w / 2, h * 0.44, 'Your puzzle \u2014 nice build!', {
+        .text(w / 2, h * 0.44, statText ? `Your puzzle  \u00B7  ${statText}` : 'Your puzzle \u2014 nice build!', {
           fontFamily: FONT.ui,
           fontSize: '15px',
           fontStyle: '600',
@@ -1419,6 +1432,17 @@ export class GameScene extends Scene {
         })
         .setOrigin(0.5)
         .setAlpha(0.9);
+      extras.push(note);
+    } else if (statText) {
+      const note = this.add
+        .text(w / 2, h * 0.44, statText, {
+          fontFamily: FONT.ui,
+          fontSize: '14px',
+          fontStyle: '700',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.8);
       extras.push(note);
     }
     stackColumn(buttons, w / 2, h * 0.52, SPACE.md);
@@ -1664,6 +1688,12 @@ export class GameScene extends Scene {
   private async upvoteCurrent(button: PillButton): Promise<void> {
     const id = this.communityPuzzle?.id;
     if (!id) return;
+    // Guests can play freely; upvoting needs an account. Prompt right on the
+    // tap (intent-driven) instead of showing a standing sign-in button.
+    if (!context.username) {
+      showLoginPrompt();
+      return;
+    }
     try {
       const response = await fetch('/api/ugc/vote', {
         method: 'POST',
@@ -1679,17 +1709,52 @@ export class GameScene extends Scene {
     }
   }
 
-  private nextCommunity(): void {
+  /** Hand off to a fresh GameScene for the given community puzzle. */
+  private startCommunity(sub: UgcSubmission): void {
+    fadeToScene(this, 'GameScene', {
+      community: {
+        id: sub.id,
+        board: sub.board,
+        par: sub.par,
+        creator: sub.creator,
+        votes: sub.votes,
+        solves: sub.solves,
+      },
+    });
+  }
+
+  private async nextCommunity(): Promise<void> {
     const queue: UgcSubmission[] = this.registry.get('ugc.queue') ?? [];
     const idx = (this.registry.get('ugc.index') ?? 0) + 1;
-    this.registry.set('ugc.index', idx);
     if (idx < queue.length) {
-      const next = queue[idx];
-      fadeToScene(this, 'GameScene', {
-        community: { id: next.id, board: next.board, par: next.par, creator: next.creator },
-      });
+      this.registry.set('ugc.index', idx);
+      this.startCommunity(queue[idx]);
+      return;
+    }
+    // End of this batch. The server filters out puzzles we've solved and mixes
+    // in resurfaced/discovery ones, so pull a fresh batch before declaring the
+    // stream done - it shouldn't dead-end while unsolved puzzles still exist.
+    const more = await this.fetchCommunityBatch(this.communityPuzzle?.id);
+    if (more.length > 0) {
+      this.registry.set('ugc.queue', more);
+      this.registry.set('ugc.index', 0);
+      this.startCommunity(more[0]);
     } else {
       this.showStreamDone();
+    }
+  }
+
+  /** Fetch a fresh community batch, dropping the puzzle we just finished so it
+   *  never repeats back-to-back. Returns [] on empty or error. */
+  private async fetchCommunityBatch(excludeId?: string): Promise<UgcSubmission[]> {
+    try {
+      const response = await fetch('/api/ugc/list');
+      if (!response.ok) throw new Error(`list failed: ${response.status}`);
+      const data: UgcListResponse = await response.json();
+      return data.submissions.filter((s) => s.id !== excludeId);
+    } catch (error) {
+      console.error(error);
+      return [];
     }
   }
 
@@ -1715,9 +1780,15 @@ export class GameScene extends Scene {
         wordWrap: { width: contentW },
       })
       .setOrigin(0.5);
+    const endlessBtn = makePill(this, {
+      label: 'Play Endless',
+      variant: 'primary',
+      minWidth: Math.min(220, contentW),
+      onClick: () => fadeToScene(this, 'EndlessScene'),
+    });
     const buildBtn = makePill(this, {
       label: 'Build a puzzle',
-      variant: 'primary',
+      variant: 'secondary',
       minWidth: Math.min(220, contentW),
       onClick: () => fadeToScene(this, 'EditorScene'),
     });
@@ -1727,8 +1798,8 @@ export class GameScene extends Scene {
       size: 'sm',
       onClick: () => fadeToScene(this, 'GameScene'),
     });
-    stackColumn([buildBtn, dailyBtn], w / 2, h * 0.52, SPACE.md);
-    this.fxLayer.add([overlay, card, panel, buildBtn, dailyBtn]);
+    stackColumn([endlessBtn, buildBtn, dailyBtn], w / 2, h * 0.5, SPACE.md);
+    this.fxLayer.add([overlay, card, panel, endlessBtn, buildBtn, dailyBtn]);
   }
 
   private async submitSolve(status: Phaser.GameObjects.Text): Promise<void> {

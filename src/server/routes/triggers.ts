@@ -15,7 +15,7 @@ triggers.post('/on-app-install', async (c) => {
     // are instant. Isolated so a warm-up hiccup never fails the install; the
     // cron tops the rest up over time.
     try {
-      await refillEndlessPools(12);
+      await refillEndlessPools();
     } catch (warmError) {
       console.error(`endless warm-up on install failed: ${warmError}`);
     }

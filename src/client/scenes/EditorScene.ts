@@ -21,6 +21,42 @@ import {
   type PillVariant,
   type PillSize,
 } from '../art/theme';
+import { context, showLoginPrompt } from '@devvit/web/client';
+
+/** Where a not-yet-submitted board is parked so it survives the page reload
+ *  that showLoginPrompt() triggers (the Phaser registry does not survive a
+ *  reload; localStorage does). Restored next time the editor opens. */
+const PENDING_DRAFT_KEY = 'icehop:editorPending';
+
+type EditorDraft = { pieces: Piece[]; holes: number[] };
+
+const savePendingDraft = (draft: EditorDraft): void => {
+  try {
+    localStorage.setItem(PENDING_DRAFT_KEY, JSON.stringify(draft));
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+const loadPendingDraft = (): EditorDraft | undefined => {
+  try {
+    const raw = localStorage.getItem(PENDING_DRAFT_KEY);
+    if (!raw) return undefined;
+    const parsed: EditorDraft = JSON.parse(raw);
+    return parsed;
+  } catch (error) {
+    console.error(error);
+    return undefined;
+  }
+};
+
+const clearPendingDraft = (): void => {
+  try {
+    localStorage.removeItem(PENDING_DRAFT_KEY);
+  } catch (error) {
+    console.error(error);
+  }
+};
 
 // CSS-string colours for status text; numbers for the tool-chip shape fills.
 const UI = {
@@ -93,12 +129,16 @@ export class EditorScene extends Scene {
     this.submitting = false;
     this.touched = false;
 
-    // Restore an in-progress board if we are returning from "Test".
-    const draft: { pieces: Piece[]; holes: number[] } | undefined = this.registry.get('editor.draft');
+    // Restore an in-progress board: from the registry when returning from
+    // "Test", or from localStorage when we've come back from a sign-in reload
+    // (the registry doesn't survive a page reload; localStorage does).
+    const draft: { pieces: Piece[]; holes: number[] } | undefined =
+      this.registry.get('editor.draft') ?? loadPendingDraft();
     if (draft) {
       this.pieces = draft.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.holes = new Set(draft.holes);
       this.registry.remove('editor.draft');
+      clearPendingDraft();
       this.touched = true;
     }
 
@@ -464,6 +504,16 @@ export class EditorScene extends Scene {
 
   private async submit(): Promise<void> {
     if (!this.canSubmit || this.submitting) return;
+    // Building and testing are open to everyone; publishing needs an account.
+    // Stash the board to localStorage first so the sign-in reload doesn't throw
+    // away what they built - it's restored when the editor reopens.
+    if (!context.username) {
+      savePendingDraft({ pieces: this.pieces, holes: [...this.holes].sort((a, b) => a - b) });
+      this.statusText.setText('Sign in to publish your puzzle\u2026');
+      this.statusText.setColor(UI.text);
+      showLoginPrompt();
+      return;
+    }
     this.submitting = true;
     this.statusText.setText('Submitting...');
     this.statusText.setColor(UI.text);

@@ -62,7 +62,14 @@ export class CommunityScene extends Scene {
       this.registry.set('ugc.index', 0);
       const first = subs[0];
       fadeToScene(this, 'GameScene', {
-        community: { id: first.id, board: first.board, par: first.par, creator: first.creator },
+        community: {
+          id: first.id,
+          board: first.board,
+          par: first.par,
+          creator: first.creator,
+          votes: first.votes,
+          solves: first.solves,
+        },
       });
     } catch (error) {
       console.error(error);

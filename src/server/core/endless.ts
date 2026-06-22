@@ -1,6 +1,6 @@
 import { redis } from '@devvit/web/server';
 import type { Board } from '../../shared/game/types';
-import type { EndlessTier } from '../../shared/api';
+import type { EndlessTier, EndlessTierCounts } from '../../shared/api';
 import { generate } from '../../shared/solver/generator';
 import { solve } from '../../shared/solver/solver';
 import { keys } from './keys';
@@ -36,26 +36,29 @@ const FALLBACK_BOARD: Board = {
 };
 
 // Each tier offers several board "shapes"; we shuffle them per request for
-// variety. Difficulty is defined by par range + piece counts, the same levers
-// the daily uses. Easy teaches with trap-free boards (requireAllPiecesUsed);
-// Medium and Hard keep the no-clutter gate and allow decoy misdirection.
-// (Endless drops the daily's uniqueness gate so generation stays cheap/fast.)
-// Every tier stays solvable; Hard just packs more pieces and a higher par.
+// variety. Difficulty is set by par (solution length) + piece counts, the same
+// levers the daily uses, with NON-OVERLAPPING par bands so a tier's label means
+// something: Easy par 2-4, Medium par 5-7, Hard par 8-11. Easy teaches with
+// trap-free boards (requireAllPiecesUsed); Medium/Hard keep the no-clutter gate,
+// allow decoy misdirection, and add a near-unique gate (see generateEndlessPuzzle)
+// so harder boards feel designed, not just long. Hard leans on piece-heavy
+// 3-hopper shapes so par 8-11 is reliably reachable on a 5x5. Every tier stays
+// solvable.
 const ENDLESS_TIERS: Record<EndlessTier, ReadonlyArray<GenConfig>> = {
   easy: [
     { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
-    { hoppers: 2, sliders: 0, blockers: 1, minPar: 2, maxPar: 5, requireAllPiecesUsed: true },
-    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 5, requireAllPiecesUsed: true },
+    { hoppers: 2, sliders: 0, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
+    { hoppers: 2, sliders: 1, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
   ],
   medium: [
-    { hoppers: 2, sliders: 1, blockers: 2, minPar: 5, maxPar: 8 },
-    { hoppers: 3, sliders: 1, blockers: 1, minPar: 5, maxPar: 8 },
-    { hoppers: 2, sliders: 2, blockers: 1, minPar: 4, maxPar: 8 },
+    { hoppers: 2, sliders: 1, blockers: 2, minPar: 5, maxPar: 7 },
+    { hoppers: 3, sliders: 1, blockers: 1, minPar: 5, maxPar: 7 },
+    { hoppers: 2, sliders: 2, blockers: 1, minPar: 5, maxPar: 7 },
   ],
   hard: [
-    { hoppers: 3, sliders: 1, blockers: 2, minPar: 6, maxPar: 10 },
-    { hoppers: 2, sliders: 2, blockers: 2, minPar: 6, maxPar: 10 },
-    { hoppers: 2, sliders: 1, blockers: 2, minPar: 5, maxPar: 9 },
+    { hoppers: 3, sliders: 1, blockers: 2, minPar: 8, maxPar: 11 },
+    { hoppers: 3, sliders: 2, blockers: 1, minPar: 8, maxPar: 11 },
+    { hoppers: 2, sliders: 2, blockers: 2, minPar: 8, maxPar: 11 },
   ],
 };
 
@@ -77,13 +80,23 @@ const fallbackResult = (): { board: Board; par: number } => ({
 
 /**
  * Quality generation for the POOL (off the request path: the scheduler cron and
- * the install warm-up). Drops the expensive uniqueness gate - endless is solo,
- * so a single optimal line doesn't matter the way it does for the shared daily -
- * but keeps the no-clutter gate, and bounds attempts + solver budget so even the
- * cron stays quick. Tries the tier's shapes shuffled, then easy as a safety net.
+ * the install warm-up). Keeps the no-clutter gate and, for Medium/Hard, adds a
+ * near-unique gate (at most 2 optimal solutions): left ungated, ~60% of Medium
+ * and ~84% of Hard boards have 3+ optimal lines, which play as "long but mushy"
+ * rather than designed. Easy stays ungated - its requireAllPiecesUsed gate
+ * already keeps it clean, and gating short boards mostly just costs yield. Full
+ * uniqueness (exactly 1) was measured too strict here: it dropped Medium yield
+ * ~38% (fall-through to easy + trivial fallback) and made Hard far slower, so
+ * "<=2" is the sweet spot. The gate runs the solver's solution-counter, so it is
+ * only affordable because this is the off-request pool path. Bounds attempts +
+ * solver budget so a run stays quick; tries the tier's shapes shuffled, then easy
+ * as a safety net.
  */
 export const generateEndlessPuzzle = (tier: EndlessTier): { board: Board; par: number } => {
   const configs = [...shuffle(ENDLESS_TIERS[tier]), ...ENDLESS_TIERS.easy];
+  // Easy: no uniqueness gate (protect yield). Medium/Hard: allow at most 2
+  // optimal solutions so the board has a real intended line, not a mush of equals.
+  const maxOptimalSolutions = tier === 'easy' ? undefined : 2;
   for (const config of configs) {
     const generated = generate({
       width: 5,
@@ -92,6 +105,7 @@ export const generateEndlessPuzzle = (tier: EndlessTier): { board: Board; par: n
       rejectInert: true,
       maxStates: 40_000,
       ...config,
+      ...(maxOptimalSolutions === undefined ? {} : { maxOptimalSolutions }),
       attempts: 500,
       seed: Math.floor(Math.random() * 0x7fffffff),
     });
@@ -126,17 +140,48 @@ export const generateEndlessFallback = (tier: EndlessTier): { board: Board; par:
   return fallbackResult();
 };
 
-/** Record one endless solve for a user and return their new lifetime total. */
-export const recordEndlessSolve = async (user: string): Promise<number> => {
-  return await redis.incrBy(keys.endlessSolved(user), 1);
-};
-
-/** Read a user's lifetime endless solve count (0 if they have none). */
-export const getEndlessSolved = async (user: string): Promise<number> => {
-  const stored = await redis.get(keys.endlessSolved(user));
+/** Parse a non-negative integer stored in Redis (0 when missing/garbled). */
+const readCount = async (key: string): Promise<number> => {
+  const stored = await redis.get(key);
   if (!stored) return 0;
   const n = Number.parseInt(stored, 10);
   return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Record one endless solve for a user: bump both the lifetime total and the
+ * per-tier counter, then return the fresh stats (total + per-tier split). The
+ * total stays authoritative for the in-game banner; the split drives the
+ * tier-select labels.
+ */
+export const recordEndlessSolve = async (
+  user: string,
+  tier: EndlessTier
+): Promise<{ solved: number; byTier: EndlessTierCounts }> => {
+  await Promise.all([
+    redis.incrBy(keys.endlessSolved(user), 1),
+    redis.incrBy(keys.endlessSolvedTier(user, tier), 1),
+  ]);
+  return getEndlessStats(user);
+};
+
+/** Read a user's lifetime endless solve count (0 if they have none). */
+export const getEndlessSolved = async (user: string): Promise<number> =>
+  readCount(keys.endlessSolved(user));
+
+/** Read a user's endless stats: the lifetime total plus the per-tier split.
+ *  (For pre-existing players the per-tier counts start at 0 and accrue from
+ *  here, so they may not sum to the older total - the total stays the headline.) */
+export const getEndlessStats = async (
+  user: string
+): Promise<{ solved: number; byTier: EndlessTierCounts }> => {
+  const [solved, easy, medium, hard] = await Promise.all([
+    readCount(keys.endlessSolved(user)),
+    readCount(keys.endlessSolvedTier(user, 'easy')),
+    readCount(keys.endlessSolvedTier(user, 'medium')),
+    readCount(keys.endlessSolvedTier(user, 'hard')),
+  ]);
+  return { solved, byTier: { easy, medium, hard } };
 };
 
 // --- Pre-generated pool ---
@@ -175,28 +220,31 @@ export const popPooledPuzzle = async (
 };
 
 /**
- * Top each tier's pool up toward POOL_TARGET, generating at most `maxGenerate`
- * puzzles across all tiers in a single call (so one cron run is bounded). Once a
- * pool is full this generates nothing, so the cost is only paid when puzzles
+ * Per-run cap on how many puzzles to add to each tier in one refill call. Hard
+ * runs the near-unique solver gate and costs several times as much per puzzle as
+ * Easy/Medium, so it makes fewer per run to keep a single cron invocation short;
+ * the pool target (POOL_TARGET) is unchanged, Hard just refills over more runs.
+ * Each puzzle is persisted as it is generated, so even a run cut short by a
+ * platform timeout keeps its progress and the next run simply continues.
+ */
+const PER_RUN_CAP: Record<EndlessTier, number> = { easy: 4, medium: 3, hard: 2 };
+
+/**
+ * Top each tier's pool up toward POOL_TARGET, adding at most PER_RUN_CAP[tier]
+ * puzzles per tier in a single call (so one cron run stays bounded). Once a pool
+ * is full this generates nothing for it, so the cost is only paid when puzzles
  * have actually been consumed. Returns how many were added.
  */
-export const refillEndlessPools = async (maxGenerate = 12): Promise<number> => {
-  let budget = maxGenerate;
+export const refillEndlessPools = async (): Promise<number> => {
   let added = 0;
-  // Spread the budget across tiers (a per-tier cap) so a single run tops up every
-  // tier rather than draining the whole budget into the first one - otherwise
-  // picking Medium/Hard right after a warm-up could still hit an empty pool.
-  const perTier = Math.max(1, Math.ceil(maxGenerate / ALL_TIERS.length));
   for (const tier of ALL_TIERS) {
-    if (budget <= 0) break;
     const have = await redis.hLen(keys.endlessPool(tier));
-    let need = Math.min(POOL_TARGET - have, perTier, budget);
+    let need = Math.min(POOL_TARGET - have, PER_RUN_CAP[tier]);
     while (need > 0) {
       const puzzle = generateEndlessPuzzle(tier);
       const id = String(await redis.incrBy(keys.endlessPoolSeq(tier), 1));
       await redis.hSet(keys.endlessPool(tier), { [id]: JSON.stringify(puzzle) });
       need -= 1;
-      budget -= 1;
       added += 1;
     }
   }

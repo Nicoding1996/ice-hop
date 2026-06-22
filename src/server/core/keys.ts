@@ -35,10 +35,17 @@ export const keys = {
   ugcPlayed: (user: string): string => `ugc:played:${user}`,
   /** How many puzzles a user has submitted on a given UTC day (rate limit). */
   ugcDailyCount: (user: string, date: string): string => `ugc:subs:${user}:${date}`,
+  /** Per-puzzle solve counts (hash id -> count) - the creator feedback signal. */
+  ugcSolves: (): string => `ugc:solves`,
+  /** A user's own submissions (sorted set, score = createdAt) for "My puzzles". */
+  ugcByCreator: (user: string): string => `ugc:bycreator:${user}`,
 
   // --- Endless mode ---
   /** Lifetime count of endless puzzles a user has solved (progression banner). */
   endlessSolved: (user: string): string => `endless:${user}`,
+  /** Lifetime count of endless puzzles a user has solved in a single tier (the
+   *  per-tier split shown on the tier-select buttons). */
+  endlessSolvedTier: (user: string, tier: string): string => `endless:${user}:${tier}`,
   /**
    * Pre-generated puzzle pool for a tier (hash of id -> JSON {board,par}). The
    * `1` is a pool schema version: bump it to abandon stale pools after a tier

@@ -14,6 +14,11 @@ export type GenOptions = {
   /** Reject boards with more than one optimal solution (default false). A single
    *  intended solution is what makes a puzzle feel designed rather than mushy. */
   requireUnique?: boolean;
+  /** Reject boards with more than N optimal solutions. Generalises `requireUnique`
+   *  (which is this with N=1): a small N>1 yields a "near-unique" puzzle - a touch
+   *  of flexibility while still rejecting mushy many-solution boards. When both are
+   *  given, this wins. Default: unbounded (no cap on optimal solutions). */
+  maxOptimalSolutions?: number;
   /** Reject boards containing an inert piece, i.e. a piece nothing ever touches
    *  along the solution path (default false). Kills "why is this here" clutter
    *  while still allowing decoys. */
@@ -60,9 +65,9 @@ const shuffled = (n: number, rng: () => number): number[] => {
  * confirms it) and not pre-solved (holes are distinct from hopper starts).
  *
  * Optional quality gates raise boards from "merely solvable" to "feels
- * designed": `requireUnique` (one optimal solution), `rejectInert` (no dead
- * clutter pieces, decoys still allowed), and `requireAllPiecesUsed` (every
- * piece on the optimal path, i.e. no decoys and no clutter).
+ * designed": `requireUnique` / `maxOptimalSolutions` (cap the number of optimal
+ * solutions), `rejectInert` (no dead clutter pieces, decoys still allowed), and
+ * `requireAllPiecesUsed` (every piece on the optimal path, i.e. no decoys and no clutter).
  */
 export const generate = (opts: GenOptions = {}): Generated | null => {
   const width = opts.width ?? 5;
@@ -74,6 +79,10 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
   const maxPar = opts.maxPar ?? 12;
   const attempts = opts.attempts ?? 500;
   const requireUnique = opts.requireUnique ?? false;
+  // `requireUnique` is just the N=1 case of capping optimal solutions; unify them
+  // so callers can ask for a softer "near-unique" board (e.g. allow up to 2).
+  const maxOptimalSolutions =
+    opts.maxOptimalSolutions ?? (requireUnique ? 1 : Number.POSITIVE_INFINITY);
   const rejectInert = opts.rejectInert ?? false;
   const requireAllPiecesUsed = opts.requireAllPiecesUsed ?? false;
   const maxStates = opts.maxStates ?? 60_000;
@@ -165,8 +174,15 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
         continue; // a piece nothing ever touches = clutter
       }
     }
-    if (requireUnique && countShortestSolutions(board, { maxStates, cap: 2 }) !== 1) {
-      continue;
+    if (Number.isFinite(maxOptimalSolutions)) {
+      // Count optimal solutions, capped just past the limit we care about. A
+      // count of 0 means uniqueness couldn't be proven within maxStates; we
+      // reject that too, exactly as the old strict `requireUnique` gate did.
+      const count = countShortestSolutions(board, {
+        maxStates,
+        cap: maxOptimalSolutions + 1,
+      });
+      if (count < 1 || count > maxOptimalSolutions) continue;
     }
     return { board, par: res.par };
   }

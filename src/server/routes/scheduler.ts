@@ -22,7 +22,7 @@ scheduler.post('/daily-puzzle', async (c) => {
 // pop instead of generating a puzzle inline. No-ops when the pools are full.
 scheduler.post('/endless-refill', async (c) => {
   try {
-    const added = await refillEndlessPools(12);
+    const added = await refillEndlessPools();
     return c.json({ status: 'success', added }, 200);
   } catch (error) {
     console.error(`/internal/scheduler/endless-refill failed: ${error}`);

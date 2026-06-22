@@ -100,13 +100,19 @@ export class HomeScene extends Scene {
       minWidth: wide,
       onClick: () => fadeToScene(this, 'EditorScene'),
     });
+    const mine = makePill(this, {
+      label: 'My puzzles',
+      variant: 'secondary',
+      minWidth: wide,
+      onClick: () => fadeToScene(this, 'MyPuzzlesScene'),
+    });
     const community = makePill(this, {
       label: 'Community puzzles',
       variant: 'secondary',
       minWidth: wide,
       onClick: () => fadeToScene(this, 'CommunityScene'),
     });
-    const buttons = [play, endless, build, community];
+    const buttons = [play, endless, build, mine, community];
 
     // Centre the button column in the space below the tagline so the gaps read
     // evenly on both tall phones and short desktop viewports.
