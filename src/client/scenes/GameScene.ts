@@ -96,6 +96,10 @@ export class GameScene extends Scene {
   private originX = 0;
   private originY = 0;
   private hudHeight = 0;
+  /** Vertical band reserved for the async score/leaderboard block on the daily
+   *  win screen, between the result cluster and the bottom button stack. */
+  private winStatusTop = 0;
+  private winStatusBottom = 0;
 
   constructor() {
     super('GameScene');
@@ -984,8 +988,8 @@ export class GameScene extends Scene {
   /** A "sign in to save" CTA shown only to logged-out players, placed on a win
    *  screen (a natural breakpoint). showLoginPrompt reloads the page, so we only
    *  trigger it here, never mid-puzzle. */
-  private addSignInPrompt(y: number, label: string): void {
-    if (context.username) return; // already signed in - nothing to gain
+  private addSignInPrompt(y: number, label: string): Phaser.GameObjects.Text | undefined {
+    if (context.username) return undefined; // already signed in - nothing to gain
     const btn = this.add
       .text(this.scale.width / 2, y, label, {
         fontFamily: 'Arial',
@@ -998,6 +1002,7 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     btn.on('pointerdown', () => showLoginPrompt());
     this.fxLayer.add(btn);
+    return btn;
   }
 
   /** A "Join the community" CTA on the daily win screen, shown to a signed-in
@@ -1006,8 +1011,8 @@ export class GameScene extends Scene {
    *  subscribes them to the subreddit on their behalf so tomorrow's daily finds
    *  them. Sits in the same slot as the (logged-out-only) sign-in prompt, so the
    *  two are mutually exclusive. */
-  private addSubscribePrompt(y: number): void {
-    if (!context.username || this.subscribed) return;
+  private addSubscribePrompt(y: number): Phaser.GameObjects.Text | undefined {
+    if (!context.username || this.subscribed) return undefined;
     const label = this.subredditName ? `Join r/${this.subredditName}` : 'Join the community';
     const btn = this.add
       .text(this.scale.width / 2, y, label, {
@@ -1021,6 +1026,7 @@ export class GameScene extends Scene {
       .setInteractive({ useHandCursor: true });
     btn.on('pointerdown', () => void this.subscribeToCommunity(btn));
     this.fxLayer.add(btn);
+    return btn;
   }
 
   /** Calls the server to subscribe the viewer, then confirms and hides the CTA. */
@@ -1221,18 +1227,18 @@ export class GameScene extends Scene {
     this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
 
     const status = this.add
-      .text(w / 2, h * 0.56, 'Saving your score...', {
+      .text(w / 2, h * 0.55, 'Saving your score\u2026', {
         fontFamily: 'Arial',
         fontSize: '15px',
         color: COLORS.text,
         align: 'center',
-        lineSpacing: 6,
-        wordWrap: { width: w - 40 },
+        lineSpacing: 5,
+        wordWrap: { width: w - 56 },
       })
       .setOrigin(0.5)
       .setAlpha(0.9);
     const copyButton = this.add
-      .text(w / 2, h * 0.77, 'Share your result', {
+      .text(w / 2, 0, 'Share your result', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: '#062033',
@@ -1249,7 +1255,7 @@ export class GameScene extends Scene {
     // loop). Endless is always full of fresh puzzles, so it's the better
     // post-daily CTA than the (possibly empty) community stream.
     const morePuzzlesButton = this.add
-      .text(w / 2, h * 0.88, 'More puzzles \u25B6', {
+      .text(w / 2, 0, 'More puzzles \u25B6', {
         fontFamily: 'Arial',
         fontSize: '17px',
         fontStyle: 'bold',
@@ -1274,9 +1280,69 @@ export class GameScene extends Scene {
     homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
 
     this.fxLayer.add([status, copyButton, morePuzzlesButton, homeButton]);
-    this.addSignInPrompt(h * 0.66, 'Sign in to save your streak');
-    this.addSubscribePrompt(h * 0.66);
+
+    // At most one CTA shows: a sign-in nudge for guests, otherwise a join nudge
+    // for signed-in non-members. Capture whichever renders so it joins the
+    // bottom button stack instead of sitting at a fixed y that the growing
+    // leaderboard text used to overlap.
+    const cta =
+      this.addSignInPrompt(0, 'Sign in to save your streak') ?? this.addSubscribePrompt(0);
+
+    // Stack the action buttons up from the bottom with even gaps, then let the
+    // score/leaderboard block fill the gap above them. Anchoring the buttons to
+    // the bottom keeps them clear of the leaderboard no matter how many lines it
+    // grows to once submitSolve resolves.
+    const stack: Phaser.GameObjects.Text[] = [morePuzzlesButton, copyButton];
+    if (cta) stack.push(cta);
+    const stackTop = this.stackFromBottom(stack);
+
+    const movesBottom = movesText.y + movesText.height / 2;
+    this.winStatusTop = movesBottom + 12;
+    this.winStatusBottom = stackTop - 12;
+    this.positionWinStatus(status);
+
     void this.submitSolve(status);
+  }
+
+  /** Lay out win-screen action buttons stacked up from the bottom of the screen
+   *  with consistent gaps (pass them lowest-first). Returns the y of the top
+   *  edge of the topmost button so the variable-height status block above can be
+   *  placed without ever overlapping the buttons. */
+  private stackFromBottom(buttons: Phaser.GameObjects.Text[]): number {
+    const h = this.scale.height;
+    const gap = 12;
+    let bottom = h - Math.max(16, h * 0.03);
+    let top = bottom;
+    for (const btn of buttons) {
+      const hgt = btn.height;
+      btn.setY(bottom - hgt / 2);
+      top = bottom - hgt;
+      bottom = top - gap;
+    }
+    return top;
+  }
+
+  /** Center the async, variable-height score/leaderboard block in its reserved
+   *  band, clamped so a long leaderboard never slides under the buttons or up
+   *  into the moves tally. */
+  private positionWinStatus(status: Phaser.GameObjects.Text): void {
+    if (!status.scene) return; // destroyed (player navigated away mid-fetch)
+    const top = this.winStatusTop;
+    const bottom = this.winStatusBottom;
+    const band = bottom - top;
+    // The leaderboard is capped at 3 names, but the full block (rank + streak +
+    // best + 3 solvers, plus any wrapped long usernames) can still be taller
+    // than its band on a short viewport. Shrink it to fit so it can never spill
+    // onto the buttons; the floor keeps the text legible.
+    status.setScale(1);
+    if (band > 0 && status.height > band) {
+      status.setScale(Math.max(0.62, band / status.height));
+    }
+    const half = status.displayHeight / 2;
+    let cy = (top + bottom) / 2;
+    if (cy + half > bottom) cy = bottom - half;
+    if (cy - half < top) cy = top + half;
+    status.setY(cy);
   }
 
   private onWinCommunity(): void {
@@ -1671,9 +1737,11 @@ export class GameScene extends Scene {
         }
       }
       status.setText(lines.join('\n'));
+      this.positionWinStatus(status);
     } catch (error) {
       console.error(error);
       status.setText('Score saved. (Leaderboard unavailable.)');
+      this.positionWinStatus(status);
     }
   }
 
