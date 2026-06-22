@@ -6,6 +6,8 @@ import { validateSubmission } from '../../shared/solver/validate';
 import { generate } from '../../shared/solver/generator';
 import {
   PALETTE,
+  FONT,
+  SPACE,
   paintBackdrop,
   paintIceSheet,
   makeWaterHole,
@@ -14,20 +16,19 @@ import {
   drawRockInto,
   fadeInScene,
   fadeToScene,
+  makePill,
+  PillButton,
+  type PillVariant,
+  type PillSize,
 } from '../art/theme';
 
-// CSS-string colours for text/buttons; numbers for shape fills.
+// CSS-string colours for status text; numbers for the tool-chip shape fills.
 const UI = {
   text: '#eaf6fb',
   good: '#8fe0c0',
   warn: '#ffd27e',
   toolLabelIdle: '#dbeaf3',
   toolLabelActive: '#062033',
-  action: '#cfe6f2',
-  actionText: '#062033',
-  submit: '#ff8a5b',
-  submitMuted: '#3a5066',
-  back: '#1f3f59',
   chipIdle: 0x1f3f59,
   chipActive: 0xffd166,
 };
@@ -45,8 +46,11 @@ const TOOLS: ReadonlyArray<{ tool: Tool; label: string }> = [
 type ToolChip = {
   tool: Tool;
   cont: Phaser.GameObjects.Container;
-  bg: Phaser.GameObjects.Rectangle;
+  bg: Phaser.GameObjects.Graphics;
   label: Phaser.GameObjects.Text;
+  w: number;
+  h: number;
+  active: boolean;
 };
 
 export class EditorScene extends Scene {
@@ -66,11 +70,11 @@ export class EditorScene extends Scene {
   private pieceLayer!: Phaser.GameObjects.Container;
   private titleText!: Phaser.GameObjects.Text;
   private statusText!: Phaser.GameObjects.Text;
-  private backButton!: Phaser.GameObjects.Text;
+  private backButton!: PillButton;
   private toolChips: ToolChip[] = [];
-  private testButton!: Phaser.GameObjects.Text;
-  private submitButton!: Phaser.GameObjects.Text;
-  private actionButtons: Phaser.GameObjects.Text[] = [];
+  private testButton!: PillButton;
+  private submitButton!: PillButton;
+  private actionButtons: PillButton[] = [];
 
   private cell = 0;
   private originX = 0;
@@ -106,21 +110,21 @@ export class EditorScene extends Scene {
     this.pieceLayer = this.add.container(0, 0);
 
     this.titleText = this.add
-      .text(0, 0, 'Build a puzzle', { fontFamily: 'Arial', fontSize: '20px', color: UI.text, fontStyle: 'bold' })
+      .text(0, 0, 'Build a puzzle', { fontFamily: FONT.display, fontSize: '22px', fontStyle: '700', color: UI.text })
       .setOrigin(0.5);
     this.statusText = this.add
-      .text(0, 0, '', { fontFamily: 'Arial', fontSize: '14px', color: UI.warn, align: 'center' })
+      .text(0, 0, '', { fontFamily: FONT.ui, fontSize: '14px', fontStyle: '600', color: UI.warn, align: 'center' })
       .setOrigin(0.5);
-    this.backButton = this.makeButton('\u2039 Back', UI.back, UI.text, () => fadeToScene(this, 'HomeScene'));
+    this.backButton = this.makeButton('\u2039 Back', 'chip', () => fadeToScene(this, 'HomeScene'));
 
     this.toolChips = TOOLS.map(({ tool, label }) => this.makeToolChip(tool, label));
 
-    this.testButton = this.makeButton('Test', UI.submitMuted, '#ffffff', () => this.testPuzzle());
-    this.submitButton = this.makeButton('Submit', UI.submitMuted, '#ffffff', () => void this.submit());
+    this.testButton = this.makeButton('Test', 'secondary', () => this.testPuzzle());
+    this.submitButton = this.makeButton('Submit', 'primary', () => void this.submit());
     this.actionButtons = [
-      this.makeButton('Random', UI.action, UI.actionText, () => this.randomFill()),
-      this.makeButton('Undo', UI.action, UI.actionText, () => this.undo()),
-      this.makeButton('Clear', UI.action, UI.actionText, () => this.clearAll()),
+      this.makeButton('Random', 'secondary', () => this.randomFill()),
+      this.makeButton('Undo', 'secondary', () => this.undo()),
+      this.makeButton('Clear', 'secondary', () => this.clearAll()),
       this.testButton,
       this.submitButton,
     ];
@@ -145,35 +149,36 @@ export class EditorScene extends Scene {
 
   private makeButton(
     label: string,
-    bg: string,
-    fg: string,
-    onClick: () => void
-  ): Phaser.GameObjects.Text {
-    const btn = this.add
-      .text(0, 0, label, {
-        fontFamily: 'Arial',
-        fontSize: '15px',
-        color: fg,
-        backgroundColor: bg,
-        padding: { left: 11, right: 11, top: 7, bottom: 7 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    btn.on('pointerdown', onClick);
-    return btn;
+    variant: PillVariant,
+    onClick: () => void,
+    size: PillSize = 'sm'
+  ): PillButton {
+    return makePill(this, { label, variant, size, onClick });
   }
 
   private makeToolChip(tool: Tool, label: string): ToolChip {
     const cont = this.add.container(0, 0);
-    const bg = this.add.rectangle(0, 0, 64, 52, UI.chipIdle).setStrokeStyle(1.5, PALETTE.iceEdge, 0.5);
+    const bg = this.add.graphics();
     const icon = this.add.container(0, -8);
     this.drawToolIcon(icon, tool, 22);
     const text = this.add
-      .text(0, 17, label, { fontFamily: 'Arial', fontSize: '12px', color: UI.toolLabelIdle })
+      .text(0, 17, label, { fontFamily: FONT.ui, fontSize: '12px', fontStyle: '600', color: UI.toolLabelIdle })
       .setOrigin(0.5);
     cont.add([bg, icon, text]);
     cont.on('pointerdown', () => (tool === 'SEAL' ? this.onSealToolTap() : this.setTool(tool)));
-    return { tool, cont, bg, label: text };
+    const chip: ToolChip = { tool, cont, bg, label: text, w: 64, h: 52, active: false };
+    this.drawChip(chip);
+    return chip;
+  }
+
+  /** (Re)draw a tool chip's rounded background for its current size/active state. */
+  private drawChip(chip: ToolChip): void {
+    const { bg, w, h, active } = chip;
+    bg.clear();
+    bg.fillStyle(active ? UI.chipActive : UI.chipIdle, 1);
+    bg.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
+    bg.lineStyle(1.5, active ? 0xffe09a : PALETTE.iceEdge, active ? 1 : 0.5);
+    bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
   }
 
   private drawToolIcon(cont: Phaser.GameObjects.Container, tool: Tool, s: number): void {
@@ -200,7 +205,7 @@ export class EditorScene extends Scene {
     this.titleText.setPosition(w / 2, 22);
     this.statusText.setPosition(w / 2, 50);
     this.statusText.setWordWrapWidth(w - 40);
-    this.backButton.setPosition(40, 24);
+    this.backButton.setPosition(SPACE.md + this.backButton.width / 2, 24);
 
     const pad = 16;
     const availW = w - pad * 2;
@@ -219,7 +224,9 @@ export class EditorScene extends Scene {
     this.toolChips.forEach((chip, i) => {
       const x = margin + tslot * (i + 0.5);
       chip.cont.setPosition(x, toolsY);
-      chip.bg.setSize(cw, chipH);
+      chip.w = cw;
+      chip.h = chipH;
+      this.drawChip(chip);
       chip.cont.setInteractive(
         new Phaser.Geom.Rectangle(-cw / 2, -chipH / 2, cw, chipH),
         Phaser.Geom.Rectangle.Contains
@@ -229,7 +236,7 @@ export class EditorScene extends Scene {
     this.spread(this.actionButtons, h - 26);
   }
 
-  private spread(buttons: Phaser.GameObjects.Text[], y: number): void {
+  private spread(buttons: PillButton[], y: number): void {
     const w = this.scale.width;
     const margin = 10;
     const slot = (w - margin * 2) / buttons.length;
@@ -374,10 +381,8 @@ export class EditorScene extends Scene {
       this.statusText.setText(this.touched ? result.reason : 'Pick a tool, then tap the ice to build.');
       this.statusText.setColor(this.touched ? UI.warn : UI.text);
     }
-    this.submitButton.setBackgroundColor(this.canSubmit ? UI.submit : UI.submitMuted);
-    this.submitButton.setColor(this.canSubmit ? '#062033' : '#ffffff');
-    this.testButton.setBackgroundColor(this.canSubmit ? UI.action : UI.submitMuted);
-    this.testButton.setColor(this.canSubmit ? UI.actionText : '#ffffff');
+    this.submitButton.setEnabled(this.canSubmit);
+    this.testButton.setEnabled(this.canSubmit);
   }
 
   /** Save the current board and jump into GameScene to play-test it. */
@@ -392,9 +397,9 @@ export class EditorScene extends Scene {
   private setTool(tool: Tool): void {
     this.currentTool = tool;
     for (const chip of this.toolChips) {
-      const active = chip.tool === tool;
-      chip.bg.setFillStyle(active ? UI.chipActive : UI.chipIdle);
-      chip.label.setColor(active ? UI.toolLabelActive : UI.toolLabelIdle);
+      chip.active = chip.tool === tool;
+      this.drawChip(chip);
+      chip.label.setColor(chip.active ? UI.toolLabelActive : UI.toolLabelIdle);
     }
     if (tool === 'SEAL') {
       this.statusText.setText(`Seal is ${this.sealOrient === 'H' ? 'horizontal \u2194' : 'vertical \u2195'} - tap Seal again to rotate`);
@@ -469,8 +474,7 @@ export class EditorScene extends Scene {
         this.statusText.setText(`Submitted! Par ${data.par}. The community can play it now.`);
         this.statusText.setColor(UI.good);
         this.canSubmit = false;
-        this.submitButton.setBackgroundColor(UI.submitMuted);
-        this.submitButton.setColor('#ffffff');
+        this.submitButton.setEnabled(false);
       } else {
         this.statusText.setText(data.reason);
         this.statusText.setColor(UI.warn);

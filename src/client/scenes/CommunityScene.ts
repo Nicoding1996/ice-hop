@@ -1,7 +1,15 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { UgcListResponse } from '../../shared/api';
-import { PALETTE, paintBackdrop, drawPenguinInto, fadeInScene, fadeToScene } from '../art/theme';
+import {
+  PALETTE,
+  FONT,
+  paintBackdrop,
+  drawPenguinInto,
+  fadeInScene,
+  fadeToScene,
+  makePill,
+} from '../art/theme';
 
 const TEXT = '#eaf6fb';
 
@@ -28,8 +36,9 @@ export class CommunityScene extends Scene {
     const h = this.scale.height;
     const status = this.add
       .text(w / 2, h * 0.46, 'Loading community puzzles\u2026', {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '16px',
+        fontStyle: '600',
         color: TEXT,
         align: 'center',
         wordWrap: { width: w - 48 },
@@ -69,23 +78,21 @@ export class CommunityScene extends Scene {
     const peng = this.add.container(w / 2, h * 0.3);
     drawPenguinInto(this, peng, 64);
 
-    const build = this.add
-      .text(w / 2, h * 0.58, 'Build a puzzle', {
-        fontFamily: 'Arial',
-        fontSize: '17px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#ff8a5b',
-        padding: { left: 16, right: 16, top: 10, bottom: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    build.on('pointerdown', () => fadeToScene(this, 'EditorScene'));
+    makePill(this, {
+      label: 'Build a puzzle',
+      variant: 'primary',
+      x: w / 2,
+      y: h * 0.58,
+      onClick: () => fadeToScene(this, 'EditorScene'),
+    });
 
-    const back = this.add
-      .text(w / 2, h * 0.7, 'Back to daily', { fontFamily: 'Arial', fontSize: '15px', color: TEXT })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    back.on('pointerdown', () => fadeToScene(this, 'GameScene'));
+    makePill(this, {
+      label: 'Back to daily',
+      variant: 'ghost',
+      size: 'sm',
+      x: w / 2,
+      y: h * 0.69,
+      onClick: () => fadeToScene(this, 'GameScene'),
+    });
   }
 }

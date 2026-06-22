@@ -1,5 +1,5 @@
 import * as Phaser from 'phaser';
-import { PALETTE, drawPenguinInto, drawSealInto, drawRockInto } from './art/theme';
+import { PALETTE, FONT, drawPenguinInto, drawSealInto, drawRockInto, makePill } from './art/theme';
 
 /**
  * Shared "How to play" overlay, used by both the hub and the play screen so a
@@ -38,9 +38,9 @@ export const showHowToPlay = (
 
   const title = scene.add
     .text(0, -panelH / 2 + 30, 'How to play', {
-      fontFamily: 'Arial',
-      fontSize: '22px',
-      fontStyle: 'bold',
+      fontFamily: FONT.display,
+      fontSize: '24px',
+      fontStyle: '700',
       color: PALETTE.text,
     })
     .setOrigin(0.5);
@@ -56,9 +56,9 @@ export const showHowToPlay = (
   const addLabel = (y: number, text: string, bold = false): void => {
     const label = scene.add
       .text(textX, y, text, {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '14px',
-        fontStyle: bold ? 'bold' : 'normal',
+        fontStyle: bold ? '700' : '600',
         color: PALETTE.text,
         align: 'left',
         lineSpacing: 3,
@@ -105,17 +105,13 @@ export const showHowToPlay = (
   card.add(water);
   addLabel(goalY, 'Get every penguin into the water at the same time to win. The fewer moves, the more stars.', true);
 
-  const close = scene.add
-    .text(0, panelH / 2 - 34, 'Got it', {
-      fontFamily: 'Arial',
-      fontSize: '17px',
-      fontStyle: 'bold',
-      color: '#062033',
-      backgroundColor: '#ff8a5b',
-      padding: { left: 26, right: 26, top: 10, bottom: 10 },
-    })
-    .setOrigin(0.5)
-    .setInteractive({ useHandCursor: true });
+  const close = makePill(scene, {
+    label: 'Got it',
+    variant: 'primary',
+    x: 0,
+    y: panelH / 2 - 34,
+    onClick: () => dismiss(),
+  });
   card.add(close);
 
   let closed = false;
@@ -134,13 +130,6 @@ export const showHowToPlay = (
     });
   };
   dim.on('pointerdown', dismiss);
-  close.on(
-    'pointerdown',
-    (_p: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-      event.stopPropagation();
-      dismiss();
-    }
-  );
 
   layer.add([dim, card]);
   layer.setAlpha(0);

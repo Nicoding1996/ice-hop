@@ -356,3 +356,257 @@ export const auroraFlourish = (
     });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Design system: typography, spacing, and reusable UI components.
+//
+// The art is rounded and shadowed; the UI chrome should match. These helpers
+// give every scene one button shape, one spacing rhythm, and one card surface
+// so nothing reads as a default Phaser text-box. Font families carry rounded
+// system fallbacks, so if the web fonts are blocked the UI still looks
+// deliberate rather than dropping to plain Arial.
+// ---------------------------------------------------------------------------
+
+/** Font families (with fallbacks). Fredoka = display/wordmark, Nunito = UI/body. */
+export const FONT = {
+  display: "Fredoka, 'Trebuchet MS', Verdana, sans-serif",
+  ui: "Nunito, 'Segoe UI', system-ui, -apple-system, sans-serif",
+} as const;
+
+/** Spacing scale (px). Use these for gaps/padding instead of ad-hoc numbers. */
+export const SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
+
+/** Corner radii (px) for the shared rounded shapes. */
+export const RADIUS = { chip: 999, button: 16, card: 22 } as const;
+
+export type PillVariant = 'primary' | 'secondary' | 'mint' | 'gold' | 'chip' | 'ghost' | 'muted';
+export type PillSize = 'sm' | 'md' | 'lg';
+
+type VariantStyle = {
+  fill: number;
+  fillAlpha?: number;
+  text: string;
+  border?: number;
+  borderAlpha?: number;
+};
+
+const VARIANTS: Record<PillVariant, VariantStyle> = {
+  primary: { fill: 0xff8a5b, text: '#062033' },
+  secondary: { fill: 0xcfe6f2, text: '#062033' },
+  mint: { fill: 0xaef0d2, text: '#062033' },
+  gold: { fill: 0xffd166, text: '#062033' },
+  chip: { fill: 0x1f3f59, text: '#eaf6fb', border: 0x35608a, borderAlpha: 0.9 },
+  ghost: { fill: 0x0e2740, fillAlpha: 0, text: '#eaf6fb', border: 0x3a6386, borderAlpha: 0.95 },
+  muted: { fill: 0x3a5066, text: '#cfe0ec' },
+};
+
+const SIZES: Record<PillSize, { fontSize: number; padX: number; height: number; weight: string }> = {
+  sm: { fontSize: 13, padX: 14, height: 34, weight: '700' },
+  md: { fontSize: 15, padX: 19, height: 42, weight: '700' },
+  lg: { fontSize: 18, padX: 26, height: 52, weight: '700' },
+};
+
+export type PillOptions = {
+  label: string;
+  variant?: PillVariant;
+  size?: PillSize;
+  x?: number;
+  y?: number;
+  minWidth?: number;
+  /** Set false for a non-interactive badge (no input, no hover/press). */
+  interactive?: boolean;
+  onClick?: () => void;
+};
+
+/**
+ * A rounded, shadowed button/chip that matches the vector art. Behaves like a
+ * Container for layout (setPosition / x / y / width / height / setVisible) and
+ * adds setLabelText / setVariant / setEnabled for the dynamic buttons (share,
+ * vote, subscribe, the editor's Submit/Test). Use the `interactive: false`
+ * option for a static badge (e.g. the endless "Solved" counter).
+ */
+export class PillButton extends Phaser.GameObjects.Container {
+  private readonly bg: Phaser.GameObjects.Graphics;
+  private readonly labelText: Phaser.GameObjects.Text;
+  /** Background + label, scaled for hover/press juice (the hit zone is separate
+   *  so the clickable area never moves and a tap always lands). */
+  private readonly visual: Phaser.GameObjects.Container;
+  /** Invisible input target. A Zone centres its hit area on its origin and
+   *  resizes it with setSize, so the clickable region always matches the pill. */
+  private readonly hit: Phaser.GameObjects.Zone;
+  private intendedVariant: PillVariant;
+  private readonly sizeKey: PillSize;
+  private readonly minWidth: number;
+  private readonly clickable: boolean;
+  private enabled = true;
+  private readonly onClick?: () => void;
+
+  constructor(scene: Phaser.Scene, opts: PillOptions) {
+    super(scene, opts.x ?? 0, opts.y ?? 0);
+    this.intendedVariant = opts.variant ?? 'secondary';
+    this.sizeKey = opts.size ?? 'md';
+    this.minWidth = opts.minWidth ?? 0;
+    this.clickable = opts.interactive ?? true;
+    this.onClick = opts.onClick;
+
+    const sz = SIZES[this.sizeKey];
+    this.visual = scene.add.container(0, 0);
+    this.bg = scene.add.graphics();
+    this.labelText = scene.add
+      .text(0, 0, opts.label, {
+        fontFamily: FONT.ui,
+        fontSize: `${sz.fontSize}px`,
+        fontStyle: sz.weight,
+        color: VARIANTS[this.intendedVariant].text,
+      })
+      .setOrigin(0.5);
+    this.visual.add([this.bg, this.labelText]);
+
+    this.hit = scene.add.zone(0, 0, sz.height, sz.height);
+    this.add([this.visual, this.hit]);
+    this.redraw();
+
+    if (this.clickable) {
+      // Input lives on the Zone (sized in redraw), never on the scaled visual,
+      // so hover/press can't shift the hit area out from under the pointer.
+      this.hit.setInteractive({ useHandCursor: true });
+      this.hit.on('pointerover', () => {
+        if (this.enabled) this.visual.setScale(1.03);
+      });
+      this.hit.on('pointerout', () => this.visual.setScale(1));
+      this.hit.on('pointerdown', () => {
+        if (!this.enabled) return;
+        this.scene.tweens.add({
+          targets: this.visual,
+          scaleX: 0.95,
+          scaleY: 0.95,
+          duration: 80,
+          yoyo: true,
+          ease: 'Quad.easeOut',
+        });
+        this.onClick?.();
+      });
+    }
+
+    scene.add.existing(this);
+  }
+
+  private effectiveVariant(): PillVariant {
+    return this.enabled ? this.intendedVariant : 'muted';
+  }
+
+  private redraw(): void {
+    const sz = SIZES[this.sizeKey];
+    const style = VARIANTS[this.effectiveVariant()];
+    this.labelText.setColor(style.text);
+    const w = Math.max(this.minWidth, Math.ceil(this.labelText.width) + sz.padX * 2);
+    const h = sz.height;
+    const r = Math.min(RADIUS.button, h / 2);
+    const fillAlpha = style.fillAlpha ?? 1;
+    const g = this.bg;
+    g.clear();
+    if (fillAlpha > 0) {
+      // Soft drop shadow for depth (skipped for the transparent ghost variant).
+      g.fillStyle(0x06121f, 0.26);
+      g.fillRoundedRect(-w / 2, -h / 2 + 3, w, h, r);
+      g.fillStyle(style.fill, fillAlpha);
+      g.fillRoundedRect(-w / 2, -h / 2, w, h, r);
+    }
+    if (style.border !== undefined) {
+      g.lineStyle(1.5, style.border, style.borderAlpha ?? 1);
+      g.strokeRoundedRect(-w / 2, -h / 2, w, h, r);
+    }
+    this.setSize(w, h);
+    // Hit zone is at least 44px each way (comfortable touch target). setSize on a
+    // Zone updates its input hit area too (resizeInput defaults to true).
+    this.hit.setSize(Math.max(w, 44), Math.max(h, 44));
+  }
+
+  setLabelText(text: string): this {
+    this.labelText.setText(text);
+    this.redraw();
+    return this;
+  }
+
+  setVariant(variant: PillVariant): this {
+    this.intendedVariant = variant;
+    this.redraw();
+    return this;
+  }
+
+  /** Enable/disable: a disabled button shows the muted style and ignores taps. */
+  setEnabled(enabled: boolean): this {
+    this.enabled = enabled;
+    this.redraw();
+    if (this.hit.input) this.hit.input.enabled = enabled && this.clickable;
+    if (!enabled) this.visual.setScale(1);
+    return this;
+  }
+}
+
+/** Factory for a PillButton (mirrors scene.add.* style). */
+export const makePill = (scene: Phaser.Scene, opts: PillOptions): PillButton =>
+  new PillButton(scene, opts);
+
+/** A non-interactive rounded badge (e.g. the endless "Solved" counter). */
+export const makeBadge = (
+  scene: Phaser.Scene,
+  label: string,
+  variant: PillVariant = 'gold',
+  size: PillSize = 'sm'
+): PillButton => new PillButton(scene, { label, variant, size, interactive: false });
+
+export type PanelOptions = {
+  radius?: number;
+  fill?: number;
+  fillAlpha?: number;
+  border?: number;
+};
+
+/**
+ * A solid rounded card surface with a soft shadow, drawn centred on (0,0).
+ * Position it with setPosition(cx, cy). Used behind win/recap content so text
+ * sits on its own surface instead of on top of the busy board.
+ */
+export const makePanel = (
+  scene: Phaser.Scene,
+  width: number,
+  height: number,
+  opts: PanelOptions = {}
+): Phaser.GameObjects.Graphics => {
+  const r = opts.radius ?? RADIUS.card;
+  const fill = opts.fill ?? 0x123047;
+  const fillAlpha = opts.fillAlpha ?? 0.98;
+  const border = opts.border ?? 0x2f5c7a;
+  const g = scene.add.graphics();
+  g.fillStyle(0x05101c, 0.45);
+  g.fillRoundedRect(-width / 2 + 2, -height / 2 + 9, width, height, r);
+  g.fillStyle(fill, fillAlpha);
+  g.fillRoundedRect(-width / 2, -height / 2, width, height, r);
+  g.lineStyle(2, border, 1);
+  g.strokeRoundedRect(-width / 2, -height / 2, width, height, r);
+  return g;
+};
+
+/** Anything the column layout can place: has a height and can be positioned. */
+export type Stackable = Phaser.GameObjects.GameObject & {
+  height: number;
+  setPosition(x: number, y: number): unknown;
+};
+
+/** Total height of a vertical stack of items separated by `gap`. */
+export const measureColumn = (items: Stackable[], gap: number): number =>
+  items.reduce((sum, it) => sum + it.height, 0) + gap * Math.max(0, items.length - 1);
+
+/**
+ * Lay items out in a centred vertical column with an even gap, starting at
+ * `top`. Each item is centred on `x`. Returns the y of the bottom edge.
+ */
+export const stackColumn = (items: Stackable[], x: number, top: number, gap: number): number => {
+  let cy = top;
+  for (const it of items) {
+    it.setPosition(x, cy + it.height / 2);
+    cy += it.height + gap;
+  }
+  return cy - gap;
+};

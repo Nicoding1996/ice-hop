@@ -18,6 +18,8 @@ import { buildShareText } from '../../shared/share';
 import { solve } from '../../shared/solver/solver';
 import {
   PALETTE as COLORS,
+  FONT,
+  SPACE,
   paintBackdrop,
   paintIceSheet,
   makeWaterHole,
@@ -30,6 +32,11 @@ import {
   auroraFlourish,
   fadeInScene,
   fadeToScene,
+  makePill,
+  makeBadge,
+  makePanel,
+  stackColumn,
+  PillButton,
 } from '../art/theme';
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { playHop, playSlide, playSplash, playWin } from '../audio';
@@ -60,7 +67,7 @@ export class GameScene extends Scene {
   private subscribed = false;
   /** Current subreddit name, for the "Join r/{name}" CTA label. */
   private subredditName = '';
-  private menuButton!: Phaser.GameObjects.Text;
+  private menuButton!: PillButton;
   private communityPuzzle?: { id: string; board: Board; par: number; creator: string };
   private isCommunity = false;
   private testBoard?: Board;
@@ -69,11 +76,11 @@ export class GameScene extends Scene {
   private isEndless = false;
   private endlessTier: EndlessTier = 'easy';
   private endlessSolved = 0;
-  private endlessBanner!: Phaser.GameObjects.Text;
-  private skipButton!: Phaser.GameObjects.Text;
-  private resetButton!: Phaser.GameObjects.Text;
-  private hintButton!: Phaser.GameObjects.Text;
-  private helpButton!: Phaser.GameObjects.Text;
+  private endlessBanner!: PillButton;
+  private skipButton!: PillButton;
+  private resetButton!: PillButton;
+  private hintButton!: PillButton;
+  private helpButton!: PillButton;
   /** The shared "How to play" overlay, when open (guards against stacking). */
   private howTo?: Phaser.GameObjects.Container;
   private hintLayer!: Phaser.GameObjects.Container;
@@ -144,12 +151,13 @@ export class GameScene extends Scene {
     this.uiLayer = this.add.container(0, 0);
 
     this.hudText = this.add
-      .text(0, 0, '', { fontFamily: 'Arial', fontSize: '22px', color: COLORS.text })
+      .text(0, 0, '', { fontFamily: FONT.ui, fontSize: '20px', fontStyle: '800', color: COLORS.text })
       .setOrigin(0.5);
     this.hintText = this.add
       .text(0, 0, 'Tap a penguin to hop, drag a seal to slide.\nGet every penguin into the water.', {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '13px',
+        fontStyle: '600',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 3,
@@ -159,89 +167,56 @@ export class GameScene extends Scene {
       .setAlpha(0.7);
     this.uiLayer.add([this.hudText, this.hintText]);
 
-    this.menuButton = this.add
-      .text(0, 0, this.isTest ? '\u2039 Edit' : '\u2039 Menu', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 11, right: 11, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.menuButton.on('pointerdown', () => fadeToScene(this, this.isTest ? 'EditorScene' : 'HomeScene'));
+    this.menuButton = makePill(this, {
+      label: this.isTest ? '\u2039 Edit' : '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => fadeToScene(this, this.isTest ? 'EditorScene' : 'HomeScene'),
+    });
     this.uiLayer.add(this.menuButton);
 
-    this.skipButton = this.add
-      .text(0, 0, 'Skip \u25B6', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: '#062033',
-        backgroundColor: '#ffe08a',
-        padding: { left: 10, right: 10, top: 5, bottom: 5 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.skipButton.on('pointerdown', () => this.nextCommunity());
+    this.skipButton = makePill(this, {
+      label: 'Skip \u25B6',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.nextCommunity(),
+    });
     this.uiLayer.add(this.skipButton);
 
     // Endless progression banner (top-right): lifetime puzzles solved.
-    this.endlessBanner = this.add
-      .text(0, 0, '', {
-        fontFamily: 'Arial',
-        fontSize: '13px',
-        color: '#062033',
-        backgroundColor: '#ffd166',
-        padding: { left: 9, right: 9, top: 5, bottom: 5 },
-      })
-      .setOrigin(1, 0.5);
+    this.endlessBanner = makeBadge(this, 'Solved: 0', 'gold', 'sm');
     this.uiLayer.add(this.endlessBanner);
 
     // Restart the current board (bottom strip). Only relevant once a move has
     // been made, so it stays hidden on a fresh board and swaps in for the hint.
-    this.resetButton = this.add
-      .text(0, 0, '\u21BA Restart', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 12, right: 12, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.resetButton.on('pointerdown', () => this.resetPuzzle());
+    this.resetButton = makePill(this, {
+      label: '\u21BA Restart',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.resetPuzzle(),
+    });
     this.uiLayer.add(this.resetButton);
 
     // Hint (Endless only): reveals the solver's best next move. Lives next to
     // Restart in the bottom strip; using it means the solve won't count.
-    this.hintButton = this.add
-      .text(0, 0, 'Hint', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 12, right: 12, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.hintButton.on('pointerdown', () => this.showHint());
+    this.hintButton = makePill(this, {
+      label: 'Hint',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.showHint(),
+    });
     this.uiLayer.add(this.hintButton);
 
     // "?" help chip (top-right). Shown on the daily/test screen, where a
     // first-time player lands (Boot opens GameScene directly, so they never see
     // the hub's "?"). Opens the same shared How-to-play card.
-    this.helpButton = this.add
-      .text(0, 0, '?', {
-        fontFamily: 'Arial',
-        fontSize: '15px',
-        fontStyle: 'bold',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 12, right: 12, top: 6, bottom: 6 },
-      })
-      .setOrigin(1, 0.5)
-      .setInteractive({ useHandCursor: true });
-    this.helpButton.on('pointerdown', () => this.openHowTo());
+    this.helpButton = makePill(this, {
+      label: '?',
+      variant: 'chip',
+      size: 'sm',
+      minWidth: 40,
+      onClick: () => this.openHowTo(),
+    });
     this.uiLayer.add(this.helpButton);
 
     // Tapping empty ice clears the current selection.
@@ -282,8 +257,9 @@ export class GameScene extends Scene {
     this.uiLayer.setVisible(false);
     this.loadingText = this.add
       .text(this.scale.width / 2, this.scale.height / 2, 'Getting the penguins ready\u2026', {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '16px',
+        fontStyle: '600',
         color: COLORS.text,
       })
       .setOrigin(0.5)
@@ -380,33 +356,25 @@ export class GameScene extends Scene {
     if (this.loadingText) this.loadingText.setText(message).setVisible(true);
     const w = this.scale.width;
     const h = this.scale.height;
-    const retry = this.add
-      .text(w / 2, h * 0.56, 'Try again', {
-        fontFamily: 'Arial',
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#ff8a5b',
-        padding: { left: 18, right: 18, top: 10, bottom: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    retry.on('pointerdown', () => {
-      if (this.loadingText) this.loadingText.setText('Getting the penguins ready\u2026');
-      this.clearLoadError();
-      void this.loadPuzzle();
+    const retry = makePill(this, {
+      label: 'Try again',
+      variant: 'primary',
+      x: w / 2,
+      y: h * 0.56,
+      onClick: () => {
+        if (this.loadingText) this.loadingText.setText('Getting the penguins ready\u2026');
+        this.clearLoadError();
+        void this.loadPuzzle();
+      },
     });
-    const menu = this.add
-      .text(w / 2, h * 0.67, '\u2039 Menu', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 12, right: 12, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    menu.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+    const menu = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      x: w / 2,
+      y: h * 0.56 + SPACE.xxl,
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
     this.loadErrorViews.push(retry, menu);
   }
 
@@ -680,7 +648,7 @@ export class GameScene extends Scene {
     const s = this.cell;
     const mk = (x: number, y: number, ch: string): Phaser.GameObjects.Text =>
       this.add
-        .text(x, y, ch, { fontFamily: 'Arial', fontSize: `${Math.round(s * 0.4)}px`, color: COLORS.arrow })
+        .text(x, y, ch, { fontFamily: FONT.ui, fontSize: `${Math.round(s * 0.4)}px`, color: COLORS.arrow })
         .setOrigin(0.5);
 
     if (orient === 'H') {
@@ -905,8 +873,9 @@ export class GameScene extends Scene {
   private addHintCaption(text: string): void {
     const caption = this.add
       .text(this.scale.width / 2, this.scale.height - 58, text, {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '12px',
+        fontStyle: '600',
         color: COLORS.text,
       })
       .setOrigin(0.5)
@@ -919,8 +888,9 @@ export class GameScene extends Scene {
     this.clearHintGraphics();
     const msg = this.add
       .text(this.scale.width / 2, this.scale.height - 58, 'No way through from here \u2014 tap \u21BA Restart', {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '12px',
+        fontStyle: '600',
         color: COLORS.text,
         align: 'center',
         wordWrap: { width: this.scale.width - 40 },
@@ -949,21 +919,23 @@ export class GameScene extends Scene {
   }
 
   private updateHud(): void {
+    const w = this.scale.width;
+    const midY = this.hudHeight / 2;
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
-    this.hudText.setPosition(this.scale.width / 2, this.hudHeight / 2);
-    this.hintText.setPosition(this.scale.width / 2, this.scale.height - 26);
+    this.hudText.setPosition(w / 2, midY);
+    this.hintText.setPosition(w / 2, this.scale.height - 26);
     this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
-    this.menuButton.setPosition(52, this.hudHeight / 2);
+    this.menuButton.setPosition(SPACE.md + this.menuButton.width / 2, midY);
     this.menuButton.setVisible(!this.won);
-    this.skipButton.setPosition(this.scale.width - 52, this.hudHeight / 2);
+    this.skipButton.setPosition(w - SPACE.md - this.skipButton.width / 2, midY);
     this.skipButton.setVisible(this.isCommunity && !this.won);
-    this.endlessBanner.setText(`Solved: ${this.endlessSolved}`);
-    this.endlessBanner.setPosition(this.scale.width - 14, this.hudHeight / 2);
+    this.endlessBanner.setLabelText(`Solved: ${this.endlessSolved}`);
+    this.endlessBanner.setPosition(w - SPACE.md - this.endlessBanner.width / 2, midY);
     this.endlessBanner.setVisible(this.isEndless && !this.won);
     // "?" help chip (top-right), shown on the daily/test screen where the corner
     // is free. Endless owns that corner with the Solved banner and community
     // with Skip, and players reach those via the hub (which has its own "?").
-    this.helpButton.setPosition(this.scale.width - 12, this.hudHeight / 2);
+    this.helpButton.setPosition(w - SPACE.md - this.helpButton.width / 2, midY);
     this.helpButton.setVisible(!this.isEndless && !this.isCommunity && !this.won);
     // Restart sits in the bottom strip and only appears once a move is made
     // (swaps in for the first-move hint, which hides as soon as moves > 0). In
@@ -972,10 +944,13 @@ export class GameScene extends Scene {
     const showReset = this.moves > 0 && !this.won;
     const showHint = this.isEndless && this.moves > 0 && !this.won;
     if (showHint) {
-      this.resetButton.setPosition(this.scale.width / 2 - 66, bottomY);
-      this.hintButton.setPosition(this.scale.width / 2 + 66, bottomY);
+      const pairGap = SPACE.md;
+      const total = this.resetButton.width + pairGap + this.hintButton.width;
+      const left = w / 2 - total / 2;
+      this.resetButton.setPosition(left + this.resetButton.width / 2, bottomY);
+      this.hintButton.setPosition(left + this.resetButton.width + pairGap + this.hintButton.width / 2, bottomY);
     } else {
-      this.resetButton.setPosition(this.scale.width / 2, bottomY);
+      this.resetButton.setPosition(w / 2, bottomY);
     }
     this.resetButton.setVisible(showReset);
     this.hintButton.setVisible(showHint);
@@ -988,19 +963,16 @@ export class GameScene extends Scene {
   /** A "sign in to save" CTA shown only to logged-out players, placed on a win
    *  screen (a natural breakpoint). showLoginPrompt reloads the page, so we only
    *  trigger it here, never mid-puzzle. */
-  private addSignInPrompt(y: number, label: string): Phaser.GameObjects.Text | undefined {
+  private addSignInPrompt(y: number, label: string): PillButton | undefined {
     if (context.username) return undefined; // already signed in - nothing to gain
-    const btn = this.add
-      .text(this.scale.width / 2, y, label, {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: '#062033',
-        backgroundColor: '#cfe6f2',
-        padding: { left: 14, right: 14, top: 8, bottom: 8 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    btn.on('pointerdown', () => showLoginPrompt());
+    const btn = makePill(this, {
+      label,
+      variant: 'secondary',
+      size: 'sm',
+      x: this.scale.width / 2,
+      y,
+      onClick: () => showLoginPrompt(),
+    });
     this.fxLayer.add(btn);
     return btn;
   }
@@ -1011,28 +983,25 @@ export class GameScene extends Scene {
    *  subscribes them to the subreddit on their behalf so tomorrow's daily finds
    *  them. Sits in the same slot as the (logged-out-only) sign-in prompt, so the
    *  two are mutually exclusive. */
-  private addSubscribePrompt(y: number): Phaser.GameObjects.Text | undefined {
+  private addSubscribePrompt(y: number): PillButton | undefined {
     if (!context.username || this.subscribed) return undefined;
     const label = this.subredditName ? `Join r/${this.subredditName}` : 'Join the community';
-    const btn = this.add
-      .text(this.scale.width / 2, y, label, {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: '#062033',
-        backgroundColor: '#cfe6f2',
-        padding: { left: 14, right: 14, top: 8, bottom: 8 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    btn.on('pointerdown', () => void this.subscribeToCommunity(btn));
+    const btn = makePill(this, {
+      label,
+      variant: 'secondary',
+      size: 'sm',
+      x: this.scale.width / 2,
+      y,
+      onClick: () => void this.subscribeToCommunity(btn),
+    });
     this.fxLayer.add(btn);
     return btn;
   }
 
   /** Calls the server to subscribe the viewer, then confirms and hides the CTA. */
-  private async subscribeToCommunity(btn: Phaser.GameObjects.Text): Promise<void> {
-    btn.disableInteractive();
-    btn.setText('Joining\u2026');
+  private async subscribeToCommunity(btn: PillButton): Promise<void> {
+    btn.setEnabled(false);
+    btn.setLabelText('Joining\u2026');
     try {
       const response = await fetch('/api/subscribe', {
         method: 'POST',
@@ -1040,12 +1009,12 @@ export class GameScene extends Scene {
       });
       if (!response.ok) throw new Error(`subscribe failed: ${response.status}`);
       this.subscribed = true;
-      btn.setText('Joined \u2713');
+      btn.setLabelText('Joined \u2713');
       showToast('Thanks for joining \u2014 see you tomorrow!');
     } catch (error) {
       console.error(error);
-      btn.setText('Tap to try again');
-      btn.setInteractive({ useHandCursor: true });
+      btn.setLabelText('Tap to try again');
+      btn.setEnabled(true);
     }
   }
 
@@ -1063,72 +1032,64 @@ export class GameScene extends Scene {
     this.resetButton.setVisible(false);
     this.hintButton.setVisible(false);
 
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.82).setInteractive();
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(440, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+
     const headline = this.add
-      .text(w / 2, h * 0.28, "You've solved today's puzzle!", {
-        fontFamily: 'Arial',
-        fontSize: '22px',
-        fontStyle: 'bold',
+      .text(w / 2, h * 0.3, "You've solved today's puzzle!", {
+        fontFamily: FONT.display,
+        fontSize: '24px',
+        fontStyle: '700',
         color: COLORS.text,
         align: 'center',
-        wordWrap: { width: w - 48 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5);
     const subText = result
       ? `${result.moves} moves   ${'\u2605'.repeat(result.stars)}\nA fresh puzzle drops tomorrow.`
       : 'A fresh puzzle drops tomorrow.';
     const sub = this.add
-      .text(w / 2, h * 0.4, subText, {
-        fontFamily: 'Arial',
+      .text(w / 2, h * 0.41, subText, {
+        fontFamily: FONT.ui,
         fontSize: '15px',
+        fontStyle: '600',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 6,
-        wordWrap: { width: w - 48 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5)
       .setAlpha(0.9);
 
-    const endlessBtn = this.add
-      .text(w / 2, h * 0.57, 'Endless puzzles \u25B6', {
-        fontFamily: 'Arial',
-        fontSize: '17px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#ff8a5b',
-        padding: { left: 18, right: 18, top: 10, bottom: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    endlessBtn.on('pointerdown', () => fadeToScene(this, 'EndlessScene'));
-
-    const communityBtn = this.add
-      .text(w / 2, h * 0.68, 'Community puzzles', {
-        fontFamily: 'Arial',
-        fontSize: '15px',
-        color: '#062033',
-        backgroundColor: '#cfe6f2',
-        padding: { left: 14, right: 14, top: 8, bottom: 8 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    communityBtn.on('pointerdown', () => fadeToScene(this, 'CommunityScene'));
-
-    const replayBtn = this.add
-      .text(w / 2, h * 0.78, "Play today's again", {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    replayBtn.on('pointerdown', () => {
-      this.fxLayer.removeAll(true);
-      this.hudText.setVisible(true);
-      this.updateHud();
+    const endlessBtn = makePill(this, {
+      label: 'Endless puzzles \u25B6',
+      variant: 'primary',
+      minWidth: Math.min(240, contentW),
+      onClick: () => fadeToScene(this, 'EndlessScene'),
     });
+    const communityBtn = makePill(this, {
+      label: 'Community puzzles',
+      variant: 'secondary',
+      minWidth: Math.min(240, contentW),
+      onClick: () => fadeToScene(this, 'CommunityScene'),
+    });
+    const replayBtn = makePill(this, {
+      label: "Play today's again",
+      variant: 'ghost',
+      size: 'sm',
+      onClick: () => {
+        this.fxLayer.removeAll(true);
+        this.hudText.setVisible(true);
+        this.updateHud();
+      },
+    });
+    // Even-gap column for the three onward actions, centred below the subtext.
+    stackColumn([endlessBtn, communityBtn, replayBtn], w / 2, h * 0.53, SPACE.md);
 
-    this.fxLayer.add([overlay, headline, sub, endlessBtn, communityBtn, replayBtn]);
+    this.fxLayer.add([overlay, card, headline, sub, endlessBtn, communityBtn, replayBtn]);
     headline.setScale(0.95).setAlpha(0);
     this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
   }
@@ -1171,20 +1132,27 @@ export class GameScene extends Scene {
       totalPlayers: 0,
     });
 
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
-    this.fxLayer.add(overlay);
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(460, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const cardLeft = w / 2 - cardW / 2;
+    const cardTop = h / 2 - cardH / 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+    this.fxLayer.add([overlay, card]);
 
     // Aurora curtains near the top only for a standout (3-star) win.
     if (stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
 
     const headline = this.add
       .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
-        fontFamily: 'Arial',
-        fontSize: '22px',
+        fontFamily: FONT.display,
+        fontSize: '24px',
+        fontStyle: '700',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 6,
-        wordWrap: { width: w - 48 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5)
       .setAlpha(0);
@@ -1210,7 +1178,12 @@ export class GameScene extends Scene {
 
     // Moves count up to the final tally.
     const movesText = this.add
-      .text(w / 2, h * 0.44, `0 moves   (par ${this.par})`, { fontFamily: 'Arial', fontSize: '20px', color: COLORS.text })
+      .text(w / 2, h * 0.44, `0 moves   (par ${this.par})`, {
+        fontFamily: FONT.ui,
+        fontSize: '19px',
+        fontStyle: '700',
+        color: COLORS.text,
+      })
       .setOrigin(0.5);
     this.fxLayer.add(movesText);
     const counter = { v: 0 };
@@ -1228,56 +1201,40 @@ export class GameScene extends Scene {
 
     const status = this.add
       .text(w / 2, h * 0.55, 'Saving your score\u2026', {
-        fontFamily: 'Arial',
+        fontFamily: FONT.ui,
         fontSize: '15px',
+        fontStyle: '600',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 5,
-        wordWrap: { width: w - 56 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5)
       .setAlpha(0.9);
-    const copyButton = this.add
-      .text(w / 2, 0, 'Share your result', {
-        fontFamily: 'Arial',
-        fontSize: '16px',
-        color: '#062033',
-        backgroundColor: '#ffd166',
-        padding: { left: 16, right: 16, top: 9, bottom: 9 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    copyButton.on('pointerdown', () => {
-      void this.copyResult(copyButton);
+    const copyButton = makePill(this, {
+      label: 'Share your result',
+      variant: 'secondary',
+      x: w / 2,
+      onClick: () => void this.copyResult(copyButton),
     });
 
     // Forward navigation so the daily isn't a dead end (keeps the "one more"
     // loop). Endless is always full of fresh puzzles, so it's the better
     // post-daily CTA than the (possibly empty) community stream.
-    const morePuzzlesButton = this.add
-      .text(w / 2, 0, 'More puzzles \u25B6', {
-        fontFamily: 'Arial',
-        fontSize: '17px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#ff8a5b',
-        padding: { left: 18, right: 18, top: 10, bottom: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    morePuzzlesButton.on('pointerdown', () => fadeToScene(this, 'EndlessScene'));
+    const morePuzzlesButton = makePill(this, {
+      label: 'More puzzles \u25B6',
+      variant: 'primary',
+      x: w / 2,
+      onClick: () => fadeToScene(this, 'EndlessScene'),
+    });
 
-    const homeButton = this.add
-      .text(44, this.hudHeight / 2, '\u2039 Menu', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 11, right: 11, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+    const homeButton = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
+    homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
 
     this.fxLayer.add([status, copyButton, morePuzzlesButton, homeButton]);
 
@@ -1292,13 +1249,13 @@ export class GameScene extends Scene {
     // score/leaderboard block fill the gap above them. Anchoring the buttons to
     // the bottom keeps them clear of the leaderboard no matter how many lines it
     // grows to once submitSolve resolves.
-    const stack: Phaser.GameObjects.Text[] = [morePuzzlesButton, copyButton];
+    const stack: PillButton[] = [morePuzzlesButton, copyButton];
     if (cta) stack.push(cta);
     const stackTop = this.stackFromBottom(stack);
 
     const movesBottom = movesText.y + movesText.height / 2;
-    this.winStatusTop = movesBottom + 12;
-    this.winStatusBottom = stackTop - 12;
+    this.winStatusTop = movesBottom + SPACE.md;
+    this.winStatusBottom = stackTop - SPACE.md;
     this.positionWinStatus(status);
 
     void this.submitSolve(status);
@@ -1308,10 +1265,10 @@ export class GameScene extends Scene {
    *  with consistent gaps (pass them lowest-first). Returns the y of the top
    *  edge of the topmost button so the variable-height status block above can be
    *  placed without ever overlapping the buttons. */
-  private stackFromBottom(buttons: Phaser.GameObjects.Text[]): number {
+  private stackFromBottom(buttons: PillButton[]): number {
     const h = this.scale.height;
-    const gap = 12;
-    let bottom = h - Math.max(16, h * 0.03);
+    const gap = SPACE.md;
+    let bottom = h - Math.max(SPACE.lg, h * 0.03);
     let top = bottom;
     for (const btn of buttons) {
       const hgt = btn.height;
@@ -1354,56 +1311,76 @@ export class GameScene extends Scene {
     this.fxLayer.removeAll(true);
     const creator = this.communityPuzzle?.creator ?? 'a redditor';
     const isMine = Boolean(context.username) && this.communityPuzzle?.creator === context.username;
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
-    const panel = this.add
-      .text(w / 2, h * 0.32, `${isMine ? 'Solved your own puzzle!' : `Solved ${creator}'s puzzle!`}\n${this.moves} moves`, {
-        fontFamily: 'Arial',
-        fontSize: '22px',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 8,
-        wordWrap: { width: w - 48 },
-      })
+
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(440, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+
+    const headline = this.add
+      .text(
+        w / 2,
+        h * 0.3,
+        `${isMine ? 'Solved your own puzzle!' : `Solved ${creator}'s puzzle!`}\n${this.moves} moves`,
+        {
+          fontFamily: FONT.display,
+          fontSize: '23px',
+          fontStyle: '700',
+          color: COLORS.text,
+          align: 'center',
+          lineSpacing: 8,
+          wordWrap: { width: contentW },
+        }
+      )
       .setOrigin(0.5);
-    const voteButton = isMine
-      ? this.add
-          .text(w / 2, h * 0.54, 'Your puzzle - nice build!', {
-            fontFamily: 'Arial',
-            fontSize: '16px',
-            color: COLORS.text,
-          })
-          .setOrigin(0.5)
-      : this.add
-          .text(w / 2, h * 0.54, 'Upvote this puzzle', {
-            fontFamily: 'Arial',
-            fontSize: '18px',
-            color: '#062033',
-            backgroundColor: '#aef0d2',
-            padding: { left: 16, right: 16, top: 10, bottom: 10 },
-          })
-          .setOrigin(0.5)
-          .setInteractive({ useHandCursor: true });
-    if (!isMine) voteButton.on('pointerdown', () => void this.upvoteCurrent(voteButton));
-    const moreButton = this.add
-      .text(w / 2, h * 0.68, 'Next puzzle \u25B6', {
-        fontFamily: 'Arial',
-        fontSize: '16px',
-        color: '#062033',
-        backgroundColor: '#aef0d2',
-        padding: { left: 14, right: 14, top: 8, bottom: 8 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    moreButton.on('pointerdown', () => this.nextCommunity());
-    const dailyButton = this.add
-      .text(w / 2, h * 0.8, 'Back to daily', { fontFamily: 'Arial', fontSize: '16px', color: COLORS.text })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    dailyButton.on('pointerdown', () => fadeToScene(this, 'GameScene'));
-    this.fxLayer.add([overlay, panel, voteButton, moreButton, dailyButton]);
-    panel.setScale(0.92).setAlpha(0);
-    this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
-    this.time.delayedCall(180, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.32, Math.min(48, w * 0.13)));
+
+    const buttons: PillButton[] = [];
+    let voteButton: PillButton | undefined;
+    if (!isMine) {
+      voteButton = makePill(this, {
+        label: 'Upvote this puzzle',
+        variant: 'mint',
+        minWidth: Math.min(240, contentW),
+        onClick: () => {
+          if (voteButton) void this.upvoteCurrent(voteButton);
+        },
+      });
+      buttons.push(voteButton);
+    }
+    const moreButton = makePill(this, {
+      label: 'Next puzzle \u25B6',
+      variant: 'primary',
+      minWidth: Math.min(240, contentW),
+      onClick: () => this.nextCommunity(),
+    });
+    const dailyButton = makePill(this, {
+      label: 'Back to daily',
+      variant: 'ghost',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'GameScene'),
+    });
+    buttons.push(moreButton, dailyButton);
+
+    const extras: Phaser.GameObjects.GameObject[] = [];
+    if (isMine) {
+      const note = this.add
+        .text(w / 2, h * 0.44, 'Your puzzle \u2014 nice build!', {
+          fontFamily: FONT.ui,
+          fontSize: '15px',
+          fontStyle: '600',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.9);
+      extras.push(note);
+    }
+    stackColumn(buttons, w / 2, h * 0.52, SPACE.md);
+
+    this.fxLayer.add([overlay, card, headline, ...buttons, ...extras]);
+    headline.setScale(0.92).setAlpha(0);
+    this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
+    this.time.delayedCall(180, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.3, Math.min(48, w * 0.13)));
   }
 
   private onWinEndless(): void {
@@ -1421,18 +1398,25 @@ export class GameScene extends Scene {
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
 
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
-    this.fxLayer.add(overlay);
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(460, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const cardLeft = w / 2 - cardW / 2;
+    const cardTop = h / 2 - cardH / 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+    this.fxLayer.add([overlay, card]);
     if (counts && stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
 
     const headline = this.add
       .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
-        fontFamily: 'Arial',
-        fontSize: '22px',
+        fontFamily: FONT.display,
+        fontSize: '24px',
+        fontStyle: '700',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 6,
-        wordWrap: { width: w - 48 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5)
       .setAlpha(0);
@@ -1459,8 +1443,9 @@ export class GameScene extends Scene {
 
       const movesText = this.add
         .text(w / 2, h * 0.44, `${this.moves} moves   (par ${this.par})`, {
-          fontFamily: 'Arial',
+          fontFamily: FONT.ui,
           fontSize: '18px',
+          fontStyle: '700',
           color: COLORS.text,
         })
         .setOrigin(0.5);
@@ -1473,9 +1458,9 @@ export class GameScene extends Scene {
       this.registry.set('endless.solved', fromCount + 1);
       const countText = this.add
         .text(w / 2, h * 0.54, `Solved: ${fromCount}`, {
-          fontFamily: 'Arial',
-          fontSize: '20px',
-          fontStyle: 'bold',
+          fontFamily: FONT.ui,
+          fontSize: '22px',
+          fontStyle: '800',
           color: '#ffd166',
         })
         .setOrigin(0.5);
@@ -1487,68 +1472,59 @@ export class GameScene extends Scene {
       // Hinted solve: honest and encouraging, but it does not add to the total.
       const note = this.add
         .text(w / 2, h * 0.34, 'Solved with a hint', {
-          fontFamily: 'Arial',
+          fontFamily: FONT.ui,
           fontSize: '18px',
-          fontStyle: 'bold',
+          fontStyle: '800',
           color: '#ffd166',
         })
         .setOrigin(0.5);
       const sub = this.add
         .text(w / 2, h * 0.44, "This one doesn't add to your total \u2014 try the next one solo", {
-          fontFamily: 'Arial',
+          fontFamily: FONT.ui,
           fontSize: '13px',
+          fontStyle: '600',
           color: COLORS.text,
           align: 'center',
-          wordWrap: { width: w - 60 },
+          wordWrap: { width: contentW },
         })
         .setOrigin(0.5)
         .setAlpha(0.85);
       const countText = this.add
         .text(w / 2, h * 0.54, `Solved: ${this.endlessSolved}`, {
-          fontFamily: 'Arial',
+          fontFamily: FONT.ui,
           fontSize: '18px',
+          fontStyle: '700',
           color: COLORS.text,
         })
         .setOrigin(0.5);
       this.fxLayer.add([note, sub, countText]);
     }
 
-    const nextButton = this.add
-      .text(w / 2, h * 0.7, 'Next puzzle \u25B6', {
-        fontFamily: 'Arial',
-        fontSize: '17px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#ff8a5b',
-        padding: { left: 18, right: 18, top: 10, bottom: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    nextButton.on('pointerdown', () => fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } }));
+    const nextButton = makePill(this, {
+      label: 'Next puzzle \u25B6',
+      variant: 'primary',
+      x: w / 2,
+      y: h * 0.7,
+      minWidth: Math.min(240, contentW),
+      onClick: () => fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } }),
+    });
 
-    const levelButton = this.add
-      .text(w / 2, h * 0.82, 'Change level', {
-        fontFamily: 'Arial',
-        fontSize: '15px',
-        color: '#062033',
-        backgroundColor: '#cfe6f2',
-        padding: { left: 14, right: 14, top: 8, bottom: 8 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    levelButton.on('pointerdown', () => fadeToScene(this, 'EndlessScene'));
+    const levelButton = makePill(this, {
+      label: 'Change level',
+      variant: 'secondary',
+      size: 'sm',
+      x: w / 2,
+      y: h * 0.81,
+      onClick: () => fadeToScene(this, 'EndlessScene'),
+    });
 
-    const homeButton = this.add
-      .text(44, this.hudHeight / 2, '\u2039 Menu', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: COLORS.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 11, right: 11, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    homeButton.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+    const homeButton = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
+    homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
 
     this.fxLayer.add([nextButton, levelButton, homeButton]);
     this.addSignInPrompt(h * 0.62, 'Sign in to save your progress');
@@ -1588,32 +1564,33 @@ export class GameScene extends Scene {
     const w = this.scale.width;
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(420, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
     const panel = this.add
-      .text(w / 2, h * 0.36, `Your puzzle works!\nSolvable in ${this.moves} moves`, {
-        fontFamily: 'Arial',
-        fontSize: '22px',
+      .text(w / 2, h * 0.4, `Your puzzle works!\nSolvable in ${this.moves} moves`, {
+        fontFamily: FONT.display,
+        fontSize: '23px',
+        fontStyle: '700',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 8,
-        wordWrap: { width: w - 48 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5);
-    const back = this.add
-      .text(w / 2, h * 0.56, 'Back to editing', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#062033',
-        backgroundColor: '#ff8a5b',
-        padding: { left: 18, right: 18, top: 10, bottom: 10 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    back.on('pointerdown', () => fadeToScene(this, 'EditorScene'));
-    this.fxLayer.add([overlay, panel, back]);
+    const back = makePill(this, {
+      label: 'Back to editing',
+      variant: 'primary',
+      x: w / 2,
+      y: h * 0.56,
+      onClick: () => fadeToScene(this, 'EditorScene'),
+    });
+    this.fxLayer.add([overlay, card, panel, back]);
     panel.setScale(0.92).setAlpha(0);
     this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
-    this.time.delayedCall(150, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.36, Math.min(48, w * 0.13)));
+    this.time.delayedCall(150, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.4, Math.min(48, w * 0.13)));
   }
 
   private async markPlayed(id: string): Promise<void> {
@@ -1628,7 +1605,7 @@ export class GameScene extends Scene {
     }
   }
 
-  private async upvoteCurrent(button: Phaser.GameObjects.Text): Promise<void> {
+  private async upvoteCurrent(button: PillButton): Promise<void> {
     const id = this.communityPuzzle?.id;
     if (!id) return;
     try {
@@ -1638,11 +1615,11 @@ export class GameScene extends Scene {
         body: JSON.stringify({ id }),
       });
       const data: VoteResponse = await response.json();
-      button.setText(data.ok ? `Upvoted! (${data.votes})` : data.reason ?? 'Already upvoted');
-      button.disableInteractive();
+      button.setLabelText(data.ok ? `Upvoted! (${data.votes})` : data.reason ?? 'Already upvoted');
+      button.setEnabled(false);
     } catch (error) {
       console.error(error);
-      button.setText('Could not upvote');
+      button.setLabelText('Could not upvote');
     }
   }
 
@@ -1666,34 +1643,36 @@ export class GameScene extends Scene {
     this.won = true;
     this.skipButton.setVisible(false);
     this.fxLayer.removeAll(true);
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.78).setInteractive();
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(420, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
     const panel = this.add
       .text(w / 2, h * 0.36, "That's all the community puzzles for now!", {
-        fontFamily: 'Arial',
-        fontSize: '20px',
+        fontFamily: FONT.display,
+        fontSize: '21px',
+        fontStyle: '700',
         color: COLORS.text,
         align: 'center',
         lineSpacing: 8,
-        wordWrap: { width: w - 48 },
+        wordWrap: { width: contentW },
       })
       .setOrigin(0.5);
-    const buildBtn = this.add
-      .text(w / 2, h * 0.56, 'Build a puzzle', {
-        fontFamily: 'Arial',
-        fontSize: '17px',
-        color: '#062033',
-        backgroundColor: '#aef0d2',
-        padding: { left: 14, right: 14, top: 9, bottom: 9 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    buildBtn.on('pointerdown', () => fadeToScene(this, 'EditorScene'));
-    const dailyBtn = this.add
-      .text(w / 2, h * 0.68, 'Back to daily', { fontFamily: 'Arial', fontSize: '16px', color: COLORS.text })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    dailyBtn.on('pointerdown', () => fadeToScene(this, 'GameScene'));
-    this.fxLayer.add([overlay, panel, buildBtn, dailyBtn]);
+    const buildBtn = makePill(this, {
+      label: 'Build a puzzle',
+      variant: 'primary',
+      minWidth: Math.min(220, contentW),
+      onClick: () => fadeToScene(this, 'EditorScene'),
+    });
+    const dailyBtn = makePill(this, {
+      label: 'Back to daily',
+      variant: 'ghost',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'GameScene'),
+    });
+    stackColumn([buildBtn, dailyBtn], w / 2, h * 0.52, SPACE.md);
+    this.fxLayer.add([overlay, card, panel, buildBtn, dailyBtn]);
   }
 
   private async submitSolve(status: Phaser.GameObjects.Text): Promise<void> {
@@ -1745,24 +1724,24 @@ export class GameScene extends Scene {
     }
   }
 
-  private async copyResult(button: Phaser.GameObjects.Text): Promise<void> {
+  private async copyResult(button: PillButton): Promise<void> {
     if (!this.shareText) return;
     // Prefer the native share sheet (Devvit-recommended; it also shares a link to
     // the post, which brings new players in). Fall back to the clipboard so the
     // paste-into-the-comments flow still works on every platform.
     try {
       await showShareSheet({ title: 'Ice Hop', text: this.shareText });
-      button.setText('Shared!');
+      button.setLabelText('Shared!');
       return;
     } catch (error) {
       console.error(error);
     }
     try {
       await navigator.clipboard.writeText(this.shareText);
-      button.setText('Copied! Paste it in the comments');
+      button.setLabelText('Copied! Paste it in the comments');
     } catch (error) {
       console.error(error);
-      button.setText('Copy failed \u2014 select the text manually');
+      button.setLabelText('Copy failed \u2014 select the text manually');
     }
   }
 

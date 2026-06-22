@@ -1,13 +1,25 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
-import { PALETTE, paintBackdrop, drawPenguinInto, fadeInScene, fadeToScene } from '../art/theme';
+import {
+  PALETTE,
+  FONT,
+  SPACE,
+  paintBackdrop,
+  drawPenguinInto,
+  fadeInScene,
+  fadeToScene,
+  makePill,
+  measureColumn,
+  stackColumn,
+  PillButton,
+} from '../art/theme';
 import { showHowToPlay } from '../howToPlay';
 import { isSoundOn, setSoundOn, playHop } from '../audio';
 
 /** The hub: pick the daily, build a puzzle, or browse the community stream. */
 export class HomeScene extends Scene {
   private bgLayer!: Phaser.GameObjects.Container;
-  private soundButton!: Phaser.GameObjects.Text;
+  private soundButton!: PillButton;
   private content: Phaser.GameObjects.GameObject[] = [];
   /** The "How to play" overlay, when open (so we can close it on rebuild). */
   private rules?: Phaser.GameObjects.Container;
@@ -37,23 +49,25 @@ export class HomeScene extends Scene {
     this.rules = undefined;
     const w = this.scale.width;
     const h = this.scale.height;
+    const cx = w / 2;
 
-    const peng = this.add.container(w / 2, h * 0.2);
+    const peng = this.add.container(cx, h * 0.2);
     drawPenguinInto(this, peng, Math.min(86, w * 0.22));
     this.tweens.add({ targets: peng, y: h * 0.2 - 6, duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
 
     const title = this.add
-      .text(w / 2, h * 0.34, 'ICE HOP', {
-        fontFamily: 'Arial',
-        fontSize: `${Math.round(Math.min(54, w * 0.14))}px`,
-        fontStyle: 'bold',
+      .text(cx, h * 0.36, 'ICE HOP', {
+        fontFamily: FONT.display,
+        fontSize: `${Math.round(Math.min(62, w * 0.155))}px`,
+        fontStyle: '700',
         color: PALETTE.text,
       })
       .setOrigin(0.5);
     const tag = this.add
-      .text(w / 2, h * 0.42, 'Get every penguin into the water!', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
+      .text(cx, title.y + title.height / 2 + SPACE.sm, 'Get every penguin into the water!', {
+        fontFamily: FONT.ui,
+        fontSize: '15px',
+        fontStyle: '600',
         color: PALETTE.text,
         align: 'center',
         wordWrap: { width: w - 40 },
@@ -61,52 +75,75 @@ export class HomeScene extends Scene {
       .setOrigin(0.5)
       .setAlpha(0.85);
 
-    const play = this.makeButton("Play today\u2019s puzzle", '#ff8a5b', '#062033', h * 0.53, true, () =>
-      fadeToScene(this, 'GameScene')
-    );
-    const endless = this.makeButton('Endless puzzles', '#cfe6f2', '#062033', h * 0.63, false, () =>
-      fadeToScene(this, 'EndlessScene')
-    );
-    const build = this.makeButton('Build a puzzle', '#cfe6f2', '#062033', h * 0.71, false, () =>
-      fadeToScene(this, 'EditorScene')
-    );
-    const community = this.makeButton('Community puzzles', '#cfe6f2', '#062033', h * 0.79, false, () =>
-      fadeToScene(this, 'CommunityScene')
-    );
-
-    this.soundButton = this.add
-      .text(w - 14, 14, this.soundLabel(), {
-        fontFamily: 'Arial',
-        fontSize: '13px',
-        color: PALETTE.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 9, right: 9, top: 5, bottom: 5 },
-      })
-      .setOrigin(1, 0)
-      .setInteractive({ useHandCursor: true });
-    this.soundButton.on('pointerdown', () => {
-      const on = !isSoundOn();
-      setSoundOn(on);
-      this.soundButton.setText(this.soundLabel());
-      if (on) playHop();
+    // Primary + secondary actions in an evenly-spaced, centred column.
+    const wide = Math.min(300, w - 56);
+    const play = makePill(this, {
+      label: 'Play today\u2019s puzzle',
+      variant: 'primary',
+      size: 'lg',
+      minWidth: wide,
+      onClick: () => fadeToScene(this, 'GameScene'),
     });
+    const endless = makePill(this, {
+      label: 'Endless puzzles',
+      variant: 'secondary',
+      minWidth: wide,
+      onClick: () => fadeToScene(this, 'EndlessScene'),
+    });
+    const build = makePill(this, {
+      label: 'Build a puzzle',
+      variant: 'secondary',
+      minWidth: wide,
+      onClick: () => fadeToScene(this, 'EditorScene'),
+    });
+    const community = makePill(this, {
+      label: 'Community puzzles',
+      variant: 'secondary',
+      minWidth: wide,
+      onClick: () => fadeToScene(this, 'CommunityScene'),
+    });
+    const buttons = [play, endless, build, community];
 
-    // Optional "How to play" entry point (top-left). The game is built to read
-    // without instructions, so this is a discoverable safety net, not a wall.
-    const help = this.add
-      .text(14, 14, '?', {
-        fontFamily: 'Arial',
-        fontSize: '15px',
-        fontStyle: 'bold',
-        color: PALETTE.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 12, right: 12, top: 5, bottom: 5 },
-      })
-      .setOrigin(0, 0)
-      .setInteractive({ useHandCursor: true });
-    help.on('pointerdown', () => this.showRules());
+    // Centre the button column in the space below the tagline so the gaps read
+    // evenly on both tall phones and short desktop viewports.
+    const gap = SPACE.md;
+    const regionTop = tag.y + tag.height / 2 + SPACE.xl;
+    const regionBottom = h - SPACE.xl;
+    const colH = measureColumn(buttons, gap);
+    const colTop = Math.max(regionTop, (regionTop + regionBottom) / 2 - colH / 2);
+    stackColumn(buttons, cx, colTop, gap);
 
-    this.content.push(peng, title, tag, play, endless, build, community, this.soundButton, help);
+    // Sound toggle (top-right) and "How to play" (top-left) as chips. The game
+    // is built to read without instructions, so "?" is a discoverable safety
+    // net, not a wall.
+    this.soundButton = makePill(this, {
+      label: this.soundLabel(),
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.toggleSound(),
+    });
+    this.soundButton.setPosition(
+      w - SPACE.md - this.soundButton.width / 2,
+      SPACE.md + this.soundButton.height / 2
+    );
+
+    const help = makePill(this, {
+      label: '?',
+      variant: 'chip',
+      size: 'sm',
+      minWidth: 40,
+      onClick: () => this.showRules(),
+    });
+    help.setPosition(SPACE.md + help.width / 2, SPACE.md + help.height / 2);
+
+    this.content.push(peng, title, tag, ...buttons, this.soundButton, help);
+  }
+
+  private toggleSound(): void {
+    const on = !isSoundOn();
+    setSoundOn(on);
+    this.soundButton.setLabelText(this.soundLabel());
+    if (on) playHop();
   }
 
   private soundLabel(): string {
@@ -120,28 +157,5 @@ export class HomeScene extends Scene {
     this.rules = showHowToPlay(this, () => {
       this.rules = undefined;
     });
-  }
-
-  private makeButton(
-    label: string,
-    bg: string,
-    fg: string,
-    y: number,
-    big: boolean,
-    onClick: () => void
-  ): Phaser.GameObjects.Text {
-    const btn = this.add
-      .text(this.scale.width / 2, y, label, {
-        fontFamily: 'Arial',
-        fontSize: big ? '19px' : '16px',
-        fontStyle: big ? 'bold' : 'normal',
-        color: fg,
-        backgroundColor: bg,
-        padding: { left: big ? 26 : 18, right: big ? 26 : 18, top: big ? 12 : 9, bottom: big ? 12 : 9 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    btn.on('pointerdown', onClick);
-    return btn;
   }
 }

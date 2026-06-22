@@ -1,7 +1,16 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { EndlessSolvedResponse, EndlessTier } from '../../shared/api';
-import { PALETTE, paintBackdrop, fadeInScene, fadeToScene } from '../art/theme';
+import {
+  PALETTE,
+  FONT,
+  SPACE,
+  paintBackdrop,
+  fadeInScene,
+  fadeToScene,
+  makePill,
+  makeBadge,
+} from '../art/theme';
 
 type TierInfo = { tier: EndlessTier; label: string; blurb: string };
 
@@ -59,19 +68,21 @@ export class EndlessScene extends Scene {
     this.content = [];
     const w = this.scale.width;
     const h = this.scale.height;
+    const cx = w / 2;
 
     const title = this.add
-      .text(w / 2, h * 0.16, 'Endless', {
-        fontFamily: 'Arial',
-        fontSize: `${Math.round(Math.min(46, w * 0.12))}px`,
-        fontStyle: 'bold',
+      .text(cx, h * 0.16, 'Endless', {
+        fontFamily: FONT.display,
+        fontSize: `${Math.round(Math.min(52, w * 0.14))}px`,
+        fontStyle: '700',
         color: PALETTE.text,
       })
       .setOrigin(0.5);
     const sub = this.add
-      .text(w / 2, h * 0.25, 'Pick a level. The puzzles never run out.', {
-        fontFamily: 'Arial',
+      .text(cx, title.y + title.height / 2 + SPACE.sm, 'Pick a level. The puzzles never run out.', {
+        fontFamily: FONT.ui,
         fontSize: '14px',
+        fontStyle: '600',
         color: PALETTE.text,
         align: 'center',
         wordWrap: { width: w - 40 },
@@ -85,16 +96,8 @@ export class EndlessScene extends Scene {
       : this.solved > 0
         ? `Solved so far: ${this.solved}`
         : 'Solve your first to start a streak';
-    const banner = this.add
-      .text(w / 2, h * 0.33, bannerLabel, {
-        fontFamily: 'Arial',
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#ffd166',
-        padding: { left: 14, right: 14, top: 7, bottom: 7 },
-      })
-      .setOrigin(0.5);
+    const banner = makeBadge(this, bannerLabel, 'gold', 'md');
+    banner.setPosition(cx, h * 0.33);
 
     this.content.push(title, sub, banner);
 
@@ -103,17 +106,13 @@ export class EndlessScene extends Scene {
       this.content.push(...this.makeTierButton(info, h * ys[i]));
     });
 
-    const back = this.add
-      .text(44, this.menuY(), '\u2039 Menu', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        color: PALETTE.text,
-        backgroundColor: '#1f3f59',
-        padding: { left: 11, right: 11, top: 6, bottom: 6 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    back.on('pointerdown', () => fadeToScene(this, 'HomeScene'));
+    const back = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
+    back.setPosition(SPACE.md + back.width / 2, this.menuY());
     this.content.push(back);
   }
 
@@ -123,22 +122,20 @@ export class EndlessScene extends Scene {
 
   private makeTierButton(info: TierInfo, y: number): Phaser.GameObjects.GameObject[] {
     const w = this.scale.width;
-    const btn = this.add
-      .text(w / 2, y, info.label, {
-        fontFamily: 'Arial',
-        fontSize: '20px',
-        fontStyle: 'bold',
-        color: '#062033',
-        backgroundColor: '#cfe6f2',
-        padding: { left: 30, right: 30, top: 11, bottom: 11 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    btn.on('pointerdown', () => fadeToScene(this, 'GameScene', { endless: { tier: info.tier } }));
+    const btn = makePill(this, {
+      label: info.label,
+      variant: 'secondary',
+      size: 'lg',
+      x: w / 2,
+      y,
+      minWidth: Math.min(260, w - 64),
+      onClick: () => fadeToScene(this, 'GameScene', { endless: { tier: info.tier } }),
+    });
     const blurb = this.add
-      .text(w / 2, y + 30, info.blurb, {
-        fontFamily: 'Arial',
+      .text(w / 2, y + btn.height / 2 + SPACE.sm, info.blurb, {
+        fontFamily: FONT.ui,
         fontSize: '12px',
+        fontStyle: '600',
         color: PALETTE.text,
       })
       .setOrigin(0.5)

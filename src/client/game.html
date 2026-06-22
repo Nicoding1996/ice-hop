@@ -6,6 +6,15 @@
       name="viewport"
       content="initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, width=device-width, height=device-height, user-scalable=0"
     />
+    <!-- Type system: Fredoka (display) + Nunito (UI). Loaded from Google Fonts;
+         if the host CSP blocks the CDN we fall back to the rounded system stacks
+         declared in theme.ts FONT, so the game still reads as intentional. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700;800&display=swap"
+    />
     <link rel="stylesheet" href="game.css" />
     <title>Ice Hop</title>
   </head>

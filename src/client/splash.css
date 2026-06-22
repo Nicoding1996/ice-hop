@@ -9,7 +9,7 @@ body {
 }
 
 body {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Nunito', 'Segoe UI', system-ui, -apple-system, sans-serif;
   color: #eaf6fb;
   background: linear-gradient(180deg, #0b1f3a 0%, #14395a 58%, #1c4a6e 100%);
   overflow: hidden;
@@ -139,9 +139,10 @@ body {
 
 .title {
   margin: 4px 0 0;
-  font-size: clamp(34px, 11vw, 60px);
-  letter-spacing: 6px;
-  font-weight: 800;
+  font-family: 'Fredoka', 'Trebuchet MS', Verdana, sans-serif;
+  font-size: clamp(36px, 12vw, 64px);
+  letter-spacing: 3px;
+  font-weight: 700;
   text-shadow: 0 2px 16px rgba(127, 224, 255, 0.2);
 }
 
