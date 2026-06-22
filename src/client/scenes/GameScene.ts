@@ -1031,12 +1031,26 @@ export class GameScene extends Scene {
     this.hintText.setVisible(false);
     this.resetButton.setVisible(false);
     this.hintButton.setVisible(false);
+    this.menuButton.setVisible(false);
+    this.helpButton.setVisible(false);
 
     const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
     const cardW = Math.min(440, w - SPACE.lg * 2);
     const cardH = h - SPACE.lg * 2;
     const contentW = cardW - SPACE.xl * 2;
+    const cardLeft = w / 2 - cardW / 2;
+    const cardTop = h / 2 - cardH / 2;
     const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+
+    // Menu lives inside the card's top-left corner (consistent with the win
+    // screen), rather than the play-HUD chip floating above the card.
+    const menuChip = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
+    menuChip.setPosition(cardLeft + SPACE.md + menuChip.width / 2, cardTop + SPACE.md + menuChip.height / 2);
 
     const headline = this.add
       .text(w / 2, h * 0.3, "You've solved today's puzzle!", {
@@ -1089,7 +1103,7 @@ export class GameScene extends Scene {
     // Even-gap column for the three onward actions, centred below the subtext.
     stackColumn([endlessBtn, communityBtn, replayBtn], w / 2, h * 0.53, SPACE.md);
 
-    this.fxLayer.add([overlay, card, headline, sub, endlessBtn, communityBtn, replayBtn]);
+    this.fxLayer.add([overlay, card, menuChip, headline, sub, endlessBtn, communityBtn, replayBtn]);
     headline.setScale(0.95).setAlpha(0);
     this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
   }

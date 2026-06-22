@@ -576,7 +576,7 @@ export const makePanel = (
 ): Phaser.GameObjects.Graphics => {
   const r = opts.radius ?? RADIUS.card;
   const fill = opts.fill ?? 0x123047;
-  const fillAlpha = opts.fillAlpha ?? 0.98;
+  const fillAlpha = opts.fillAlpha ?? 1;
   const border = opts.border ?? 0x2f5c7a;
   const g = scene.add.graphics();
   g.fillStyle(0x05101c, 0.45);
