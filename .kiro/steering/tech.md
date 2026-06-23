@@ -26,7 +26,9 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   sound pref, launches `GameScene`), `HomeScene` (the hub), `GameScene` (daily /
   endless / community / test play), `EditorScene` (build), `CommunityScene` (loads
   the stream and hands off to GameScene), `EndlessScene` (Easy/Medium/Hard tier
-  select).
+  select), and `MyPuzzlesScene` (a creator dashboard of your puzzles + their
+  solve/upvote counts). A shared "How to play" overlay (`src/client/howToPlay.ts`)
+  is opened from both the hub and the play screen.
 - All art is drawn in code as vector graphics - no image/sprite assets. One
   palette + helper module, `src/client/art/theme.ts`, holds the penguin / seal /
   rock / water, the connected ice sheet, the backdrop, win FX, and the scene
@@ -42,6 +44,11 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 - One Hono app. Mount public routes at `/api` (called by the client) and
   internal routes at `/internal` (menu, form, triggers, scheduler).
 - Post creation: `reddit.submitCustomPost({ title, ... })`.
+- User-attributed Reddit actions run server-side via `reddit`, using the `asUser`
+  scopes declared in devvit.json: `reddit.subscribeToCurrentSubreddit()` (the
+  win-screen "Join" -> `/api/subscribe`) and `reddit.submitComment({ ..., runAs:
+  'USER' })` (the win-screen "Comment my score" -> `/api/comment-score`). The
+  pinned daily/community how-to comments are seeded as the app and distinguished.
 - Persistence: `redis` (get/set/incrBy; hashes via hSet/hGet/hKeys/hDel/hLen for
   the endless pool; sorted sets for leaderboards via the zAdd/zRange family -
   verify exact signatures in docs at implementation time). No list ops
@@ -54,9 +61,13 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 ## devvit.json (config, schema v1)
 
 Key sections: `post.entrypoints` (default = `splash.html` inline feed view,
-`game` = `game.html` expanded view), `server` (dir/entry), `menu.items`,
-`forms`, `triggers` (e.g. `onAppInstall`), `scheduler.tasks` (cron), `scripts`
-(`dev`: `vite build --watch`, `build`: `vite build`).
+`game` = `game.html` expanded view), `server` (dir/entry), `permissions`
+(`redis: true`, plus `reddit.enable` with `asUser` scopes `SUBSCRIBE_TO_SUBREDDIT`
++ `SUBMIT_COMMENT` that back the win-screen Join and Comment-my-score actions),
+`menu.items`, `triggers` (e.g. `onAppInstall`), `scheduler.tasks` (cron - the
+`daily-puzzle` and `endless-refill` jobs), `scripts` (`dev`: `vite build --watch`,
+`build`: `vite build`), and `dev.subreddit` (the playtest subreddit, currently
+`ice_hop_dev`). (No `forms` are declared today.)
 
 ## Commands
 

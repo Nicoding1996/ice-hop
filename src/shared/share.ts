@@ -44,5 +44,8 @@ export const buildScoreComment = (s: ScoreComment): string => {
   const what = s.creator ? `u/${s.creator}'s puzzle` : "today's puzzle";
   const note =
     s.moves <= s.par ? ' \u2014 par! \uD83C\uDFAF' : s.moves === s.par + 1 ? ' \u2014 one over par' : '';
-  return `Solved ${what} in ${s.moves} moves (par ${s.par}) ${stars}${note} \uD83D\uDC27`;
+  // Penguin leads as a brand mark (matching the share grid's "Ice Hop 🐧") so it
+  // never collides with the trailing "par! 🎯", and an over-par solve ends
+  // cleanly on the stars instead of a lone, flat penguin.
+  return `\uD83D\uDC27 Solved ${what} in ${s.moves} moves (par ${s.par}) ${stars}${note}`;
 };

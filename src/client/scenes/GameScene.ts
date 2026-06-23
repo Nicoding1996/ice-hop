@@ -1303,9 +1303,13 @@ export class GameScene extends Scene {
       })
       .setOrigin(0.5)
       .setAlpha(0.9);
+    // Outward share: the native share sheet (plus a link back to the post that
+    // pulls new players in). A quieter ghost treatment with an "out" arrow so it
+    // reads as distinct from the inward "Comment my score" - not a second
+    // identical secondary pill (the two used to be indistinguishable).
     const copyButton = makePill(this, {
-      label: 'Share your result',
-      variant: 'secondary',
+      label: 'Share result \u2197',
+      variant: 'ghost',
       x: w / 2,
       onClick: () => void this.copyResult(copyButton),
     });
@@ -1356,11 +1360,14 @@ export class GameScene extends Scene {
       this.addSignInPrompt(0, 'Sign in to save your streak') ?? this.addSubscribePrompt(0);
 
     // Stack the action buttons up from the bottom with even gaps, then let the
-    // score/leaderboard block fill the gap above them. Anchoring the buttons to
-    // the bottom keeps them clear of the leaderboard no matter how many lines it
-    // grows to once submitSolve resolves.
-    const stack: PillButton[] = [morePuzzlesButton, copyButton];
+    // score/leaderboard block fill the gap above them. Anchoring to the bottom
+    // keeps them clear of the leaderboard no matter how many lines it grows to
+    // once submitSolve resolves. Order is lowest-first (best thumb reach at the
+    // bottom): primary loop CTA, then the inward Reddity action (Comment my
+    // score), then the quieter outward Share, then the opt-in nudge on top.
+    const stack: PillButton[] = [morePuzzlesButton];
     if (postScoreButton) stack.push(postScoreButton);
+    stack.push(copyButton);
     if (cta) stack.push(cta);
     const stackTop = this.stackFromBottom(stack);
 
@@ -1390,9 +1397,11 @@ export class GameScene extends Scene {
     return top;
   }
 
-  /** Center the async, variable-height score/leaderboard block in its reserved
-   *  band, clamped so a long leaderboard never slides under the buttons or up
-   *  into the moves tally. */
+  /** Anchor the async, variable-height score/leaderboard block to the TOP of its
+   *  reserved band so it hugs the moves tally. On a first solve (one short line)
+   *  that keeps it part of the top content group instead of floating marooned in
+   *  the middle of the card; a tall leaderboard is shrunk to fit so it still
+   *  never slides under the bottom buttons. */
   private positionWinStatus(status: Phaser.GameObjects.Text): void {
     if (!status.scene) return; // destroyed (player navigated away mid-fetch)
     const top = this.winStatusTop;
@@ -1406,11 +1415,9 @@ export class GameScene extends Scene {
     if (band > 0 && status.height > band) {
       status.setScale(Math.max(0.62, band / status.height));
     }
-    const half = status.displayHeight / 2;
-    let cy = (top + bottom) / 2;
-    if (cy + half > bottom) cy = bottom - half;
-    if (cy - half < top) cy = top + half;
-    status.setY(cy);
+    // Top-anchored: place the block's top edge at winStatusTop (origin is
+    // centred, so offset by half its scaled height).
+    status.setY(top + status.displayHeight / 2);
   }
 
   private onWinCommunity(): void {

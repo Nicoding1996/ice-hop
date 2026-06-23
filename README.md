@@ -132,7 +132,7 @@ src/
   client/   # runs in the post iframe
     splash.*  # fast inline feed view
     game.*    # expanded Phaser view
-    scenes/   # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene
+    scenes/   # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene, MyPuzzlesScene
 ```
 
 See `.kiro/steering/` for the full design, tech, and structure notes.
@@ -178,7 +178,10 @@ npm run launch       # deploy + devvit publish
 
 - **What to play:** the daily puzzle post in the test subreddit, then tap
   **‹ Menu** for the hub — **Endless** mode (Easy / Medium / Hard), the **Build**
-  screen, and the **Community** puzzle stream.
+  screen, **My puzzles** (your builds with their solve/upvote counts), and the
+  **Community** puzzle stream. On a win you can **Share** or **Comment my score**
+  straight into the thread, and signed-in players can one-tap **Join** the
+  subreddit.
 - **Retention:** daily puzzle + streaks + daily/all-time leaderboards + a weekly
   difficulty ramp + an always-on Endless mode, plus a win-screen sign-in prompt
   that turns guests into returning players who can subscribe.

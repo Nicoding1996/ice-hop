@@ -58,7 +58,9 @@ players, and the solver counts moves the same way.
    backed by the same solver-graded generator as the daily, serving an unlimited
    random shuffle of fresh puzzles from the chosen bucket. A lifetime "Solved: N"
    count (Redis `endless:{user}`) is the progression payoff and ticks up on the
-   win screen. Endless is the cold-start answer: it is always full even when a
+   win screen; a per-tier split (`endless:{user}:{tier}`) labels the
+   Easy/Medium/Hard buttons on the tier picker. Endless is the cold-start answer:
+   it is always full even when a
    subreddit has zero community puzzles, so it - not the (possibly empty)
    community stream - is the CTA after a daily solve. Tiers are defined purely by
    the generator levers (par range + piece counts): Easy is trap-free
@@ -139,7 +141,11 @@ Anti-spam / integrity on submit + vote:
 Spoiler-free emoji grid summarizing the solution path / score (Wordle-style),
 shared via the native share sheet (`showShareSheet`, which also links back to the
 post) with a clipboard fallback so the paste-into-comments flow works everywhere.
-No board spoilers before a user solves.
+No board spoilers before a user solves. A separate "Comment my score" win-screen
+action posts the same spoiler-free score line straight into the post's thread on
+the player's behalf (`buildScoreComment` in `share.ts` -> `/api/comment-score`,
+`runAs: 'USER'`, gated by the `SUBMIT_COMMENT` asUser scope), so the comment
+section fills with scores without anyone leaving the game.
 
 
 ## Theme (LOCKED): "Ice Hop" - penguins on the ice
@@ -183,10 +189,21 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 ## Navigation & flow
 
 - Home hub (`HomeScene`): the menu screen with Play today's puzzle / Endless
-  puzzles / Build a puzzle / Community puzzles, plus a persistent sound on/off
-  toggle.
+  puzzles / Build a puzzle / My puzzles / Community puzzles, plus a persistent
+  sound on/off toggle and a "?" chip that opens the shared "How to play" overlay
+  (`showHowToPlay` in `howToPlay.ts`). The game is built to read without
+  instructions, so "?" is a discoverable safety net, not a wall; the same overlay
+  is reachable from the play screen for a first-timer who lands straight on the
+  daily.
+- My puzzles (`MyPuzzlesScene`): a creator dashboard listing the puzzles you've
+  built with their solve and upvote counts plus headline totals - the reason a
+  builder comes back. Paginated (Prev / Next) rather than scrolled so rows never
+  overlap the header/footer; data from GET `/api/ugc/mine`. Empty and error
+  states route to Build or a retry.
 - Endless tier select (`EndlessScene`): pick Easy / Medium / Hard; shows the
-  lifetime "Solved so far" banner and routes into `GameScene` in endless mode.
+  lifetime "Solved so far" banner plus a per-tier solved count on each button
+  (from GET `/api/endless/stats`: the total + a `byTier` split) and routes into
+  `GameScene` in endless mode.
 - In play, the HUD nav is a single "‹ Menu" button (top-left) back to the hub
   plus a "↺ Restart" button (bottom strip) that restores the current board to its
   start; Restart only appears once a move has been made (it swaps in for the
@@ -194,10 +211,16 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   a "Hint" button sits beside Restart (best next move; the solve then won't
   count). Endless play also shows a top-right "Solved: N" progression banner.
 - No dead ends: the daily win screen offers Share result (native share sheet,
-  clipboard fallback), More puzzles (-> Endless tier select), and Menu; endless
-  wins offer Next puzzle (same tier) / Change level / Menu; community wins offer
-  Upvote / Next / Back to daily; test wins offer Back to editing. Logged-out
-  players also get a "Sign in to save your streak / progress" CTA on the win
+  clipboard fallback), Comment my score (posts a spoiler-free score line straight
+  into the current post's thread, authored by the player via `/api/comment-score`;
+  gated by a `scorePosted` flag and a "this puzzle came from the host post" check
+  so it can never double-post or comment a mismatched puzzle), More puzzles (->
+  Endless tier select), and Menu; endless wins offer Next puzzle (same tier) /
+  Change level / Menu; community wins offer Upvote / Next / Back to daily; test
+  wins offer Back to editing. Signed-in players who haven't joined also get a
+  "Join r/{subreddit}" CTA (`/api/subscribe` - a one-tap opt-in that never gates
+  play; we keep an app-side `subscribed:{user}` flag to stop re-prompting), and
+  logged-out players get a "Sign in to save your streak / progress" CTA on the win
   screens (`showLoginPrompt`, a natural breakpoint). A failed puzzle load (network
   / API) shows a "Try again" + Menu recovery instead of hanging on the loader.
 - Returning to a solved daily: re-opening a daily you've already solved shows a

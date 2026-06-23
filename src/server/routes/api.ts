@@ -148,7 +148,17 @@ api.post('/subscribe', async (c) => {
     if (username === 'anon') {
       return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
     }
-    await reddit.subscribeToCurrentSubreddit();
+    // The subscribe call rejects when the viewer is already a member, and we
+    // can't reliably tell that apart from a transient failure. Since this is a
+    // low-stakes, opt-in nudge (the flag only stops re-prompting; it never
+    // force-subscribes anyone), swallow that error and still record the flag.
+    // Otherwise an existing member is stuck re-tapping a "Join" button that can
+    // never succeed - the bug where it kept showing "Tap to try again".
+    try {
+      await reddit.subscribeToCurrentSubreddit();
+    } catch (subscribeError) {
+      console.warn(`/api/subscribe: already a member or transient failure: ${subscribeError}`);
+    }
     await redis.set(keys.subscribed(username), '1');
     return c.json({ status: 'success' });
   } catch (error) {

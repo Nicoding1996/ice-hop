@@ -44,11 +44,16 @@ retentive, community-run game:
   solve each day sets a streak-based subreddit flair (e.g. "🔥 7-day streak").
 - Score: moves vs par -> star rating; time is only a tiebreaker.
 - Share: a spoiler-free emoji-grid of your result, via the native share sheet
-  (clipboard fallback) to paste into comments or send to a friend.
+  (clipboard fallback) to paste into comments or send to a friend, plus a one-tap
+  "Comment my score" that posts the same spoiler-free line straight into the
+  post's thread on your behalf (so the comment section fills up without leaving
+  the game).
 - Returning + sign-in: re-opening a solved daily shows a recap that routes you
   onward to Endless / Community (never a silent replay of a beaten board);
   logged-out players get a win-screen "sign in to save your streak / progress"
-  prompt (showLoginPrompt) to convert guests into returning, subscribable players.
+  prompt (showLoginPrompt) to convert guests into returning players, and signed-in
+  players who haven't joined get a one-tap "Join r/{subreddit}" CTA so a fan
+  becomes a subscriber who'll see tomorrow's daily in their feed.
 - Comment hub: each daily post auto-seeds a pinned how-to-play comment that
   invites players to drop their scores, so the comment section is part of play.
 - Leaderboard: daily + all-time, sorted by fewest moves then fastest time.
@@ -63,6 +68,9 @@ retentive, community-run game:
   day) to keep the stream spam-free. This fuses Hook + User Contributions +
   Reddity. (A future step could promote a top-voted community puzzle into a
   curated daily, but today the daily and the community stream are independent.)
+- My puzzles (the creator payoff): a dashboard listing the puzzles you've built
+  with their live solve and upvote counts plus headline totals, so a maker has a
+  concrete reason to come back - watching their puzzle get played and liked.
 
 ## Success criteria (hackathon)
 
