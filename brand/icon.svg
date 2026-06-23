@@ -1,0 +1,74 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ice Hop: a penguin at the water's edge on the ice">
+  <!--
+    Ice Hop community icon. 512x512; export PNG at 512 or 256. Reddit masks the
+    icon to a CIRCLE and clips corners, so the penguin is centered and the scene
+    fills the square. The penguin is the SAME outlined, chunky character as the
+    in-game art (theme.ts drawPenguinInto / the splash hero) so brand + game read
+    as one. A bright ice ground + soft halo keep the dark penguin readable at
+    feed size. Palette = src/client/art/theme.ts (Arctic at Dawn).
+  -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a1d38"/>
+      <stop offset="0.55" stop-color="#143a5c"/>
+      <stop offset="1" stop-color="#1c4a6e"/>
+    </linearGradient>
+    <linearGradient id="ice" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef9ff"/>
+      <stop offset="1" stop-color="#bfe3f2"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.46" r="0.5">
+      <stop offset="0" stop-color="#ff8a5b" stop-opacity="0.5"/>
+      <stop offset="0.6" stop-color="#ff8a5b" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ff8a5b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#eaf6fb" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#eaf6fb" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#sky)"/>
+
+  <g fill="#dff1fb">
+    <circle cx="116" cy="120" r="3" opacity="0.7"/>
+    <circle cx="402" cy="98" r="2.6" opacity="0.6"/>
+    <circle cx="436" cy="186" r="2" opacity="0.5"/>
+    <circle cx="86" cy="210" r="2.2" opacity="0.5"/>
+  </g>
+
+  <!-- sunrise glow on the horizon -->
+  <ellipse cx="256" cy="262" rx="280" ry="150" fill="url(#sun)"/>
+
+  <!-- bright ice ground (luminance + contrast for the penguin) -->
+  <path d="M-20 286 C 130 232, 382 232, 532 286 L532 532 L-20 532 Z" fill="url(#ice)"/>
+  <path d="M-20 286 C 130 232, 382 232, 532 286" stroke="#ffffff" stroke-width="4" fill="none" opacity="0.65"/>
+
+  <!-- water hole at the penguin's feet -->
+  <ellipse cx="256" cy="444" rx="94" ry="30" fill="#1d6f9c"/>
+  <ellipse cx="256" cy="441" rx="76" ry="22" fill="#0e3a55"/>
+  <ellipse cx="224" cy="434" rx="22" ry="7" fill="#7fe0ff" opacity="0.55"/>
+
+  <!-- halo so the dark penguin lifts off the sky -->
+  <ellipse cx="256" cy="250" rx="155" ry="180" fill="url(#halo)"/>
+
+  <!-- penguin: same outlined/chunky character as the game (theme.ts), scaled up -->
+  <g transform="translate(106 58) scale(3)">
+    <ellipse cx="33" cy="114" rx="15" ry="8.5" fill="#f6a623" stroke="#c77f15" stroke-width="2.5" transform="rotate(-12.6 33 114)"/>
+    <ellipse cx="67" cy="114" rx="15" ry="8.5" fill="#f6a623" stroke="#c77f15" stroke-width="2.5" transform="rotate(12.6 67 114)"/>
+    <ellipse cx="12" cy="79" rx="10" ry="26" fill="#2b3440" stroke="#141a22" stroke-width="4" transform="rotate(9.2 12 79)"/>
+    <ellipse cx="88" cy="79" rx="10" ry="26" fill="#2b3440" stroke="#141a22" stroke-width="4" transform="rotate(-9.2 88 79)"/>
+    <ellipse cx="50" cy="73" rx="42" ry="45" fill="#2b3440" stroke="#141a22" stroke-width="4"/>
+    <ellipse cx="50" cy="95" rx="27" ry="29" fill="#f4f9fc"/>
+    <ellipse cx="35" cy="58" rx="11" ry="13" fill="#ffffff"/>
+    <ellipse cx="65" cy="58" rx="11" ry="13" fill="#ffffff"/>
+    <circle cx="37" cy="60" r="7" fill="#15202b"/>
+    <circle cx="63" cy="60" r="7" fill="#15202b"/>
+    <circle cx="40" cy="56" r="2.5" fill="#ffffff"/>
+    <circle cx="66" cy="56" r="2.5" fill="#ffffff"/>
+    <polygon points="44,68 56,68 50,77" fill="#f6a623" stroke="#c77f15" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+
+  <!-- faint inner rim so the circle reads on any feed background -->
+  <circle cx="256" cy="256" r="250" fill="none" stroke="#eaf6fb" stroke-width="3" opacity="0.12"/>
+</svg>
