@@ -62,6 +62,15 @@ export class GameScene extends Scene {
   private selected: number | null = null;
   private busy = false;
   private won = false;
+  /** Whether the player has already posted their score to this post's comment
+   *  thread (so "Comment my score" can't double-post). Reset for each puzzle. */
+  private scorePosted = false;
+  /** Whether the puzzle on screen came straight from the host post, so its
+   *  thread, par and creator match context.postId. True only for a non-forced
+   *  /api/init load; gates "Comment my score" so it can never post a mismatched
+   *  comment after the player navigates to a different puzzle in the same
+   *  webview (Next, a hub community puzzle, or a forced daily inside a UGC post). */
+  private isHostPostPuzzle = false;
   private startTime = 0;
   private shareText = '';
   /** Whether we've recorded the viewer as subscribed (drives the Join CTA). */
@@ -74,6 +83,10 @@ export class GameScene extends Scene {
   private testBoard?: Board;
   private testPar = 0;
   private isTest = false;
+  /** When set, load today's daily explicitly (via /api/init?daily=1) instead of
+   *  the current post's puzzle - so the hub can reach the daily even from inside
+   *  a community-puzzle post (where the post maps to a UGC puzzle). */
+  private forceDaily = false;
   private isEndless = false;
   private endlessTier: EndlessTier = 'easy';
   private endlessSolved = 0;
@@ -117,6 +130,7 @@ export class GameScene extends Scene {
     community?: { id: string; board: Board; par: number; creator: string; votes: number; solves: number };
     test?: { board: Board; par: number };
     endless?: { tier: EndlessTier };
+    daily?: boolean;
   }): void {
     this.communityPuzzle = data?.community;
     this.isCommunity = Boolean(data?.community);
@@ -125,6 +139,9 @@ export class GameScene extends Scene {
     this.isTest = Boolean(data?.test);
     this.isEndless = Boolean(data?.endless);
     this.endlessTier = data?.endless?.tier ?? 'easy';
+    this.forceDaily = Boolean(data?.daily);
+    this.scorePosted = false;
+    this.isHostPostPuzzle = false;
     this.endlessSolved = 0;
     // Scene instances are reused across restarts, so reset transient state here.
     this.pieces = [];
@@ -334,9 +351,32 @@ export class GameScene extends Scene {
       return;
     }
     try {
-      const response = await this.fetchWithTimeout('/api/init');
+      const url = this.forceDaily ? '/api/init?daily=1' : '/api/init';
+      const response = await this.fetchWithTimeout(url);
       if (!response.ok) throw new Error(`init failed: ${response.status}`);
       const data: InitResponse = await response.json();
+      // The puzzle matches the host post (its thread, par and creator) only on a
+      // non-forced load. A forced daily (?daily=1) reached from inside a UGC post
+      // must NOT be treated as the host post's own puzzle.
+      this.isHostPostPuzzle = !this.forceDaily;
+      if (data.kind === 'ugc') {
+        // This post *is* a community puzzle: play it as one, so winning offers
+        // Upvote / Next / Back to daily and the solve is recorded + credited to
+        // its maker (the same flow as the in-app community stream).
+        this.isCommunity = true;
+        this.communityPuzzle = { ...data.puzzle };
+        this.subredditName = data.subredditName ?? '';
+        this.board = data.puzzle.board;
+        this.pieces = data.puzzle.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+        this.par = data.puzzle.par;
+        this.date = '';
+        this.moves = 0;
+        this.startTime = Date.now();
+        this.layout();
+        this.renderBoard();
+        this.updateHud();
+        return;
+      }
       this.board = data.board;
       this.pieces = data.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.par = data.par;
@@ -1270,6 +1310,22 @@ export class GameScene extends Scene {
       onClick: () => void this.copyResult(copyButton),
     });
 
+    // Drop the result straight into this post's comment thread (the comment
+    // scoreboard / "how'd you do it in N?" culture), authored by the player.
+    // Only when this is the host post's own daily, so the comment's par + thread
+    // always match what was solved (never a daily reached from inside a UGC post).
+    let postScoreButton: PillButton | undefined;
+    if (this.isHostPostPuzzle) {
+      postScoreButton = makePill(this, {
+        label: 'Comment my score',
+        variant: 'secondary',
+        x: w / 2,
+        onClick: () => {
+          if (postScoreButton) void this.postScore(postScoreButton);
+        },
+      });
+    }
+
     // Forward navigation so the daily isn't a dead end (keeps the "one more"
     // loop). Endless is always full of fresh puzzles, so it's the better
     // post-daily CTA than the (possibly empty) community stream.
@@ -1288,7 +1344,9 @@ export class GameScene extends Scene {
     });
     homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
 
-    this.fxLayer.add([status, copyButton, morePuzzlesButton, homeButton]);
+    const winButtons: Phaser.GameObjects.GameObject[] = [status, copyButton, morePuzzlesButton, homeButton];
+    if (postScoreButton) winButtons.push(postScoreButton);
+    this.fxLayer.add(winButtons);
 
     // At most one CTA shows: a sign-in nudge for guests, otherwise a join nudge
     // for signed-in non-members. Capture whichever renders so it joins the
@@ -1302,6 +1360,7 @@ export class GameScene extends Scene {
     // the bottom keeps them clear of the leaderboard no matter how many lines it
     // grows to once submitSolve resolves.
     const stack: PillButton[] = [morePuzzlesButton, copyButton];
+    if (postScoreButton) stack.push(postScoreButton);
     if (cta) stack.push(cta);
     const stackTop = this.stackFromBottom(stack);
 
@@ -1400,6 +1459,22 @@ export class GameScene extends Scene {
       });
       buttons.push(voteButton);
     }
+    // Let the solver drop their score into the puzzle's thread (creator feedback
+    // + the "beat my count" loop). Only for other people's puzzles, and only when
+    // this IS the host post's puzzle (not a "Next" puzzle in the same webview),
+    // so the comment lands in the right thread with the right par/creator.
+    let scoreButton: PillButton | undefined;
+    if (!isMine && this.isHostPostPuzzle) {
+      scoreButton = makePill(this, {
+        label: 'Comment my score',
+        variant: 'secondary',
+        minWidth: Math.min(240, contentW),
+        onClick: () => {
+          if (scoreButton) void this.postScore(scoreButton);
+        },
+      });
+      buttons.push(scoreButton);
+    }
     const moreButton = makePill(this, {
       label: 'Next puzzle \u25B6',
       variant: 'primary',
@@ -1410,7 +1485,7 @@ export class GameScene extends Scene {
       label: 'Back to daily',
       variant: 'ghost',
       size: 'sm',
-      onClick: () => fadeToScene(this, 'GameScene'),
+      onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
     buttons.push(moreButton, dailyButton);
 
@@ -1709,6 +1784,34 @@ export class GameScene extends Scene {
     }
   }
 
+  /** Post the player's score into this post's comment thread, authored by the
+   *  player (the server posts with runAs: 'USER'). Spoiler-free, worded as moves
+   *  vs par. The scorePosted guard blocks a double-tap within this win screen. */
+  private async postScore(button: PillButton): Promise<void> {
+    if (this.scorePosted) return;
+    // Commenting needs an account; prompt right on the tap (intent-driven).
+    if (!context.username) {
+      showLoginPrompt();
+      return;
+    }
+    button.setLabelText('Posting\u2026').setEnabled(false);
+    try {
+      const response = await fetch('/api/comment-score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ moves: this.moves }),
+      });
+      if (!response.ok) throw new Error(`comment failed: ${response.status}`);
+      this.scorePosted = true;
+      button.setLabelText('Posted to comments \u2713');
+      showToast('Your score is in the comments!');
+    } catch (error) {
+      console.error(error);
+      button.setLabelText('Comment my score').setEnabled(true);
+      showToast('Could not post your score.');
+    }
+  }
+
   /** Hand off to a fresh GameScene for the given community puzzle. */
   private startCommunity(sub: UgcSubmission): void {
     fadeToScene(this, 'GameScene', {
@@ -1796,7 +1899,7 @@ export class GameScene extends Scene {
       label: 'Back to daily',
       variant: 'ghost',
       size: 'sm',
-      onClick: () => fadeToScene(this, 'GameScene'),
+      onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
     stackColumn([endlessBtn, buildBtn, dailyBtn], w / 2, h * 0.5, SPACE.md);
     this.fxLayer.add([overlay, card, panel, endlessBtn, buildBtn, dailyBtn]);

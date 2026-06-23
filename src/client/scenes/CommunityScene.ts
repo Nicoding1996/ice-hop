@@ -99,7 +99,7 @@ export class CommunityScene extends Scene {
       size: 'sm',
       x: w / 2,
       y: h * 0.69,
-      onClick: () => fadeToScene(this, 'GameScene'),
+      onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
   }
 }

@@ -86,7 +86,7 @@ export class HomeScene extends Scene {
       variant: 'primary',
       size: 'lg',
       minWidth: wide,
-      onClick: () => fadeToScene(this, 'GameScene'),
+      onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
     const endless = makePill(this, {
       label: 'Endless puzzles',

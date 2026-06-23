@@ -5,6 +5,7 @@ import { boardSignature } from '../../shared/game/board';
 import { orderCommunityStream } from '../../shared/community';
 import { validateSubmission } from '../../shared/solver/validate';
 import { todayUtc } from '../../shared/date';
+import { createUgcPost } from './post';
 import { keys } from './keys';
 
 /** Max puzzles one user may submit per UTC day (anti-spam). */
@@ -69,6 +70,19 @@ export const submitPuzzle = async (board: Board): Promise<SubmitPuzzleResponse> 
   await redis.incrBy(dailyKey, 1);
   // The per-day counter only matters for "today"; let it auto-clean.
   if (todayCount === 0) await redis.expire(dailyKey, 60 * 60 * 48);
+
+  // Publish the puzzle as its own creator-credited feed post so it can reach
+  // people in their feed (the community/retention loop). Best-effort: a posting
+  // failure must never fail an already-accepted submission - the puzzle is still
+  // in the in-app community stream regardless. We re-store the submission with
+  // its postId so we can link back to the post later.
+  try {
+    const postId = await createUgcPost(submission);
+    await redis.set(keys.ugcSubmission(id), JSON.stringify({ ...submission, postId }));
+  } catch (error) {
+    console.error(`Failed to create UGC feed post for ${id}: ${error}`);
+  }
+
   return { ok: true, id, par: validation.par };
 };
 

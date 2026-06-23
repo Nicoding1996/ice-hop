@@ -5,6 +5,10 @@ export const keys = {
   dailyPuzzle: (date: string): string => `daily:5:${date}`,
   /** Maps a post id to the puzzle date it shows. */
   postDate: (postId: string): string => `post:${postId}`,
+  /** Maps a feed post id to the UGC submission id it shows (a community-puzzle
+   *  post). Distinct prefix from postDate so daily and community posts don't
+   *  collide. */
+  ugcPost: (postId: string): string => `post:ugc:${postId}`,
   /** A user's solve record for a given day (JSON). */
   solve: (date: string, user: string): string => `solve:${date}:${user}`,
   /** Per-day leaderboard (sorted set). */

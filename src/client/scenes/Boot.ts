@@ -10,6 +10,18 @@ export class Boot extends Scene {
 
   create(): void {
     initAudioPrefs();
-    this.scene.start('GameScene');
+    // The splash's "Build" button stashes an intent here before expanding the
+    // view (the inline splash and expanded game share the app's webview origin,
+    // so localStorage carries across). Read it once and clear it so a stale flag
+    // can't misroute a later launch; default to playing the current post.
+    let launch: string | null = null;
+    try {
+      launch = localStorage.getItem('icehop.launch');
+      if (launch) localStorage.removeItem('icehop.launch');
+    } catch {
+      /* localStorage unavailable - just play the post */
+    }
+    if (launch === 'build') this.scene.start('EditorScene');
+    else this.scene.start('GameScene');
   }
 }

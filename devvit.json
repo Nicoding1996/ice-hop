@@ -20,7 +20,7 @@
     "redis": true,
     "reddit": {
       "enable": true,
-      "asUser": ["SUBSCRIBE_TO_SUBREDDIT"]
+      "asUser": ["SUBSCRIBE_TO_SUBREDDIT", "SUBMIT_COMMENT"]
     }
   },
   "menu": {

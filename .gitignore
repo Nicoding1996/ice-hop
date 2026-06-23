@@ -5,3 +5,9 @@ dist/
 .env.*
 .DS_Store
 .devvit/
+
+# Vite transpiles the TS config to a timestamped temp file; can be orphaned if the process is killed
+vite.config.ts.timestamp-*
+
+# Accidental Windows shell redirect to PowerShell's null device under cmd
+$null

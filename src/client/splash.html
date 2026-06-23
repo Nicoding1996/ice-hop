@@ -25,7 +25,7 @@
     </div>
 
     <main class="wrap">
-      <div class="hero">
+      <div class="hero" id="hero">
         <svg
           class="hero-art"
           viewBox="0 0 220 210"
@@ -78,9 +78,13 @@
 
       <h1 class="title">ICE HOP</h1>
       <p class="tag">Get every penguin into the water!</p>
-      <button class="start" id="start-button">Play today's puzzle</button>
+      <p class="byline" id="byline" hidden></p>
+      <div class="actions">
+        <button class="start" id="start-button">Play today's puzzle</button>
+        <button class="build" id="build-button">Build a puzzle</button>
+      </div>
       <p class="meta" id="meta">Daily puzzle</p>
-      <p class="how">Tap a penguin to hop. Drag a seal to slide. Get every penguin into the water.</p>
+      <p class="how" id="how">Tap a penguin to hop. Drag a seal to slide. Get every penguin into the water.</p>
     </main>
 
     <script type="module" src="splash.ts" defer></script>

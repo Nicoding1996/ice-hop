@@ -176,6 +176,56 @@ body {
   box-shadow: 0 6px 16px rgba(255, 112, 67, 0.35);
 }
 
+.actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+/* Secondary, cool-toned action so Play stays the single warm accent. */
+.build {
+  border: 1.5px solid rgba(127, 224, 255, 0.5);
+  border-radius: 999px;
+  padding: 12px 28px;
+  font-size: clamp(14px, 4.2vw, 16px);
+  font-weight: 700;
+  color: #eaf6fb;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.build:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.build:active {
+  transform: translateY(1px);
+}
+
+/* Creator credit on a community-puzzle post (cool + quiet, not competing with Play). */
+.byline {
+  margin: 2px 0 0;
+  font-size: clamp(13px, 4vw, 15px);
+  font-weight: 700;
+  color: #cfe8f4;
+  opacity: 0.9;
+}
+
+.byline[hidden] {
+  display: none;
+}
+
+/* The board preview swapped into the hero for a community-puzzle post. */
+.preview-art {
+  width: clamp(150px, 52vw, 240px);
+  height: auto;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
+}
+
 .meta {
   margin: 6px 0 0;
   font-size: 12.5px;

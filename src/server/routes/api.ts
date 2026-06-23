@@ -8,12 +8,17 @@ import type {
   LeaderboardResponse,
   SolveResultDTO,
   SolveSubmission,
+  UgcSubmission,
+  CommentScoreRequest,
+  CommentScoreResponse,
 } from '../../shared/api';
 import { getOrCreateDailyPuzzle } from '../core/daily';
 import { generateEndlessFallback, getEndlessSolved, getEndlessStats, popPooledPuzzle, recordEndlessSolve } from '../core/endless';
 import { getDailyLeaderboard, recordSolve } from '../core/leaderboard';
 import { keys } from '../core/keys';
 import { todayUtc } from '../../shared/date';
+import { buildScoreComment } from '../../shared/share';
+import { computeStars } from '../../shared/scoring';
 import { ugc } from './ugc';
 
 type ErrorResponse = { status: 'error'; message: string };
@@ -27,20 +32,57 @@ export const api = new Hono();
 // User-generated puzzle routes: /api/ugc/{submit,list,vote}
 api.route('/ugc', ugc);
 
-// Returns the puzzle for the current post (or today's, as a fallback) plus the
-// viewer's username and whether they have already solved it.
+// Returns the puzzle for the current post plus the viewer's username and solve
+// state. A community-puzzle feed post resolves to its UGC puzzle; a daily post
+// (or `?daily=1`, which forces today's daily regardless of the current post)
+// resolves to the daily. `?daily=1` lets the hub reach the daily even from
+// inside a community post.
 api.get('/init', async (c) => {
   try {
     const { postId } = context;
+    const forceDaily = c.req.query('daily') === '1';
+    const username = (await reddit.getCurrentUsername()) ?? 'anon';
 
+    // A community-puzzle feed post: hand back that puzzle (with live vote/solve
+    // counts) so the splash can preview it and the game can play it.
+    if (!forceDaily && postId) {
+      const ugcId = await redis.get(keys.ugcPost(postId));
+      if (ugcId) {
+        const raw = await redis.get(keys.ugcSubmission(ugcId));
+        if (raw) {
+          const sub: UgcSubmission = JSON.parse(raw);
+          const [votesRaw, solvesRaw, playedScore] = await Promise.all([
+            redis.zScore(keys.ugcIndex(), ugcId),
+            redis.hGet(keys.ugcSolves(), ugcId),
+            username !== 'anon' ? redis.zScore(keys.ugcPlayed(username), ugcId) : Promise.resolve(undefined),
+          ]);
+          return c.json<InitResponse>({
+            type: 'init',
+            kind: 'ugc',
+            puzzle: {
+              id: sub.id,
+              board: sub.board,
+              par: sub.par,
+              creator: sub.creator,
+              votes: typeof votesRaw === 'number' ? votesRaw : 0,
+              solves: solvesRaw ? parseInt(solvesRaw, 10) : 0,
+            },
+            username,
+            solved: typeof playedScore === 'number',
+            subredditName: context.subredditName,
+          });
+        }
+      }
+    }
+
+    // Daily puzzle: the post's mapped date, or today when forced/unmapped.
     let date = todayUtc();
-    if (postId) {
+    if (!forceDaily && postId) {
       const mapped = await redis.get(keys.postDate(postId));
       if (mapped) date = mapped;
     }
 
     const puzzle = await getOrCreateDailyPuzzle(date);
-    const username = (await reddit.getCurrentUsername()) ?? 'anon';
     const solveRecord = await redis.get(keys.solve(date, username));
     let solvedResult: { moves: number; stars: number } | undefined;
     if (solveRecord) {
@@ -51,6 +93,7 @@ api.get('/init', async (c) => {
 
     return c.json<InitResponse>({
       type: 'init',
+      kind: 'daily',
       date,
       board: puzzle.board,
       par: puzzle.par,
@@ -112,6 +155,57 @@ api.post('/subscribe', async (c) => {
     console.error(`/api/subscribe failed: ${error}`);
     const message = error instanceof Error ? error.message : 'subscribe failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 500);
+  }
+});
+
+// Posts the player's score into the CURRENT post's comment thread, authored by
+// the player (runAs: 'USER', gated by the SUBMIT_COMMENT asUser scope). Only
+// fires on an explicit "Comment my score" tap. The text is composed server-side
+// from the player's move count + the puzzle's par, so it stays spoiler-free and
+// consistent; a community puzzle credits its maker.
+api.post('/comment-score', async (c) => {
+  try {
+    const { postId } = context;
+    if (!postId) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'no post in context' }, 400);
+    }
+    const username = await reddit.getCurrentUsername();
+    if (!username) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
+    }
+
+    const body = await c.req.json<CommentScoreRequest>();
+    const moves = Math.floor(Number(body.moves));
+    if (!Number.isFinite(moves) || moves <= 0) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid moves' }, 400);
+    }
+
+    // Resolve what this post shows -> par (+ creator for a community puzzle),
+    // mirroring /api/init so the comment matches the puzzle being played.
+    let par: number;
+    let creator: string | undefined;
+    const ugcId = await redis.get(keys.ugcPost(postId));
+    if (ugcId) {
+      const raw = await redis.get(keys.ugcSubmission(ugcId));
+      if (!raw) {
+        return c.json<ErrorResponse>({ status: 'error', message: 'puzzle not found' }, 404);
+      }
+      const sub: UgcSubmission = JSON.parse(raw);
+      par = sub.par;
+      creator = sub.creator;
+    } else {
+      const mapped = await redis.get(keys.postDate(postId));
+      const puzzle = await getOrCreateDailyPuzzle(mapped ?? todayUtc());
+      par = puzzle.par;
+    }
+
+    const text = buildScoreComment({ moves, par, stars: computeStars(moves, par), creator });
+    await reddit.submitComment({ id: postId, text, runAs: 'USER' });
+    return c.json<CommentScoreResponse>({ type: 'commentScore', ok: true });
+  } catch (error) {
+    console.error(`/api/comment-score failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'comment failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });
 
