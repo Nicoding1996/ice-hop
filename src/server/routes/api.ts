@@ -114,18 +114,32 @@ api.get('/init', async (c) => {
 api.post('/solve', async (c) => {
   try {
     const body = await c.req.json<SolveSubmission>();
-    if (typeof body.moves !== 'number' || typeof body.timeMs !== 'number' || !body.date) {
+    if (
+      typeof body.moves !== 'number' ||
+      !Number.isFinite(body.moves) ||
+      typeof body.timeMs !== 'number' ||
+      !Number.isFinite(body.timeMs) ||
+      !body.date
+    ) {
       return c.json<ErrorResponse>({ status: 'error', message: 'invalid submission' }, 400);
     }
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
     const puzzle = await getOrCreateDailyPuzzle(body.date);
-    const outcome = await recordSolve(body.date, username, puzzle.par, body.moves, body.timeMs);
+    // A real solve can never use fewer moves than par (par is the solver's
+    // proven optimum), so reject impossible counts before they reach the
+    // leaderboard. Floor/clamp the rest so a garbled payload can't poison it.
+    const moves = Math.floor(body.moves);
+    const timeMs = Math.max(0, Math.floor(body.timeMs));
+    if (moves < puzzle.par) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid move count' }, 400);
+    }
+    const outcome = await recordSolve(body.date, username, puzzle.par, moves, timeMs);
 
     return c.json<SolveResultDTO>({
       accepted: true,
       stars: outcome.stars,
       par: puzzle.par,
-      moves: body.moves,
+      moves,
       bestMoves: outcome.bestMoves,
       rank: outcome.rank,
       totalPlayers: outcome.totalPlayers,

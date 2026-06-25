@@ -1782,6 +1782,10 @@ export class GameScene extends Scene {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
+      // A non-OK status is a transient failure: fall through to the catch so the
+      // button stays enabled (retryable). A definitive ok:false from the server
+      // (already voted / own puzzle) comes back 200 and disables below.
+      if (!response.ok) throw new Error(`vote failed: ${response.status}`);
       const data: VoteResponse = await response.json();
       button.setLabelText(data.ok ? `Upvoted! (${data.votes})` : data.reason ?? 'Already upvoted');
       button.setEnabled(false);

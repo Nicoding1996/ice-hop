@@ -1,11 +1,15 @@
-<svg width="1920" height="384" viewBox="0 0 1920 384" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ice Hop: a colony of penguins heading into the water at dawn">
+<svg width="1920" height="384" viewBox="0 0 1920 384" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ice Hop: penguins heading into the water at dawn">
   <!--
-    Ice Hop subreddit banner, 1920x384 (5:1). Reddit centers banners horizontally
-    and crops them on smaller screens, so the wordmark + tagline are centered and
-    the scene reads even if edges are trimmed. Export PNG at 1920x384 and set the
-    community banner background to #0a1d38. Penguins are the SAME outlined, chunky
-    character as the in-game art (theme.ts drawPenguinInto / drawPenguinSwimmingInto)
-    so brand + game read as one. Palette = src/client/art/theme.ts.
+    Ice Hop subreddit banner, 1920x384. IMPORTANT - Reddit shows community banners
+    as a wide, SHORT strip (its own dialog asks for ~1072x128 desktop / 1080x128
+    mobile, about 8.4:1) and crops the TOP and BOTTOM of a taller image while
+    centering it horizontally. So only the vertical middle ~60% is guaranteed
+    visible: roughly y77-307 of this 384-tall canvas. All key art (wordmark,
+    tagline, penguins, seal, water hole) is kept inside ~y68-302; the sky above and
+    the deep water below are deliberate "bleed" that is safe to crop. The canvas
+    stays 1920 wide so the image still fills new-Reddit's taller banner area without
+    cropping the sides. Export PNG at 1920x384; community banner background #0a1d38.
+    Penguins/seal/hole match the in-game art (theme.ts). Palette = theme.ts.
   -->
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
@@ -56,48 +60,46 @@
   <rect width="1920" height="384" fill="url(#sky)"/>
   <ellipse cx="960" cy="0" rx="1100" ry="240" fill="url(#sun)"/>
 
-  <!-- aurora -->
+  <!-- aurora (kept high, in the top bleed) -->
   <g filter="url(#soft)">
-    <path d="M-40 90 Q 480 18 980 86 T 1960 92" stroke="#7fe0ff" stroke-width="34" fill="none" opacity="0.10"/>
-    <path d="M-40 140 Q 540 80 1040 140 T 1960 150" stroke="#9af0d4" stroke-width="26" fill="none" opacity="0.06"/>
+    <path d="M-40 45 Q 480 -27 980 41 T 1960 47" stroke="#7fe0ff" stroke-width="34" fill="none" opacity="0.10"/>
+    <path d="M-40 95 Q 540 35 1040 95 T 1960 105" stroke="#9af0d4" stroke-width="26" fill="none" opacity="0.06"/>
   </g>
 
-  <!-- stars -->
+  <!-- stars (upper sky) -->
   <g fill="#dff1fb">
-    <circle cx="150" cy="52" r="2.4" opacity="0.7"/>
-    <circle cx="300" cy="96" r="1.6" opacity="0.5"/>
-    <circle cx="520" cy="40" r="2" opacity="0.6"/>
-    <circle cx="760" cy="70" r="1.5" opacity="0.45"/>
-    <circle cx="1180" cy="48" r="2.2" opacity="0.7"/>
-    <circle cx="1420" cy="86" r="1.6" opacity="0.5"/>
-    <circle cx="1650" cy="44" r="2" opacity="0.6"/>
-    <circle cx="1800" cy="96" r="1.5" opacity="0.45"/>
+    <circle cx="150" cy="40" r="2.4" opacity="0.7"/>
+    <circle cx="300" cy="68" r="1.6" opacity="0.5"/>
+    <circle cx="520" cy="34" r="2" opacity="0.6"/>
+    <circle cx="760" cy="52" r="1.5" opacity="0.45"/>
+    <circle cx="1180" cy="38" r="2.2" opacity="0.7"/>
+    <circle cx="1420" cy="62" r="1.6" opacity="0.5"/>
+    <circle cx="1650" cy="36" r="2" opacity="0.6"/>
+    <circle cx="1800" cy="70" r="1.5" opacity="0.45"/>
   </g>
 
-  <!-- distant snowy peaks -->
-  <path d="M0 286 L220 214 L360 268 L560 196 L760 270 L900 232 L1060 282 L1260 210 L1460 272 L1660 214 L1860 276 L1920 250 L1920 300 L0 300 Z" fill="#21496e" opacity="0.85"/>
+  <!-- distant snowy peaks (lowered + shortened so they sit behind the ice line,
+       clear of the wordmark) -->
+  <path d="M0 250 L240 210 L420 244 L640 206 L860 240 L1080 212 L1300 242 L1520 208 L1740 240 L1920 214 L1920 266 L0 266 Z" fill="#21496e" opacity="0.85"/>
   <g fill="#cfe6f2" opacity="0.5">
-    <path d="M560 196 L590 222 L530 222 Z"/>
-    <path d="M1260 210 L1292 238 L1228 238 Z"/>
-    <path d="M1660 214 L1690 240 L1630 240 Z"/>
+    <path d="M640 206 L668 232 L612 232 Z"/>
+    <path d="M1080 212 L1108 238 L1052 238 Z"/>
+    <path d="M1520 208 L1548 234 L1492 234 Z"/>
   </g>
 
-  <!-- back drift + front ice sheet -->
-  <path d="M-20 318 C 360 290, 760 306, 1120 296 C 1480 286, 1760 310, 1940 300 L1940 384 L-20 384 Z" fill="#cfe8f4"/>
-  <path d="M-20 336 C 420 308, 900 332, 1240 326 C 1560 320, 1780 340, 1940 332 L1940 384 L-20 384 Z" fill="url(#ice)"/>
-  <path d="M-20 336 C 420 308, 900 332, 1240 326 C 1560 320, 1780 340, 1940 332" stroke="#ffffff" stroke-width="3" fill="none" opacity="0.6"/>
+  <!-- back drift + front ice sheet, raised so the characters stand inside the
+       visible safe band; the ice continues down to the canvas bottom as bleed -->
+  <path d="M-20 256 C 360 240, 760 252, 1120 246 C 1480 240, 1760 258, 1940 250 L1940 384 L-20 384 Z" fill="#cfe8f4"/>
+  <path d="M-20 274 C 420 258, 900 276, 1240 270 C 1560 266, 1780 282, 1940 276 L1940 384 L-20 384 Z" fill="url(#ice)"/>
+  <path d="M-20 274 C 420 258, 900 276, 1240 270 C 1560 266, 1780 282, 1940 276" stroke="#ffffff" stroke-width="3" fill="none" opacity="0.6"/>
   <g stroke="#7fb4d4" stroke-width="2" opacity="0.35" fill="none">
-    <path d="M250 356 q 60 -8 130 -2"/>
-    <path d="M1500 360 q 70 -8 150 0"/>
+    <path d="M250 296 q 60 -8 130 -2"/>
+    <path d="M1500 300 q 70 -8 150 0"/>
   </g>
 
-  <!-- the water hole, with a penguin bobbing in the CENTRE of it. Composed like the
-       classic "animal popping out of a hole" (groundhog / meerkat): the figure is
-       centred in the opening and the NEAR rim of the water is drawn OVER its lower
-       body, so the penguin reads as rising from the middle of the pool rather than
-       perched on the back edge. Penguin cues kept: orange beak, countershaded throat
-       (only its top arc shows, so no "grin"), flipper tips, big eyes. -->
-  <g>
+  <!-- the water hole + bobbing penguin, scaled down and moved up onto the ice line
+       at the right (same artwork as before, just wrapped in a transform) -->
+  <g transform="translate(579,4) scale(0.74)">
     <!-- wet ice rim (the hole opening) -->
     <ellipse cx="1150" cy="360" rx="94" ry="29" fill="#9ccfe2"/>
     <!-- back pool: the dark water the penguin rises out of -->
@@ -105,7 +107,7 @@
     <!-- flipper tips, splayed at the surface, behind the body -->
     <ellipse cx="1104" cy="343" rx="10" ry="21" fill="#2b3440" stroke="#141a22" stroke-width="3" transform="rotate(28 1104 343)"/>
     <ellipse cx="1196" cy="343" rx="10" ry="21" fill="#2b3440" stroke="#141a22" stroke-width="3" transform="rotate(-28 1196 343)"/>
-    <!-- head + shoulders, centred in the hole and sat a little lower -->
+    <!-- head + shoulders, centred in the hole -->
     <ellipse cx="1150" cy="345" rx="44" ry="46" fill="#2b3440" stroke="#141a22" stroke-width="3.5"/>
     <!-- white chest (its lower curve is hidden by the near rim, so only the chest
          dome shows - never a smile) -->
@@ -119,15 +121,13 @@
     <circle cx="1166" cy="322" r="2.6" fill="#ffffff"/>
     <!-- orange beak, dipping toward the water -->
     <polygon points="1140,337 1160,337 1150,353" fill="#f6a623" stroke="#c77f15" stroke-width="2" stroke-linejoin="round"/>
-    <!-- near rim of the water, drawn OVER the lower body so the penguin sits IN the
-         centre of the hole -->
+    <!-- near rim of the water, drawn OVER the lower body -->
     <ellipse cx="1150" cy="370" rx="81" ry="19" fill="#0e3a55"/>
   </g>
 
-  <!-- a seal lounging on the ice, far left: the same character as the board
-       (theme.ts drawSealInto) - body, lighter belly, tail flukes, front flipper,
-       raised head with muzzle/nose/whiskers. Rests on the front ice sheet. -->
-  <g>
+  <!-- a seal lounging on the ice, far left (same character, scaled down + raised
+       onto the new ice line) -->
+  <g transform="translate(60,-5) scale(0.85)">
     <ellipse cx="154" cy="287" rx="17" ry="10" fill="#7d8c9b" stroke="#3a4654" stroke-width="3" transform="rotate(31.5 154 287)"/>
     <ellipse cx="154" cy="313" rx="17" ry="10" fill="#7d8c9b" stroke="#3a4654" stroke-width="3" transform="rotate(-31.5 154 313)"/>
     <ellipse cx="218" cy="300" rx="70" ry="31" fill="#7d8c9b" stroke="#3a4654" stroke-width="4"/>
@@ -145,19 +145,19 @@
     <line x1="309" y1="296" x2="330" y2="300" stroke="#aebecb" stroke-width="1.5" stroke-linecap="round"/>
   </g>
 
-  <!-- the colony heading for the water -->
-  <use href="#peng" transform="translate(474 225) scale(0.92)"/>
-  <use href="#peng" transform="translate(613 252) scale(0.70)"/>
-  <use href="#peng" transform="translate(1340 239) scale(0.80)"/>
+  <!-- the colony heading for the water (smaller, raised so feet sit on the ice
+       line and tops stay clear of the tagline) -->
+  <use href="#peng" transform="translate(470 178) scale(0.74)"/>
+  <use href="#peng" transform="translate(600 199) scale(0.58)"/>
+  <use href="#peng" transform="translate(1240 191) scale(0.66)"/>
 
-  <!-- wordmark + tagline (centered for mobile crop safety) -->
-  <ellipse cx="960" cy="150" rx="560" ry="150" fill="url(#vig)"/>
+  <!-- wordmark + tagline (centered for crop safety; sized to fit the short strip).
+       Pushed down from the top edge so the caps clear the live crop line. -->
+  <ellipse cx="960" cy="136" rx="560" ry="104" fill="url(#vig)"/>
   <g text-anchor="middle" font-family="'Trebuchet MS','Segoe UI',Verdana,sans-serif">
-    <!-- shadow as an offset duplicate. Solid-fill text rasterizes in any
-         converter; a gradient fill + filter on text is what made the wordmark
-         vanish in PNG export (the solid-fill tagline rendered fine). -->
-    <text x="960" y="176" font-size="128" font-weight="800" letter-spacing="6" fill="#06151f" opacity="0.45">ICE HOP</text>
-    <text x="960" y="170" font-size="128" font-weight="800" letter-spacing="6" fill="#ffffff">ICE HOP</text>
-    <text x="960" y="226" font-size="34" font-weight="600" letter-spacing="1.5" fill="#cfe8f4">Get every penguin into the water!</text>
+    <!-- shadow as an offset duplicate; solid fills rasterize reliably in PNG export -->
+    <text x="960" y="182" font-size="100" font-weight="800" letter-spacing="5" fill="#06151f" opacity="0.45">ICE HOP</text>
+    <text x="960" y="176" font-size="100" font-weight="800" letter-spacing="5" fill="#ffffff">ICE HOP</text>
+    <text x="960" y="208" font-size="30" font-weight="600" letter-spacing="1.5" fill="#cfe8f4">Get every penguin into the water!</text>
   </g>
 </svg>
