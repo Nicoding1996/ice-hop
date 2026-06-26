@@ -7,6 +7,7 @@ import { CommunityScene } from './scenes/CommunityScene';
 import { EndlessScene } from './scenes/EndlessScene';
 import { HomeScene } from './scenes/HomeScene';
 import { MyPuzzlesScene } from './scenes/MyPuzzlesScene';
+import { initAudioPrefs, installAudioLifecycle } from './audio';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: AUTO,
@@ -73,6 +74,10 @@ const ensureFonts = async (): Promise<void> => {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Load audio prefs and arm the music lifecycle before the first frame, so a
+  // returning player who enabled music has it resume on their first tap.
+  initAudioPrefs();
+  installAudioLifecycle();
   void ensureFonts().finally(() => {
     const game = startGame('game-container');
     keepAwake(game);

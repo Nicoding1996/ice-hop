@@ -14,12 +14,13 @@ import {
   PillButton,
 } from '../art/theme';
 import { showHowToPlay } from '../howToPlay';
-import { isSoundOn, setSoundOn, playHop } from '../audio';
+import { isSoundOn, setSoundOn, isMusicOn, setMusicOn, playHop } from '../audio';
 
 /** The hub: pick the daily, build a puzzle, or browse the community stream. */
 export class HomeScene extends Scene {
   private bgLayer!: Phaser.GameObjects.Container;
   private soundButton!: PillButton;
+  private musicButton!: PillButton;
   private content: Phaser.GameObjects.GameObject[] = [];
   /** The "How to play" overlay, when open (so we can close it on rebuild). */
   private rules?: Phaser.GameObjects.Container;
@@ -137,6 +138,19 @@ export class HomeScene extends Scene {
       SPACE.md + this.soundButton.height / 2
     );
 
+    // Music toggle sits just under the sound chip (top-right). Off by default
+    // so a feed scroll never starts a soundtrack uninvited.
+    this.musicButton = makePill(this, {
+      label: this.musicLabel(),
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.toggleMusic(),
+    });
+    this.musicButton.setPosition(
+      w - SPACE.md - this.musicButton.width / 2,
+      this.soundButton.y + this.soundButton.height / 2 + SPACE.sm + this.musicButton.height / 2
+    );
+
     const help = makePill(this, {
       label: '?',
       variant: 'chip',
@@ -146,7 +160,7 @@ export class HomeScene extends Scene {
     });
     help.setPosition(SPACE.md + help.width / 2, SPACE.md + help.height / 2);
 
-    this.content.push(peng, title, tag, ...buttons, this.soundButton, help);
+    this.content.push(peng, title, tag, ...buttons, this.soundButton, this.musicButton, help);
   }
 
   private toggleSound(): void {
@@ -158,6 +172,16 @@ export class HomeScene extends Scene {
 
   private soundLabel(): string {
     return isSoundOn() ? 'Sound: on' : 'Sound: off';
+  }
+
+  private toggleMusic(): void {
+    const on = !isMusicOn();
+    setMusicOn(on); // starts / fades out the ambient bed
+    this.musicButton.setLabelText(this.musicLabel());
+  }
+
+  private musicLabel(): string {
+    return isMusicOn() ? 'Music: on' : 'Music: off';
   }
 
   /** Open the shared "How to play" overlay (the same card the play screen uses).
