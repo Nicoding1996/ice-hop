@@ -1,5 +1,6 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
-import type { InitResponse, InitUgcPuzzle } from '../shared/api';
+import type { InitResponse, InitUgcPuzzle, SplashPostData } from '../shared/api';
+import { POST_DATA_SPLASH_KEY } from '../shared/api';
 import type { Board } from '../shared/game/types';
 import type { Difficulty } from '../shared/solver/difficulty';
 
@@ -244,37 +245,53 @@ const DIFFICULTY_DOT: Record<Difficulty, string> = {
   EXPERT: '#b59bff',
 };
 
-const showUgcPost = (puzzle: InitUgcPuzzle, solved: boolean): void => {
+// Whether the community board has been painted yet (from postData or /api/init),
+// so the two paths never double-render it.
+let boardRendered = false;
+
+// The static half of a community card (board + difficulty badge + credit + how).
+// Drawn from postData on first paint when available, else from /api/init.
+const renderUgcStatic = (board: Board, difficulty: Difficulty, creator: string): void => {
+  if (boardRendered) return;
   // Switch the splash into "community puzzle" layout: the board becomes the
   // hero (bigger), the wordmark shrinks, and the tagline gives way to credit.
   document.body.classList.add('ugc');
 
   const hero = document.getElementById('hero');
-  if (hero) hero.innerHTML = renderBoardPreview(puzzle.board);
+  if (hero) hero.innerHTML = renderBoardPreview(board);
 
-  // Difficulty badge + creator credit share one row (saves vertical space so
-  // the card never clips), with a colour-coded dot teasing the challenge.
+  // Difficulty badge + creator credit share one row, with a colour-coded dot.
   const badge = document.getElementById('badge');
   if (badge) {
-    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[puzzle.difficulty]}"></span>${puzzle.difficulty}`;
+    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[difficulty]}"></span>${difficulty}`;
   }
   const byline = document.getElementById('byline');
-  if (byline) byline.textContent = `by u/${puzzle.creator}`;
+  if (byline) byline.textContent = `by u/${creator}`;
   document.getElementById('credit')?.removeAttribute('hidden');
-
-  if (startButton) startButton.textContent = solved ? 'Play again' : 'Play this puzzle';
 
   const how = document.getElementById('how');
   if (how) how.textContent = 'Tap a penguin to hop, drag a seal to slide.';
 
-  // Social proof: show the real solve count when there is one, otherwise an
-  // inviting empty state rather than a near-invisible blank.
+  // Neutral meta until /api/init brings the live solve count.
+  if (meta) meta.textContent = 'Community puzzle';
+  boardRendered = true;
+};
+
+// The live half only /api/init knows: the solved-state button label and the
+// social-proof solve count (or an inviting empty state).
+const applyUgcStatus = (solved: boolean, solves: number): void => {
+  if (startButton) startButton.textContent = solved ? 'Play again' : 'Play this puzzle';
   if (meta) {
     meta.textContent =
-      puzzle.solves > 0
-        ? `Community puzzle \u00B7 ${puzzle.solves} ${puzzle.solves === 1 ? 'solve' : 'solves'}`
+      solves > 0
+        ? `Community puzzle \u00B7 ${solves} ${solves === 1 ? 'solve' : 'solves'}`
         : 'Community puzzle \u00B7 be the first to solve!';
   }
+};
+
+const showUgcPost = (puzzle: InitUgcPuzzle, solved: boolean): void => {
+  renderUgcStatic(puzzle.board, puzzle.difficulty, puzzle.creator);
+  applyUgcStatus(solved, puzzle.solves);
 };
 
 // Ask the server what this post is. A community-puzzle post swaps the hero for a
@@ -301,4 +318,20 @@ const loadPostContext = async (): Promise<void> => {
   }
 };
 
+// Paint the card from postData first (instant, no network), then refine with
+// /api/init for the live bits (solve count + solved state). Posts created before
+// postData existed have no payload, so they fall back to the /api/init render.
+const renderFromPostData = (): void => {
+  try {
+    const raw = context.postData?.[POST_DATA_SPLASH_KEY];
+    if (typeof raw !== 'string') return;
+    const data: SplashPostData = JSON.parse(raw);
+    if (data.kind === 'ugc') renderUgcStatic(data.board, data.difficulty, data.creator);
+    else if (data.kind === 'daily') showDailyBadge(data.difficulty);
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+renderFromPostData();
 void loadPostContext();

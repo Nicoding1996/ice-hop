@@ -2,6 +2,24 @@
 import type { Board } from './game/types';
 import type { Difficulty } from './solver/difficulty';
 
+/**
+ * Static splash payload baked into a post's `postData` (JSON-stringified under
+ * the `splash` key) at creation, so the feed card renders on first paint with
+ * NO server round-trip. Kept tiny (well under the 2KB postData limit) and
+ * spoiler-aware: a daily carries only its difficulty band, never its board.
+ */
+export type SplashPostData =
+  | { readonly kind: 'daily'; readonly difficulty: Difficulty }
+  | {
+      readonly kind: 'ugc';
+      readonly board: Board;
+      readonly difficulty: Difficulty;
+      readonly creator: string;
+    };
+
+/** The `postData` object shape: the splash payload as a JSON string. */
+export const POST_DATA_SPLASH_KEY = 'splash';
+
 /** A community (UGC) puzzle, shaped for the client to render + play. */
 export type InitUgcPuzzle = {
   readonly id: string;

@@ -1,5 +1,6 @@
 import { reddit, redis } from '@devvit/web/server';
-import type { UgcSubmission } from '../../shared/api';
+import type { SplashPostData, UgcSubmission } from '../../shared/api';
+import { POST_DATA_SPLASH_KEY } from '../../shared/api';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
 import type { Difficulty } from '../../shared/solver/difficulty';
 import { getOrCreateDailyPuzzle } from './daily';
@@ -7,6 +8,12 @@ import { keys } from './keys';
 
 /** A post as returned by submitCustomPost (structural, so no extra type import). */
 type CreatedPost = Awaited<ReturnType<typeof reddit.submitCustomPost>>;
+
+/** Wrap the static splash payload for a post's `postData` so the feed card can
+ *  render instantly (read client-side via context.postData, no server call). */
+const splashData = (payload: SplashPostData): Record<string, string> => ({
+  [POST_DATA_SPLASH_KEY]: JSON.stringify(payload),
+});
 
 /** Link-flair background per difficulty band (cool for easy -> warm for hard). */
 const FLAIR_BG: Record<Difficulty, string> = {
@@ -44,10 +51,14 @@ const setDifficultyFlair = async (post: CreatedPost, band: Difficulty): Promise<
  */
 export const createDailyPost = async (date: string) => {
   const puzzle = await getOrCreateDailyPuzzle(date);
+  const band = difficultyFromPar(puzzle.par);
 
   const post = await reddit.submitCustomPost({
     title: `Ice Hop - Daily Puzzle - ${date}`,
     entry: 'default',
+    // Bake the difficulty band into the post so the "Today: ..." badge shows on
+    // first paint (no board - the daily stays spoiler-free).
+    postData: splashData({ kind: 'daily', difficulty: band }),
     styles: {
       backgroundColor: '#0a2a43ff',
       backgroundColorDark: '#0a2a43ff',
@@ -58,7 +69,7 @@ export const createDailyPost = async (date: string) => {
 
   // Tag the daily with its difficulty band (spoiler-free; the daily ramps
   // across the week, so this teases "today is Hard"). Best-effort.
-  await setDifficultyFlair(post, difficultyFromPar(puzzle.par));
+  await setDifficultyFlair(post, band);
 
   // Seed a distinguished/pinned comment so every daily has a discussion home
   // (the "comment section is part of the game" lever). Never let it break the
@@ -99,6 +110,14 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
   const post = await reddit.submitCustomPost({
     title: `Ice Hop \u2014 ${article} ${label} puzzle by u/${submission.creator}`,
     entry: 'default',
+    // Bake the board + difficulty + creator into the post so the preview renders
+    // on first paint, with no /api/init round-trip (the thumbnail feels instant).
+    postData: splashData({
+      kind: 'ugc',
+      board: submission.board,
+      difficulty: band,
+      creator: submission.creator,
+    }),
     styles: {
       backgroundColor: '#0a2a43ff',
       backgroundColorDark: '#0a2a43ff',
