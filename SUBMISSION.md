@@ -154,22 +154,33 @@ streak. Works in the feed.
 
 ---
 
-## ~50-second demo video script (screencast + voiceover)
+## Demo video script (no voiceover, ~58s — captions + the game's own SFX)
 
-Keep it under a minute. Judges may not watch past 60 seconds, so the hook is
-first. Record a clean screen capture and narrate over it.
+No narration. Let the gameplay, the synthesized SFX (hop / slide / splash / win),
+and big on-screen captions carry it — captions matter because most people watch
+sound-off. Hook in the first five seconds, use tight cuts, skip mundane flows (no
+sign-in on camera), and keep it under 60s (judges may stop at a minute). Record
+mobile/portrait — it's judged on the device it's built for — and pre-stage a
+puzzle so nothing fumbles.
 
-| Time | On screen | Voiceover |
+| Time | On screen | Caption (text overlay) |
 | --- | --- | --- |
-| 0:00–0:06 | The daily post in the feed, tap Play, a penguin hops into the water. | "This is Ice Hop, a daily puzzle that lives right inside a Reddit post." |
-| 0:06–0:18 | Finish the daily; stars pop in, score counts up. | "Tap a penguin to hop, drag a seal to slide, get everyone in the water in as few moves as you can." |
-| 0:18–0:26 | Hit Share your result; show the spoiler-free emoji grid in a comment. | "Your score shares out spoiler-free, so the thread turns into the scoreboard." |
-| 0:26–0:42 | Open Build, place pieces, the solver shows "solvable, par 5," hit Test then Submit. | "And you can build your own. The solver guarantees it's fair before it ever goes live." |
-| 0:42–0:52 | Endless tier select, then the community stream: play one, upvote, jump to the next. Show the streak flair. | "Endless puzzles, player-made boards, a daily streak, leaderboards. Something to do today, and a reason to come back tomorrow." |
-| 0:52–0:58 | Title card: Ice Hop, subreddit name. | "Ice Hop. Get every penguin in the water." |
+| 0:00–0:05 | The daily post in the Reddit feed → tap **Play today's puzzle** → a penguin hops and splashes into the water. | "A daily puzzle, right inside a Reddit post." |
+| 0:05–0:14 | Solve the daily: tap penguins to hop, drag a seal to slide, the last one dives in → win screen, stars pop, score counts up vs par. | "Tap to hop, drag to slide. Get every penguin in the water." |
+| 0:14–0:20 | On the win screen tap **Comment my score** → the score line lands in the post's thread. | "The comment section is the scoreboard." |
+| 0:20–0:38 | **‹ Menu → Build a puzzle**: drop pieces, the editor reads **Solvable · par 5**, tap **Test** then **Submit** → cut to the new puzzle as a feed post ("by u/you") → another player solves it and taps **Upvote**. | "Build your own." → "The solver guarantees it's fair." → "It becomes a post everyone can play." |
+| 0:38–0:48 | Montage: **Endless** tier select (Easy / Medium / Hard) → a quick solve, **Solved: N** ticks up → the streak flair → the leaderboard. | "Endless puzzles. Streaks. Leaderboards." |
+| 0:48–0:54 | A clean 3-star win: aurora flourish + sparkle, a penguin bobbing in the hole. | "All hand-drawn, all in code." |
+| 0:54–0:58 | End card: the **ICE HOP** wordmark + tagline + r/IceHop. | "Ice Hop — get every penguin into the water!" |
 
-Tips: no long intro, get to gameplay in the first two seconds, keep the cursor
-moving, and let the on-screen action carry it rather than over-narrating.
+Each beat hits a judging criterion: Delightful UX (0:05), Reddity (0:14, 0:20),
+User Contributions (0:20–0:38, the longest beat on purpose), Hook/retention
+(0:38), Polish/Phaser (0:48). The title card goes at the END, never the start.
+
+Capture tips: big high-contrast captions in the top/bottom safe zones; keep the
+game SFX on (optionally a low royalty-free music bed under it); pre-build a puzzle
+ready to **Submit** and a community puzzle ready to play so every clip is snappy;
+trim hard to stay under 60s; upload unlisted/public on YouTube.
 
 ---
 
