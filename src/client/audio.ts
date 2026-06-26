@@ -212,7 +212,9 @@ export const playWin = (): void => {
 // opt-in via the hub toggle (default off, the feed is muted). If the file is
 // ever missing or undecodable it simply stays silent - never an error.
 
-const MUSIC_URL = 'ice-hop-music.ogg'; // served from dist/client root (public/)
+// ogg first (smaller, gapless on Chrome/Android); mp3 fallback for Safari/iOS,
+// whose WebKit cannot decode Vorbis. The loader tries each until one decodes.
+const MUSIC_URLS = ['ice-hop-music.ogg', 'ice-hop-music.mp3'];
 const MUSIC_VOL = 0.3; // sits under the SFX but present; tune to taste
 
 let musicGain: GainNode | null = null;
@@ -223,14 +225,17 @@ let lifecycleArmed = false;
 
 const loadMusicBuffer = async (ac: AudioContext): Promise<AudioBuffer | null> => {
   if (musicBuffer) return musicBuffer;
-  try {
-    const res = await fetch(MUSIC_URL);
-    if (!res.ok) return null;
-    musicBuffer = await ac.decodeAudioData(await res.arrayBuffer());
-    return musicBuffer;
-  } catch {
-    return null; // missing or undecodable - just play nothing
+  for (const url of MUSIC_URLS) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      musicBuffer = await ac.decodeAudioData(await res.arrayBuffer());
+      return musicBuffer;
+    } catch {
+      // Unsupported codec (e.g. OGG on Safari) or a fetch error - try the next.
+    }
   }
+  return null; // nothing decodable - just stay silent
 };
 
 /** Start the looping track. No-op when music is off or already playing. Must be
