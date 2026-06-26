@@ -6,6 +6,7 @@ import { orderCommunityStream } from '../../shared/community';
 import { validateSubmission } from '../../shared/solver/validate';
 import { todayUtc } from '../../shared/date';
 import { createUgcPost } from './post';
+import { setPlayerFlair } from './leaderboard';
 import { keys } from './keys';
 
 /** Max puzzles one user may submit per UTC day (anti-spam). */
@@ -82,6 +83,10 @@ export const submitPuzzle = async (board: Board): Promise<SubmitPuzzleResponse> 
   } catch (error) {
     console.error(`Failed to create UGC feed post for ${id}: ${error}`);
   }
+
+  // Refresh the creator's flair so their "puzzles built" badge ticks up the
+  // moment they publish (best-effort; setPlayerFlair swallows its own errors).
+  await setPlayerFlair(username);
 
   return { ok: true, id, par: validation.par };
 };

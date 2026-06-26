@@ -1,7 +1,7 @@
 import { context, reddit, redis } from '@devvit/web/server';
 import type { LeaderboardEntry } from '../../shared/api';
 import { computeStars, decodeScore, leaderboardScore } from '../../shared/scoring';
-import { previousDate } from '../../shared/date';
+import { previousDate, todayUtc } from '../../shared/date';
 import { keys } from './keys';
 
 export type SolveOutcome = {
@@ -15,15 +15,47 @@ export type SolveOutcome = {
 type SolveRecord = { moves: number; timeMs: number; stars: number };
 type StreakRecord = { count: number; lastDate: string };
 
-/** Set a streak-based user flair (best-effort; needs flair perms + a subreddit). */
-const setStreakFlair = async (username: string, streak: number): Promise<void> => {
-  const subredditName = context.subredditName;
-  if (!subredditName || username === 'anon') return;
-  const text = streak >= 2 ? `\uD83D\uDD25 ${streak}-day streak` : '\uD83D\uDC27 Ice Hopper';
+/**
+ * Set the player's subreddit flair from their returning-player streak AND their
+ * creator output (puzzles built), so a regular's flair shows both "I keep
+ * coming back" and "I make puzzles" - the public, recurring status that nudges
+ * return visits and gives makers a badge. Best-effort: needs flair perms + a
+ * subreddit, and a failure must never block a solve or a submit (the whole body
+ * is guarded). Pass `streak` when the caller just computed it (a daily solve);
+ * omit it to read the stored streak (a puzzle submit only changes the creator
+ * half).
+ */
+export const setPlayerFlair = async (username: string, streak?: number): Promise<void> => {
   try {
-    await reddit.setUserFlair({ subredditName, username, text, backgroundColor: '#1d6f9c', textColor: 'light' });
+    const subredditName = context.subredditName;
+    if (!subredditName || username === 'anon') return;
+
+    let days = streak;
+    if (days === undefined) {
+      // Submit path: read the stored streak, but only count it as live if the
+      // last solve was today or yesterday. The stored count isn't decremented
+      // when a streak lapses (it's recomputed on the next solve), so otherwise
+      // the badge would overstate it. It self-corrects on the next daily solve.
+      const raw = await redis.get(keys.streak(username));
+      const rec: StreakRecord = raw ? JSON.parse(raw) : { count: 0, lastDate: '' };
+      const today = todayUtc();
+      const alive = rec.lastDate === today || rec.lastDate === previousDate(today);
+      days = alive ? rec.count : 0;
+    }
+    const built = await redis.zCard(keys.ugcByCreator(username));
+
+    const base = days >= 2 ? `\uD83D\uDD25 ${days}-day streak` : '\uD83D\uDC27 Ice Hopper';
+    const maker = built > 0 ? ` \u00B7 \uD83E\uDDE9 ${built} ${built === 1 ? 'puzzle' : 'puzzles'}` : '';
+
+    await reddit.setUserFlair({
+      subredditName,
+      username,
+      text: `${base}${maker}`,
+      backgroundColor: '#1d6f9c',
+      textColor: 'light',
+    });
   } catch (error) {
-    console.error(`Failed to set streak flair: ${error}`);
+    console.error(`Failed to set player flair: ${error}`);
   }
 };
 
@@ -66,7 +98,7 @@ export const recordSolve = async (
     else if (prevStreak.lastDate === date) streak = prevStreak.count; // desync safety
     else streak = 1;
     await redis.set(keys.streak(username), JSON.stringify({ count: streak, lastDate: date }));
-    await setStreakFlair(username, streak);
+    await setPlayerFlair(username, streak);
   } else {
     streak = prevStreak.count > 0 ? prevStreak.count : 1;
   }

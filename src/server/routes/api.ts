@@ -19,6 +19,7 @@ import { keys } from '../core/keys';
 import { todayUtc } from '../../shared/date';
 import { buildScoreComment } from '../../shared/share';
 import { computeStars } from '../../shared/scoring';
+import { difficultyFromPar } from '../../shared/solver/difficulty';
 import { ugc } from './ugc';
 
 type ErrorResponse = { status: 'error'; message: string };
@@ -63,6 +64,7 @@ api.get('/init', async (c) => {
               id: sub.id,
               board: sub.board,
               par: sub.par,
+              difficulty: difficultyFromPar(sub.par),
               creator: sub.creator,
               votes: typeof votesRaw === 'number' ? votesRaw : 0,
               solves: solvesRaw ? parseInt(solvesRaw, 10) : 0,
@@ -97,6 +99,7 @@ api.get('/init', async (c) => {
       date,
       board: puzzle.board,
       par: puzzle.par,
+      difficulty: difficultyFromPar(puzzle.par),
       username,
       solved: Boolean(solveRecord),
       solvedResult,

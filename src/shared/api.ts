@@ -1,11 +1,14 @@
 // DTOs shared between client and server. Keep in sync with the server routes.
 import type { Board } from './game/types';
+import type { Difficulty } from './solver/difficulty';
 
 /** A community (UGC) puzzle, shaped for the client to render + play. */
 export type InitUgcPuzzle = {
   readonly id: string;
   readonly board: Board;
   readonly par: number;
+  /** Solver-derived band (from par) for the splash badge + post title. */
+  readonly difficulty: Difficulty;
   readonly creator: string;
   readonly votes: number;
   readonly solves: number;
@@ -25,6 +28,8 @@ export type InitResponse =
       readonly date: string;
       readonly board: Board;
       readonly par: number;
+      /** Solver-derived band (from par) for a spoiler-free splash badge. */
+      readonly difficulty: Difficulty;
       readonly username: string;
       readonly solved: boolean;
       /** The viewer's prior result for this daily, when they've already solved

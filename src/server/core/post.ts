@@ -1,14 +1,49 @@
 import { reddit, redis } from '@devvit/web/server';
 import type { UgcSubmission } from '../../shared/api';
+import { difficultyFromPar } from '../../shared/solver/difficulty';
+import type { Difficulty } from '../../shared/solver/difficulty';
 import { getOrCreateDailyPuzzle } from './daily';
 import { keys } from './keys';
+
+/** A post as returned by submitCustomPost (structural, so no extra type import). */
+type CreatedPost = Awaited<ReturnType<typeof reddit.submitCustomPost>>;
+
+/** Link-flair background per difficulty band (cool for easy -> warm for hard). */
+const FLAIR_BG: Record<Difficulty, string> = {
+  EASY: '#2e7d52',
+  MEDIUM: '#1d6f9c',
+  HARD: '#c2552f',
+  EXPERT: '#6c4fb5',
+};
+
+/** Title-case a difficulty band, e.g. EASY -> Easy. */
+const bandLabel = (band: Difficulty): string => band.charAt(0) + band.slice(1).toLowerCase();
+
+/**
+ * Tag a post with its difficulty as Reddit link flair, so the feed shows an
+ * at-a-glance "Easy/Medium/Hard" cue (spoiler-free: the band only, never the
+ * layout or par). Best-effort: needs flair perms and must never fail the post.
+ */
+const setDifficultyFlair = async (post: CreatedPost, band: Difficulty): Promise<void> => {
+  try {
+    await reddit.setPostFlair({
+      subredditName: post.subredditName,
+      postId: post.id,
+      text: bandLabel(band),
+      backgroundColor: FLAIR_BG[band],
+      textColor: 'light',
+    });
+  } catch (error) {
+    console.error(`Failed to set difficulty post flair: ${error}`);
+  }
+};
 
 /**
  * Ensures the day's puzzle exists, creates the custom post (splash entrypoint),
  * and records which date the new post shows so /api/init can look it up.
  */
 export const createDailyPost = async (date: string) => {
-  await getOrCreateDailyPuzzle(date);
+  const puzzle = await getOrCreateDailyPuzzle(date);
 
   const post = await reddit.submitCustomPost({
     title: `Ice Hop - Daily Puzzle - ${date}`,
@@ -20,6 +55,10 @@ export const createDailyPost = async (date: string) => {
   });
 
   await redis.set(keys.postDate(post.id), date);
+
+  // Tag the daily with its difficulty band (spoiler-free; the daily ramps
+  // across the week, so this teases "today is Hard"). Best-effort.
+  await setDifficultyFlair(post, difficultyFromPar(puzzle.par));
 
   // Seed a distinguished/pinned comment so every daily has a discussion home
   // (the "comment section is part of the game" lever). Never let it break the
@@ -51,8 +90,14 @@ export const createDailyPost = async (date: string) => {
  * the post <-> puzzle link.
  */
 export const createUgcPost = async (submission: UgcSubmission): Promise<string> => {
+  // Title-case the solver-derived band and pick the right article so the feed
+  // title reads naturally and teases the challenge ("an Easy", "a Medium").
+  const band = difficultyFromPar(submission.par);
+  const label = bandLabel(band);
+  const article = /^[AEIOU]/.test(band) ? 'an' : 'a';
+
   const post = await reddit.submitCustomPost({
-    title: `Ice Hop \u2014 a puzzle by u/${submission.creator}`,
+    title: `Ice Hop \u2014 ${article} ${label} puzzle by u/${submission.creator}`,
     entry: 'default',
     styles: {
       backgroundColor: '#0a2a43ff',
@@ -61,6 +106,9 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
   });
 
   await redis.set(keys.ugcPost(post.id), submission.id);
+
+  // Same difficulty link-flair as the daily, so community posts read at a glance.
+  await setDifficultyFlair(post, band);
 
   // Seed a distinguished credit/how-to comment, mirroring the daily, so the
   // creator is named in the thread and there's a home for scores. Best-effort.

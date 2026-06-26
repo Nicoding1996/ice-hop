@@ -1,6 +1,7 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
-import type { InitResponse } from '../shared/api';
+import type { InitResponse, InitUgcPuzzle } from '../shared/api';
 import type { Board } from '../shared/game/types';
+import type { Difficulty } from '../shared/solver/difficulty';
 
 // --- Buttons -----------------------------------------------------------------
 
@@ -43,153 +44,258 @@ if (meta) {
 
 // --- Community-puzzle preview ------------------------------------------------
 // A daily post keeps the static penguin hero. A community-puzzle post swaps in a
-// small, light SVG preview of that exact board (no Phaser here - the splash must
-// stay fast) plus a "Puzzle by u/creator" credit, so the feed post shows the
-// actual puzzle.
+// preview of that exact board. The art below is a faithful, 1:1 port of the
+// in-game Phaser draw helpers (art/theme.ts) - same proportions, same palette -
+// emitted as static SVG so the splash stays Phaser-free and fast. So the feed
+// preview looks like the real puzzle, not a simplified stand-in.
 
-const PREVIEW = {
-  sheet: '#bfe3f2',
+const C = {
+  sheet: '#d4ecf7',
   sheetEdge: '#7fb4d4',
-  tile: '#d7eef8',
-  waterFill: '#0e3a55',
-  waterRim: '#1d6f9c',
-  waterShimmer: '#7fe0ff',
-  penguin: '#2b3440',
-  penguinEdge: '#141a22',
+  grid: '#a6cee0',
+  waterRim: '#9ccfe2',
+  water: '#0e3a55',
+  holeRim: '#08293c',
+  shimmer: '#7fe0ff',
+  pen: '#2b3440',
+  penOut: '#141a22',
   belly: '#f4f9fc',
   beak: '#f6a623',
+  beakOut: '#c77f15',
+  seal: '#7d8c9b',
+  sealOut: '#3a4654',
+  sealBelly: '#b9c6d2',
+  sealNose: '#2a333d',
+  rock: '#a7c0d0',
+  rockOut: '#5c7488',
+  rockFacet: '#d2e6f1',
+  rockSnow: '#ffffff',
   eye: '#15202b',
-  seal: '#6b7b8c',
-  sealBelly: '#aebecb',
-  sealEdge: '#54616e',
-  rock: '#9fb6c6',
-  rockEdge: '#7c95a8',
-  rockCap: '#eef7fc',
+  eyeWhite: '#ffffff',
 } as const;
 
-const CELL = 40;
-const PAD = 8;
+const CELL = 44;
+const PAD = 12;
+
+// --- tiny SVG builders (mirror Phaser's ellipse/circle/rect/triangle) --------
+// Phaser ellipse/rect take full width/height; circle takes a radius; rotations
+// are radians (positive = clockwise, same as SVG). We round to keep markup small.
+const n = (x: number): string => (Math.round(x * 100) / 100).toString();
+
+type ShapeOpts = { stroke?: string; sw?: number; rot?: number; opacity?: number };
+const extra = (o: ShapeOpts, ox: number, oy: number): string => {
+  let a = '';
+  if (o.stroke) a += ` stroke="${o.stroke}" stroke-width="${n(o.sw ?? 1)}"`;
+  if (o.opacity !== undefined) a += ` opacity="${o.opacity}"`;
+  if (o.rot) a += ` transform="rotate(${n((o.rot * 180) / Math.PI)} ${n(ox)} ${n(oy)})"`;
+  return a;
+};
+const ell = (cx: number, cy: number, rx: number, ry: number, fill: string, o: ShapeOpts = {}): string =>
+  `<ellipse cx="${n(cx)}" cy="${n(cy)}" rx="${n(rx)}" ry="${n(ry)}" fill="${fill}"${extra(o, cx, cy)} />`;
+const cir = (cx: number, cy: number, rad: number, fill: string, o: ShapeOpts = {}): string =>
+  `<circle cx="${n(cx)}" cy="${n(cy)}" r="${n(rad)}" fill="${fill}"${extra(o, cx, cy)} />`;
+const box = (x: number, y: number, w: number, h: number, rad: number, fill: string, o: ShapeOpts = {}): string =>
+  `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}" rx="${n(rad)}" fill="${fill}"${extra(o, x, y)} />`;
+const tri = (pts: ReadonlyArray<readonly [number, number]>, fill: string, o: ShapeOpts = {}): string =>
+  `<polygon points="${pts.map(([px, py]) => `${n(px)},${n(py)}`).join(' ')}" fill="${fill}"${
+    o.stroke ? ` stroke="${o.stroke}" stroke-width="${n(o.sw ?? 1)}" stroke-linejoin="round"` : ''
+  } />`;
+
+// --- creatures: direct ports of theme.ts draw helpers ------------------------
+/** Water hole carved into the ice (makeWaterHole): wet rim, deep pool, lip shadow, reflection. */
+const holeArt = (x: number, y: number, s: number): string =>
+  cir(x, y, 0.36 * s, C.waterRim) +
+  cir(x, y, 0.3 * s, C.water) +
+  ell(x, y - 0.07 * s, 0.25 * s, 0.17 * s, C.holeRim, { opacity: 0.5 }) +
+  ell(x + 0.04 * s, y + 0.1 * s, 0.07 * s, 0.035 * s, C.shimmer, { opacity: 0.5 });
+
+/** Chubby outlined penguin with webbed feet, flippers, big eyes (drawPenguinInto). */
+const penguinArt = (x: number, y: number, s: number): string => {
+  const sw = Math.max(1.5, 0.04 * s);
+  const fsw = Math.max(1, 0.025 * s);
+  const eyeY = y - 0.17 * s;
+  return (
+    ell(x - 0.17 * s, y + 0.39 * s, 0.15 * s, 0.085 * s, C.beak, { stroke: C.beakOut, sw: fsw, rot: -0.22 }) +
+    ell(x + 0.17 * s, y + 0.39 * s, 0.15 * s, 0.085 * s, C.beak, { stroke: C.beakOut, sw: fsw, rot: 0.22 }) +
+    ell(x - 0.38 * s, y + 0.04 * s, 0.1 * s, 0.26 * s, C.pen, { stroke: C.penOut, sw, rot: 0.16 }) +
+    ell(x + 0.38 * s, y + 0.04 * s, 0.1 * s, 0.26 * s, C.pen, { stroke: C.penOut, sw, rot: -0.16 }) +
+    ell(x, y - 0.02 * s, 0.42 * s, 0.45 * s, C.pen, { stroke: C.penOut, sw }) +
+    ell(x, y + 0.2 * s, 0.27 * s, 0.29 * s, C.belly) +
+    ell(x - 0.15 * s, eyeY, 0.11 * s, 0.13 * s, C.eyeWhite) +
+    ell(x + 0.15 * s, eyeY, 0.11 * s, 0.13 * s, C.eyeWhite) +
+    cir(x - 0.13 * s, eyeY + 0.02 * s, 0.07 * s, C.eye) +
+    cir(x + 0.13 * s, eyeY + 0.02 * s, 0.07 * s, C.eye) +
+    cir(x - 0.1 * s, eyeY - 0.02 * s, 0.025 * s, C.eyeWhite) +
+    cir(x + 0.16 * s, eyeY - 0.02 * s, 0.025 * s, C.eyeWhite) +
+    tri(
+      [
+        [x - 0.06 * s, y - 0.05 * s],
+        [x + 0.06 * s, y - 0.05 * s],
+        [x, y + 0.04 * s],
+      ],
+      C.beak,
+      { stroke: C.beakOut, sw: Math.max(1, 0.02 * s) }
+    )
+  );
+};
+
+/** Faceted ice block with snow cap and a soft ground shadow (drawRockInto). */
+const rockArt = (x: number, y: number, s: number): string =>
+  ell(x, y + 0.33 * s, 0.31 * s, 0.08 * s, '#0a2233', { opacity: 0.3 }) +
+  box(x - 0.33 * s, y - 0.2 * s, 0.66 * s, 0.52 * s, 0.12 * s, C.rock, { stroke: C.rockOut, sw: Math.max(2, 0.04 * s) }) +
+  ell(x, y - 0.16 * s, 0.29 * s, 0.11 * s, C.rockFacet, { stroke: C.rockOut, sw: Math.max(1, 0.025 * s) }) +
+  ell(x, y - 0.2 * s, 0.2 * s, 0.065 * s, C.rockSnow);
+
+/** Seal lying on the ice: tail fluke, body, belly, flipper, raised head, whiskers
+ *  (drawSealInto). Drawn horizontally, then rotated a quarter-turn for a vertical seal. */
+const sealArt = (x: number, y: number, s: number, vertical: boolean): string => {
+  const sw = Math.max(1.5, 0.04 * s);
+  const fsw = Math.max(1, 0.03 * s);
+  const wh = Math.max(1, 0.012 * s);
+  const whisker = (dy: number, rad: number): string => {
+    const wx = x + 0.95 * s;
+    const wy = y + dy;
+    return `<rect x="${n(wx)}" y="${n(wy - wh / 2)}" width="${n(0.22 * s)}" height="${n(wh)}" fill="${C.sealOut}" transform="rotate(${n((rad * 180) / Math.PI)} ${n(wx)} ${n(wy)})" />`;
+  };
+  const art =
+    ell(x - 0.64 * s, y - 0.13 * s, 0.17 * s, 0.1 * s, C.seal, { stroke: C.sealOut, sw: fsw, rot: 0.55 }) +
+    ell(x - 0.64 * s, y + 0.13 * s, 0.17 * s, 0.1 * s, C.seal, { stroke: C.sealOut, sw: fsw, rot: -0.55 }) +
+    ell(x, y, 0.7 * s, 0.31 * s, C.seal, { stroke: C.sealOut, sw }) +
+    ell(x, y + 0.12 * s, 0.5 * s, 0.16 * s, C.sealBelly) +
+    ell(x + 0.14 * s, y + 0.24 * s, 0.17 * s, 0.08 * s, C.seal, { stroke: C.sealOut, sw: fsw, rot: 0.3 }) +
+    ell(x + 0.62 * s, y - 0.16 * s, 0.31 * s, 0.28 * s, C.seal, { stroke: C.sealOut, sw }) +
+    ell(x + 0.8 * s, y - 0.06 * s, 0.13 * s, 0.1 * s, C.sealBelly) +
+    cir(x + 0.9 * s, y - 0.08 * s, 0.05 * s, C.sealNose) +
+    cir(x + 0.56 * s, y - 0.26 * s, 0.055 * s, C.eye) +
+    cir(x + 0.74 * s, y - 0.26 * s, 0.055 * s, C.eye) +
+    cir(x + 0.58 * s, y - 0.28 * s, 0.02 * s, C.eyeWhite) +
+    cir(x + 0.76 * s, y - 0.28 * s, 0.02 * s, C.eyeWhite) +
+    whisker(-0.06 * s, -0.12) +
+    whisker(-0.03 * s, 0);
+  return vertical ? `<g transform="rotate(90 ${n(x)} ${n(y)})">${art}</g>` : art;
+};
 
 const renderBoardPreview = (board: Board): string => {
   const colOf = (i: number): number => i % board.width;
   const rowOf = (i: number): number => Math.floor(i / board.width);
   const cx = (i: number): number => PAD + colOf(i) * CELL + CELL / 2;
   const cy = (i: number): number => PAD + rowOf(i) * CELL + CELL / 2;
-  const w = board.width * CELL + PAD * 2;
-  const h = board.height * CELL + PAD * 2;
+  const boardW = board.width * CELL;
+  const boardH = board.height * CELL;
+  const w = boardW + PAD * 2;
+  const h = boardH + PAD * 2;
+  const S = CELL * 0.9; // piece size, a hair under the cell like the real board
   const parts: string[] = [];
 
-  // One connected ice sheet under the grid.
+  // One connected ice sheet (paintIceSheet): soft shadow, base, faint scored
+  // grid lines, snowy rounded edge.
+  const sp = CELL * 0.16;
+  const sx = PAD - sp;
+  const sy = PAD - sp;
+  const sW = boardW + sp * 2;
+  const sH = boardH + sp * 2;
+  const sr = CELL * 0.34;
+  const gsw = Math.max(1, CELL * 0.02);
+  parts.push(box(sx + 2, sy + 4, sW, sH, sr, '#06121f', { opacity: 0.45 }));
+  parts.push(box(sx, sy, sW, sH, sr, C.sheet));
+  for (let c = 1; c < board.width; c++) {
+    const gx = PAD + c * CELL;
+    parts.push(
+      `<line x1="${n(gx)}" y1="${n(PAD + CELL * 0.12)}" x2="${n(gx)}" y2="${n(PAD + boardH - CELL * 0.12)}" stroke="${C.grid}" stroke-width="${n(gsw)}" opacity="0.55" />`
+    );
+  }
+  for (let r = 1; r < board.height; r++) {
+    const gy = PAD + r * CELL;
+    parts.push(
+      `<line x1="${n(PAD + CELL * 0.12)}" y1="${n(gy)}" x2="${n(PAD + boardW - CELL * 0.12)}" y2="${n(gy)}" stroke="${C.grid}" stroke-width="${n(gsw)}" opacity="0.55" />`
+    );
+  }
   parts.push(
-    `<rect x="${PAD - 4}" y="${PAD - 4}" width="${board.width * CELL + 8}" height="${
-      board.height * CELL + 8
-    }" rx="14" fill="${PREVIEW.sheet}" stroke="${PREVIEW.sheetEdge}" stroke-width="3" />`
+    `<rect x="${n(sx)}" y="${n(sy)}" width="${n(sW)}" height="${n(sH)}" rx="${n(sr)}" fill="none" stroke="${C.sheetEdge}" stroke-width="${n(Math.max(2, CELL * 0.05))}" />`
   );
-  // Subtle per-cell tiles.
-  for (let i = 0; i < board.width * board.height; i++) {
-    const x = PAD + colOf(i) * CELL;
-    const y = PAD + rowOf(i) * CELL;
-    parts.push(
-      `<rect x="${x + 3}" y="${y + 3}" width="${CELL - 6}" height="${CELL - 6}" rx="7" fill="${PREVIEW.tile}" opacity="0.6" />`
-    );
-  }
-  // Water holes carved into the sheet.
-  for (const hole of board.holes) {
-    parts.push(`<circle cx="${cx(hole)}" cy="${cy(hole)}" r="${CELL * 0.34}" fill="${PREVIEW.waterRim}" />`);
-    parts.push(`<circle cx="${cx(hole)}" cy="${cy(hole)}" r="${CELL * 0.27}" fill="${PREVIEW.waterFill}" />`);
-    parts.push(
-      `<ellipse cx="${cx(hole) - CELL * 0.07}" cy="${cy(hole) - CELL * 0.08}" rx="${CELL * 0.12}" ry="${
-        CELL * 0.06
-      }" fill="${PREVIEW.waterShimmer}" opacity="0.7" />`
-    );
-  }
-  // Pieces.
+
+  // Water holes.
+  for (const hole of board.holes) parts.push(holeArt(cx(hole), cy(hole), S));
+
+  // Pieces (penguins, seals, rocks).
   for (const piece of board.pieces) {
     if (piece.kind === 'BLOCKER') {
-      const x = cx(piece.cells[0]);
-      const y = cy(piece.cells[0]);
-      const s = CELL * 0.64;
-      parts.push(
-        `<rect x="${x - s / 2}" y="${y - s / 2}" width="${s}" height="${s}" rx="8" fill="${PREVIEW.rock}" stroke="${PREVIEW.rockEdge}" stroke-width="2" />`
-      );
-      parts.push(
-        `<rect x="${x - s / 2}" y="${y - s / 2}" width="${s}" height="${s * 0.32}" rx="6" fill="${PREVIEW.rockCap}" opacity="0.9" />`
-      );
+      parts.push(rockArt(cx(piece.cells[0]), cy(piece.cells[0]), S));
     } else if (piece.kind === 'SLIDER') {
-      const xs = piece.cells.map(cx);
-      const ys = piece.cells.map(cy);
-      const m = CELL * 0.34;
-      const x = Math.min(...xs) - m;
-      const y = Math.min(...ys) - m;
-      const bw = Math.max(...xs) - Math.min(...xs) + m * 2;
-      const bh = Math.max(...ys) - Math.min(...ys) + m * 2;
-      parts.push(
-        `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="${CELL * 0.3}" fill="${PREVIEW.seal}" stroke="${PREVIEW.sealEdge}" stroke-width="2" />`
-      );
-      parts.push(
-        `<rect x="${x + bw * 0.18}" y="${y + bh * 0.34}" width="${bw * 0.64}" height="${bh * 0.4}" rx="${
-          Math.min(bw, bh) * 0.22
-        }" fill="${PREVIEW.sealBelly}" opacity="0.85" />`
-      );
+      const last = piece.cells[piece.cells.length - 1];
+      const ax = (cx(piece.cells[0]) + cx(last)) / 2;
+      const ay = (cy(piece.cells[0]) + cy(last)) / 2;
+      const vertical = rowOf(piece.cells[0]) !== rowOf(last);
+      parts.push(sealArt(ax, ay, S, vertical));
     } else {
-      // HOPPER penguin.
-      const x = cx(piece.cells[0]);
-      const y = cy(piece.cells[0]);
-      parts.push(
-        `<ellipse cx="${x}" cy="${y}" rx="${CELL * 0.3}" ry="${CELL * 0.34}" fill="${PREVIEW.penguin}" stroke="${PREVIEW.penguinEdge}" stroke-width="2" />`
-      );
-      parts.push(`<ellipse cx="${x}" cy="${y + CELL * 0.05}" rx="${CELL * 0.17}" ry="${CELL * 0.22}" fill="${PREVIEW.belly}" />`);
-      parts.push(
-        `<circle cx="${x - CELL * 0.1}" cy="${y - CELL * 0.12}" r="${CELL * 0.055}" fill="#ffffff" />` +
-          `<circle cx="${x + CELL * 0.1}" cy="${y - CELL * 0.12}" r="${CELL * 0.055}" fill="#ffffff" />`
-      );
-      parts.push(
-        `<circle cx="${x - CELL * 0.09}" cy="${y - CELL * 0.11}" r="${CELL * 0.028}" fill="${PREVIEW.eye}" />` +
-          `<circle cx="${x + CELL * 0.11}" cy="${y - CELL * 0.11}" r="${CELL * 0.028}" fill="${PREVIEW.eye}" />`
-      );
-      parts.push(
-        `<polygon points="${x - CELL * 0.05},${y - CELL * 0.01} ${x + CELL * 0.05},${y - CELL * 0.01} ${x},${
-          y + CELL * 0.07
-        }" fill="${PREVIEW.beak}" />`
-      );
+      parts.push(penguinArt(cx(piece.cells[0]), cy(piece.cells[0]), S));
     }
   }
 
   return `<svg class="preview-art" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Community puzzle board preview">${parts.join('')}</svg>`;
 };
 
-const showUgcPost = (
-  puzzle: { readonly board: Board; readonly creator: string; readonly solves: number },
-  solved: boolean
-): void => {
+// Difficulty-dot colours: a small colour-coded cue inside an otherwise cool
+// badge, so the warm Play button stays the single dominant accent per screen.
+const DIFFICULTY_DOT: Record<Difficulty, string> = {
+  EASY: '#5ef0c0',
+  MEDIUM: '#ffd166',
+  HARD: '#ff8a5b',
+  EXPERT: '#b59bff',
+};
+
+const showUgcPost = (puzzle: InitUgcPuzzle, solved: boolean): void => {
+  // Switch the splash into "community puzzle" layout: the board becomes the
+  // hero (bigger), the wordmark shrinks, and the tagline gives way to credit.
+  document.body.classList.add('ugc');
+
   const hero = document.getElementById('hero');
   if (hero) hero.innerHTML = renderBoardPreview(puzzle.board);
 
-  const byline = document.getElementById('byline');
-  if (byline) {
-    byline.textContent = `Puzzle by u/${puzzle.creator}`;
-    byline.removeAttribute('hidden');
+  // Difficulty badge + creator credit share one row (saves vertical space so
+  // the card never clips), with a colour-coded dot teasing the challenge.
+  const badge = document.getElementById('badge');
+  if (badge) {
+    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[puzzle.difficulty]}"></span>${puzzle.difficulty}`;
   }
+  const byline = document.getElementById('byline');
+  if (byline) byline.textContent = `by u/${puzzle.creator}`;
+  document.getElementById('credit')?.removeAttribute('hidden');
 
   if (startButton) startButton.textContent = solved ? 'Play again' : 'Play this puzzle';
 
   const how = document.getElementById('how');
-  if (how) how.textContent = 'A community puzzle. Tap a penguin to hop, drag a seal to slide.';
+  if (how) how.textContent = 'Tap a penguin to hop, drag a seal to slide.';
 
+  // Social proof: show the real solve count when there is one, otherwise an
+  // inviting empty state rather than a near-invisible blank.
   if (meta) {
-    const plays = puzzle.solves > 0 ? ` \u00B7 ${puzzle.solves} ${puzzle.solves === 1 ? 'solve' : 'solves'}` : '';
-    meta.textContent = `Community puzzle${plays}`;
+    meta.textContent =
+      puzzle.solves > 0
+        ? `Community puzzle \u00B7 ${puzzle.solves} ${puzzle.solves === 1 ? 'solve' : 'solves'}`
+        : 'Community puzzle \u00B7 be the first to solve!';
   }
 };
 
 // Ask the server what this post is. A community-puzzle post swaps the hero for a
 // preview of its board; a daily post is left as-is.
+const showDailyBadge = (difficulty: Difficulty): void => {
+  // Spoiler-free enticement on the daily card: show only the band (never the
+  // board or par), which ties into the weekly difficulty ramp ("today is Hard").
+  const badge = document.getElementById('badge');
+  if (badge) {
+    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[difficulty]}"></span>Today: ${difficulty}`;
+  }
+  document.getElementById('credit')?.removeAttribute('hidden');
+};
+
 const loadPostContext = async (): Promise<void> => {
   try {
     const response = await fetch('/api/init');
     if (!response.ok) return;
     const data: InitResponse = await response.json();
     if (data.kind === 'ugc') showUgcPost(data.puzzle, data.solved);
+    else if (data.kind === 'daily') showDailyBadge(data.difficulty);
   } catch (error) {
     console.error(error);
   }

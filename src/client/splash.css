@@ -82,13 +82,14 @@ body {
   position: relative;
   z-index: 1;
   height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 18px;
-  gap: 8px;
+  padding: 16px;
+  gap: clamp(4px, 1.4vh, 9px);
 }
 
 .hero {
@@ -96,8 +97,9 @@ body {
 }
 
 .hero-art {
-  width: clamp(150px, 44vw, 216px);
-  height: auto;
+  height: clamp(108px, 30vh, 208px);
+  width: auto;
+  max-width: 80vw;
   filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.38));
 }
 
@@ -138,9 +140,9 @@ body {
 }
 
 .title {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-family: 'Fredoka', 'Trebuchet MS', Verdana, sans-serif;
-  font-size: clamp(36px, 12vw, 64px);
+  font-size: clamp(30px, 9vw, 48px);
   letter-spacing: 3px;
   font-weight: 700;
   text-shadow: 0 2px 16px rgba(127, 224, 255, 0.2);
@@ -153,11 +155,11 @@ body {
 }
 
 .start {
-  margin-top: 10px;
+  margin-top: 6px;
   border: 0;
   border-radius: 999px;
-  padding: 14px 32px;
-  font-size: clamp(15px, 4.5vw, 18px);
+  padding: 13px 30px;
+  font-size: clamp(15px, 4.3vw, 17px);
   font-weight: 700;
   color: #062033;
   background: linear-gradient(180deg, #ff8a5b 0%, #ff7043 100%);
@@ -180,7 +182,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
 }
 
@@ -188,7 +190,7 @@ body {
 .build {
   border: 1.5px solid rgba(127, 224, 255, 0.5);
   border-radius: 999px;
-  padding: 12px 28px;
+  padding: 11px 26px;
   font-size: clamp(14px, 4.2vw, 16px);
   font-weight: 700;
   color: #eaf6fb;
@@ -206,38 +208,96 @@ body {
   transform: translateY(1px);
 }
 
-/* Creator credit on a community-puzzle post (cool + quiet, not competing with Play). */
-.byline {
+/* Difficulty badge + creator credit on a community-puzzle post, sharing one row
+   so the card stays compact. Kept cool-toned (only the tiny dot carries colour)
+   so the warm Play button remains the single dominant accent on the screen. */
+.credit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 2px 0 0;
-  font-size: clamp(13px, 4vw, 15px);
+}
+
+.credit[hidden] {
+  display: none;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  color: #eaf6fb;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1.5px solid rgba(127, 224, 255, 0.45);
+}
+
+.badge .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.byline {
+  font-size: clamp(12px, 3.6vw, 14px);
   font-weight: 700;
   color: #cfe8f4;
   opacity: 0.9;
 }
 
-.byline[hidden] {
-  display: none;
-}
-
-/* The board preview swapped into the hero for a community-puzzle post. */
+/* The board preview swapped into the hero for a community-puzzle post. Sized by
+   height (vh-capped) so the card never needs to scroll, whatever its height. */
 .preview-art {
-  width: clamp(150px, 52vw, 240px);
-  height: auto;
+  height: clamp(150px, 42vh, 300px);
+  width: auto;
+  max-width: 86vw;
   filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
 }
 
+/* ---- Community-puzzle layout: the board is the hero ----------------------- */
+/* On a community post the puzzle itself sells the click, so the board is the
+   biggest element, the wordmark shrinks to a brand mark, and the tagline gives
+   way to the credit row. */
+body.ugc .title {
+  font-size: clamp(22px, 7vw, 32px);
+  letter-spacing: 2px;
+  margin-top: 0;
+}
+
+body.ugc .tag {
+  display: none;
+}
+
+body.ugc .hero {
+  margin-bottom: 0;
+}
+
+body.ugc .wrap {
+  gap: clamp(4px, 1.1vh, 7px);
+}
+
+body.ugc .how {
+  margin-top: 2px;
+}
+
 .meta {
-  margin: 6px 0 0;
-  font-size: 12.5px;
+  margin: 4px 0 0;
+  font-size: 12px;
   opacity: 0.62;
   letter-spacing: 0.3px;
 }
 
 .how {
-  max-width: 320px;
-  margin-top: 4px;
-  font-size: 12.5px;
-  line-height: 1.5;
+  max-width: 300px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
   opacity: 0.7;
 }
 
