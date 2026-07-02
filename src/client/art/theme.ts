@@ -637,3 +637,133 @@ export const stackColumn = (items: Stackable[], x: number, top: number, gap: num
   }
   return cy - gap;
 };
+
+// --- Icon button: a compact square chip with a code-drawn vector icon --------
+// Same chip styling + hover/press juice as PillButton, but it renders a drawn
+// icon (via a callback) instead of a text label - for tight spots like the
+// play-HUD mute toggle, where a text pill crowds the corner on mobile. Kept
+// separate so the widely-used text PillButton stays untouched.
+export type IconDraw = (g: Phaser.GameObjects.Graphics, size: number) => void;
+
+export type IconButtonOptions = {
+  draw: IconDraw;
+  variant?: PillVariant;
+  size?: PillSize;
+  x?: number;
+  y?: number;
+  onClick?: () => void;
+};
+
+export class IconButton extends Phaser.GameObjects.Container {
+  private readonly bg: Phaser.GameObjects.Graphics;
+  private readonly iconGfx: Phaser.GameObjects.Graphics;
+  private readonly visual: Phaser.GameObjects.Container;
+  private readonly hit: Phaser.GameObjects.Zone;
+  private readonly variant: PillVariant;
+  private readonly sizeKey: PillSize;
+  private draw: IconDraw;
+  private readonly onClick?: () => void;
+
+  constructor(scene: Phaser.Scene, opts: IconButtonOptions) {
+    super(scene, opts.x ?? 0, opts.y ?? 0);
+    this.variant = opts.variant ?? 'chip';
+    this.sizeKey = opts.size ?? 'sm';
+    this.draw = opts.draw;
+    this.onClick = opts.onClick;
+
+    this.visual = scene.add.container(0, 0);
+    this.bg = scene.add.graphics();
+    this.iconGfx = scene.add.graphics();
+    this.visual.add([this.bg, this.iconGfx]);
+
+    const side = SIZES[this.sizeKey].height;
+    this.hit = scene.add.zone(0, 0, Math.max(side, 44), Math.max(side, 44));
+    this.add([this.visual, this.hit]);
+    this.redraw();
+
+    // Input on the Zone, never the scaled visual, so the hit area never shifts.
+    this.hit.setInteractive({ useHandCursor: true });
+    this.hit.on('pointerover', () => this.visual.setScale(1.06));
+    this.hit.on('pointerout', () => this.visual.setScale(1));
+    this.hit.on('pointerdown', () => {
+      this.scene.tweens.add({
+        targets: this.visual,
+        scaleX: 0.9,
+        scaleY: 0.9,
+        duration: 80,
+        yoyo: true,
+        ease: 'Quad.easeOut',
+      });
+      this.onClick?.();
+    });
+
+    scene.add.existing(this);
+  }
+
+  private redraw(): void {
+    const side = SIZES[this.sizeKey].height;
+    const style = VARIANTS[this.variant];
+    const r = Math.min(RADIUS.button, side / 2);
+    const g = this.bg;
+    g.clear();
+    const fillAlpha = style.fillAlpha ?? 1;
+    if (fillAlpha > 0) {
+      g.fillStyle(0x06121f, 0.26);
+      g.fillRoundedRect(-side / 2, -side / 2 + 3, side, side, r);
+      g.fillStyle(style.fill, fillAlpha);
+      g.fillRoundedRect(-side / 2, -side / 2, side, side, r);
+    }
+    if (style.border !== undefined) {
+      g.lineStyle(1.5, style.border, style.borderAlpha ?? 1);
+      g.strokeRoundedRect(-side / 2, -side / 2, side, side, r);
+    }
+    this.setSize(side, side);
+    this.iconGfx.clear();
+    this.draw(this.iconGfx, side * 0.62);
+    this.hit.setSize(Math.max(side, 44), Math.max(side, 44));
+  }
+
+  /** Re-run the draw callback (e.g. after a toggle changes what it renders). */
+  refresh(): this {
+    this.redraw();
+    return this;
+  }
+}
+
+export const makeIconButton = (scene: Phaser.Scene, opts: IconButtonOptions): IconButton =>
+  new IconButton(scene, opts);
+
+/** Speaker icon for a mute toggle: sound waves when on, a small X when muted.
+ *  Drawn in the cool chip-text colour so it matches the rest of the vector art.
+ *  `size` is the icon's bounding extent; coordinates are centred on (0,0). */
+export const drawSpeakerIcon = (g: Phaser.GameObjects.Graphics, size: number, on: boolean): void => {
+  const s = size / 2; // half-extent
+  const color = 0xeaf6fb; // PALETTE.text as a number
+  g.fillStyle(color, 1);
+  // Magnet block + cone, speaker pointing right. The cone is two triangles so we
+  // pass plain numbers (this Phaser build's fillPoints wants Vector2 instances).
+  g.fillRoundedRect(-0.95 * s, -0.28 * s, 0.42 * s, 0.56 * s, 0.06 * s);
+  g.fillTriangle(-0.6 * s, -0.28 * s, -0.05 * s, -0.85 * s, -0.05 * s, 0.85 * s);
+  g.fillTriangle(-0.6 * s, -0.28 * s, -0.05 * s, 0.85 * s, -0.6 * s, 0.28 * s);
+  const lw = Math.max(2, 0.12 * s);
+  g.lineStyle(lw, color, 1);
+  if (on) {
+    // Two sound waves curving off to the right.
+    g.beginPath();
+    g.arc(0.02 * s, 0, 0.42 * s, -Math.PI / 3, Math.PI / 3);
+    g.strokePath();
+    g.beginPath();
+    g.arc(0.02 * s, 0, 0.72 * s, -Math.PI / 3, Math.PI / 3);
+    g.strokePath();
+  } else {
+    // Muted: a small X where the waves would be.
+    g.beginPath();
+    g.moveTo(0.3 * s, -0.32 * s);
+    g.lineTo(0.85 * s, 0.32 * s);
+    g.strokePath();
+    g.beginPath();
+    g.moveTo(0.3 * s, 0.32 * s);
+    g.lineTo(0.85 * s, -0.32 * s);
+    g.strokePath();
+  }
+};

@@ -38,9 +38,12 @@ import {
   makePanel,
   stackColumn,
   PillButton,
+  IconButton,
+  makeIconButton,
+  drawSpeakerIcon,
 } from '../art/theme';
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
-import { playHop, playSlide, playSplash, playWin } from '../audio';
+import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { showHowToPlay } from '../howToPlay';
 
 type DragState = {
@@ -95,6 +98,7 @@ export class GameScene extends Scene {
   private resetButton!: PillButton;
   private hintButton!: PillButton;
   private helpButton!: PillButton;
+  private muteButton!: IconButton;
   /** The shared "How to play" overlay, when open (guards against stacking). */
   private howTo?: Phaser.GameObjects.Container;
   private hintLayer!: Phaser.GameObjects.Container;
@@ -236,6 +240,17 @@ export class GameScene extends Scene {
       onClick: () => this.openHowTo(),
     });
     this.uiLayer.add(this.helpButton);
+
+    // Master mute (top-left, beside Menu). Feed-first players land straight on
+    // the board and never see the hub's sound/music toggles, so this compact
+    // speaker icon gives them a one-tap way to silence everything (SFX + music).
+    this.muteButton = makeIconButton(this, {
+      variant: 'chip',
+      size: 'sm',
+      draw: (g, size) => drawSpeakerIcon(g, size, isAnyAudioOn()),
+      onClick: () => this.toggleMute(),
+    });
+    this.uiLayer.add(this.muteButton);
 
     // Tapping empty ice clears the current selection.
     this.input.on(
@@ -506,7 +521,10 @@ export class GameScene extends Scene {
     if (!this.board) return;
     const w = this.scale.width;
     const h = this.scale.height;
-    this.hudHeight = Math.min(72, h * 0.13);
+    // The top band holds two rows - a chrome row (Menu / mute / help|banner|skip)
+    // and a dedicated Moves/Par readout beneath it - so it's a touch taller than
+    // a single row.
+    this.hudHeight = Math.min(84, Math.max(72, h * 0.14));
     // Reserve a strip at the bottom for the hint / breathing room so the board
     // never sits under it (was clipping the hint on large/desktop screens).
     const bottomStrip = 50;
@@ -922,34 +940,25 @@ export class GameScene extends Scene {
     this.tweens.add({ targets: ghost, alpha: 0.22, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
   }
 
-  private addHintCaption(text: string): void {
-    const caption = this.add
-      .text(this.scale.width / 2, this.scale.height - 58, text, {
-        fontFamily: FONT.ui,
-        fontSize: '12px',
-        fontStyle: '600',
-        color: COLORS.text,
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.85);
+  /**
+   * A transient hint caption on a dark 'chip' pill (matching the HUD chrome).
+   * The backdrop is what makes it legible on BOTH layouts: in portrait the
+   * board is short and this lands on the dark backdrop, but on desktop/landscape
+   * the board fills the height and this sits over the near-white ice sheet -
+   * where the old plain light text vanished. Sits a row above the Restart/Hint
+   * buttons (which are at height - 26), lifted enough to clear the pill.
+   */
+  private addHintCaption(text: string): PillButton {
+    const caption = makeBadge(this, text, 'chip', 'sm');
+    caption.setPosition(this.scale.width / 2, this.scale.height - 70);
     this.hintLayer.add(caption);
+    return caption;
   }
 
   /** When the board is unsolvable from here, point the player at Restart. */
   private showStrandedHint(): void {
     this.clearHintGraphics();
-    const msg = this.add
-      .text(this.scale.width / 2, this.scale.height - 58, 'No way through from here \u2014 tap \u21BA Restart', {
-        fontFamily: FONT.ui,
-        fontSize: '12px',
-        fontStyle: '600',
-        color: COLORS.text,
-        align: 'center',
-        wordWrap: { width: this.scale.width - 40 },
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.9);
-    this.hintLayer.add(msg);
+    const msg = this.addHintCaption('No way through from here \u2014 tap \u21BA Restart');
     this.time.delayedCall(2600, () => {
       if (msg.active) {
         this.tweens.add({ targets: msg, alpha: 0, duration: 400, onComplete: () => msg.destroy() });
@@ -970,13 +979,32 @@ export class GameScene extends Scene {
     this.hintStage = 0;
   }
 
+  /** Master mute for the play HUD: silence or restore both SFX and music, then
+   *  redraw the speaker icon (waves vs. slash) to match the new state. */
+  private toggleMute(): void {
+    const on = !isAnyAudioOn();
+    setAllAudioOn(on);
+    if (on) playHop(); // a tiny confirmation blip when turning sound back on
+    this.muteButton.refresh();
+  }
+
   private updateHud(): void {
     const w = this.scale.width;
-    const midY = this.hudHeight / 2;
-    // Place the left + right HUD chrome first, then fit the centre readout into
-    // whatever horizontal space is left between them.
+    // Two-tier top HUD: row 1 is the chrome chips near the top; row 2 is a
+    // dedicated, full-width "Moves / Par" readout just below them, so the chips
+    // can never crowd the readout again (the added mute chip was crushing the
+    // old single-row centre to an unreadable sliver on narrow widths).
+    const midY = 22;
+    const statsMidY = this.hudHeight - 18;
     this.menuButton.setPosition(SPACE.md + this.menuButton.width / 2, midY);
     this.menuButton.setVisible(!this.won);
+    // Master mute sits just right of Menu; always available during play so a
+    // feed-first player can silence audio without a trip back to the hub.
+    this.muteButton.setPosition(
+      this.menuButton.x + this.menuButton.width / 2 + SPACE.sm + this.muteButton.width / 2,
+      midY
+    );
+    this.muteButton.setVisible(!this.won);
     const skipVisible = this.isCommunity && !this.won;
     this.skipButton.setPosition(w - SPACE.md - this.skipButton.width / 2, midY);
     this.skipButton.setVisible(skipVisible);
@@ -991,23 +1019,14 @@ export class GameScene extends Scene {
     this.helpButton.setPosition(w - SPACE.md - this.helpButton.width / 2, midY);
     this.helpButton.setVisible(helpVisible);
 
-    // Centre "Moves / Par" on screen, but keep it clear of the menu chip and the
-    // right-slot element. A growing "Solved: 120" badge is right-anchored and
-    // widens leftward, so a hard w/2 centre would let it creep into "Par"; nudge
-    // the readout left to stay clear, and only shrink it as a last resort on very
-    // narrow screens, so the two never touch.
+    // Moves / Par: its own centred row beneath the chrome, using the full width,
+    // so the chrome chips can't crush it. It only shrinks if it somehow exceeds
+    // the whole row (never on real screens), so it always reads at full size.
     this.hudText.setScale(1);
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
-    const leftBound = this.menuButton.x + this.menuButton.width / 2 + SPACE.sm;
-    let rightObstacle = w - SPACE.md;
-    if (bannerVisible) rightObstacle = this.endlessBanner.x - this.endlessBanner.width / 2;
-    else if (skipVisible) rightObstacle = this.skipButton.x - this.skipButton.width / 2;
-    else if (helpVisible) rightObstacle = this.helpButton.x - this.helpButton.width / 2;
-    const rightBound = rightObstacle - SPACE.sm;
-    const avail = rightBound - leftBound;
-    if (avail > 0 && this.hudText.width > avail) this.hudText.setScale(avail / this.hudText.width);
-    const half = this.hudText.displayWidth / 2;
-    this.hudText.setPosition(Phaser.Math.Clamp(w / 2, leftBound + half, rightBound - half), midY);
+    const maxStatsW = w - SPACE.lg * 2;
+    if (this.hudText.width > maxStatsW) this.hudText.setScale(maxStatsW / this.hudText.width);
+    this.hudText.setPosition(w / 2, statsMidY);
     this.hintText.setPosition(w / 2, this.scale.height - 26);
     this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
     // Restart sits in the bottom strip and only appears once a move is made
@@ -1105,6 +1124,7 @@ export class GameScene extends Scene {
     this.resetButton.setVisible(false);
     this.hintButton.setVisible(false);
     this.menuButton.setVisible(false);
+    this.muteButton.setVisible(false);
     this.helpButton.setVisible(false);
 
     const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
@@ -1184,6 +1204,7 @@ export class GameScene extends Scene {
   private onWin(): void {
     this.won = true;
     this.menuButton.setVisible(false);
+    this.muteButton.setVisible(false);
     this.skipButton.setVisible(false);
     this.endlessBanner.setVisible(false);
     this.resetButton.setVisible(false);
@@ -1877,6 +1898,7 @@ export class GameScene extends Scene {
     const h = this.scale.height;
     this.won = true;
     this.skipButton.setVisible(false);
+    this.muteButton.setVisible(false);
     this.fxLayer.removeAll(true);
     const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
     const cardW = Math.min(420, w - SPACE.lg * 2);

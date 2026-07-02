@@ -138,8 +138,9 @@ export class HomeScene extends Scene {
       SPACE.md + this.soundButton.height / 2
     );
 
-    // Music toggle sits just under the sound chip (top-right). Off by default
-    // so a feed scroll never starts a soundtrack uninvited.
+    // Music toggle sits just under the sound chip (top-right). On by default;
+    // it eases in on the first tap (never on a feed scroll) and an explicit
+    // mute is remembered across sessions.
     this.musicButton = makePill(this, {
       label: this.musicLabel(),
       variant: 'chip',

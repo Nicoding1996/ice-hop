@@ -19,11 +19,13 @@ export const initAudioPrefs = (): void => {
     enabled = true;
   }
   try {
-    // Music is opt-in (default off): Reddit is a feed people scroll with the
-    // sound down, so we never start a soundtrack uninvited.
-    musicEnabled = localStorage.getItem(MUSIC_KEY) === 'on';
+    // Music defaults on: it only plays in the expanded game view (never the
+    // feed splash), and the autoplay policy eases it in on the first tap rather
+    // than blasting on load. An explicit "off" is sticky, so anyone who mutes it
+    // stays muted.
+    musicEnabled = localStorage.getItem(MUSIC_KEY) !== 'off';
   } catch {
-    musicEnabled = false;
+    musicEnabled = true;
   }
 };
 
@@ -49,6 +51,17 @@ export const setMusicOn = (on: boolean): void => {
   }
   if (on) startMusic();
   else stopMusic();
+};
+
+/** True when any audio channel (SFX or music) is currently on. Drives the
+ *  single play-screen mute toggle, which silences and restores both together. */
+export const isAnyAudioOn = (): boolean => enabled || musicEnabled;
+
+/** Master mute for the play screen: flip SFX and music together. (setMusicOn
+ *  starts/stops the ambient bed; setSoundOn just gates the effects.) */
+export const setAllAudioOn = (on: boolean): void => {
+  setSoundOn(on);
+  setMusicOn(on);
 };
 
 // Lazily create (and resume) the shared AudioContext + the soft master bus.
@@ -209,13 +222,31 @@ export const playWin = (): void => {
 // at build time). It is fetched and decoded once into a Web Audio buffer, then
 // looped gaplessly through its own quiet gain - independent of the SFX mute, and
 // paused with the shared context on tab-hide. Only in the expanded game view;
-// opt-in via the hub toggle (default off, the feed is muted). If the file is
-// ever missing or undecodable it simply stays silent - never an error.
+// on by default but toggleable from the hub (it eases in on the first tap, so
+// the feed is never noisy). If the file is ever missing or undecodable it
+// simply stays silent - never an error.
 
-// ogg first (smaller, gapless on Chrome/Android); mp3 fallback for Safari/iOS,
-// whose WebKit cannot decode Vorbis. The loader tries each until one decodes.
-const MUSIC_URLS = ['ice-hop-music.ogg', 'ice-hop-music.mp3'];
+// Two encodes of the same loop: OGG (smaller, gapless on Chrome/Android) and MP3
+// (Safari/iOS, whose WebKit cannot decode Vorbis via decodeAudioData). We always
+// try both, so a wrong guess self-heals - but orderedMusicUrls() puts the format
+// this browser can actually play first. That stops Safari from downloading the
+// OGG, failing to decode it, and only then fetching the MP3 (a wasted ~1.8 MB and
+// a console error every session, now that music is on by default).
+const MUSIC_OGG = 'ice-hop-music.ogg';
+const MUSIC_MP3 = 'ice-hop-music.mp3';
 const MUSIC_VOL = 0.3; // sits under the SFX but present; tune to taste
+
+// Prefer the playable format up front. Safari/iOS reports '' (can't play) for
+// OGG Vorbis, so it fetches the MP3 directly; Chrome/Android keep the gapless OGG.
+const orderedMusicUrls = (): string[] => {
+  try {
+    const canOgg = document.createElement('audio').canPlayType('audio/ogg; codecs="vorbis"');
+    if (canOgg === '') return [MUSIC_MP3, MUSIC_OGG];
+  } catch {
+    /* canPlayType unavailable - fall back to the default order */
+  }
+  return [MUSIC_OGG, MUSIC_MP3];
+};
 
 let musicGain: GainNode | null = null;
 let musicSource: AudioBufferSourceNode | null = null;
@@ -225,7 +256,7 @@ let lifecycleArmed = false;
 
 const loadMusicBuffer = async (ac: AudioContext): Promise<AudioBuffer | null> => {
   if (musicBuffer) return musicBuffer;
-  for (const url of MUSIC_URLS) {
+  for (const url of orderedMusicUrls()) {
     try {
       const res = await fetch(url);
       if (!res.ok) continue;

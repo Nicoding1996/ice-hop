@@ -2,7 +2,6 @@ import { redis } from '@devvit/web/server';
 import type { Board } from '../../shared/game/types';
 import type { EndlessTier, EndlessTierCounts } from '../../shared/api';
 import { generate } from '../../shared/solver/generator';
-import { solve } from '../../shared/solver/solver';
 import { keys } from './keys';
 
 /**
@@ -24,15 +23,58 @@ type GenConfig = {
   requireAllPiecesUsed?: boolean;
 };
 
-// Always-solvable fallback so an endless request can never come back empty.
-const FALLBACK_BOARD: Board = {
-  width: 5,
-  height: 5,
-  holes: [2],
-  pieces: [
-    { kind: 'HOPPER', cells: [0] },
-    { kind: 'BLOCKER', cells: [1] },
-  ],
+// Always-solvable, IN-BAND last-resort board for each tier so an endless
+// request can never come back empty AND never leaks a trivially easy puzzle into
+// Medium/Hard. These are solver-generated boards whose par sits inside the
+// tier's band (easy 2, medium 6, hard 9). They are only reached if the generator
+// fails to find a board within its budget (effectively never); the previous code
+// shared a single par-1 board here, which - together with the easy-config
+// fall-through below - is what let par 1-4 puzzles appear on Medium/Hard.
+const TIER_FALLBACK: Record<EndlessTier, { board: Board; par: number }> = {
+  easy: {
+    par: 2,
+    board: {
+      width: 5,
+      height: 5,
+      holes: [9, 14],
+      pieces: [
+        { kind: 'BLOCKER', cells: [18] },
+        { kind: 'HOPPER', cells: [24] },
+        { kind: 'HOPPER', cells: [19] },
+      ],
+    },
+  },
+  medium: {
+    par: 6,
+    board: {
+      width: 5,
+      height: 5,
+      holes: [13, 14],
+      pieces: [
+        { kind: 'SLIDER', cells: [7, 12], orient: 'V' },
+        { kind: 'BLOCKER', cells: [15] },
+        { kind: 'BLOCKER', cells: [16] },
+        { kind: 'HOPPER', cells: [1] },
+        { kind: 'HOPPER', cells: [8] },
+      ],
+    },
+  },
+  hard: {
+    par: 9,
+    board: {
+      width: 5,
+      height: 5,
+      holes: [14, 23, 24],
+      pieces: [
+        { kind: 'SLIDER', cells: [7, 12], orient: 'V' },
+        { kind: 'BLOCKER', cells: [15] },
+        { kind: 'BLOCKER', cells: [16] },
+        { kind: 'HOPPER', cells: [1] },
+        { kind: 'HOPPER', cells: [8] },
+        { kind: 'HOPPER', cells: [13] },
+      ],
+    },
+  },
 };
 
 // Each tier offers several board "shapes"; we shuffle them per request for
@@ -73,10 +115,29 @@ const shuffle = <T>(arr: ReadonlyArray<T>): T[] => {
   return out;
 };
 
-const fallbackResult = (): { board: Board; par: number } => ({
-  board: FALLBACK_BOARD,
-  par: solve(FALLBACK_BOARD, { maxStates: 5_000 }).par,
-});
+const fallbackResult = (tier: EndlessTier): { board: Board; par: number } => TIER_FALLBACK[tier];
+
+/**
+ * Each tier's par band, derived from its configs (single source of truth). Used
+ * to reject any board - freshly generated OR popped from the pool - whose par
+ * sits outside the tier, so a tier label always means what it says.
+ */
+const TIER_PAR: Record<EndlessTier, { min: number; max: number }> = {
+  easy: parBandOf('easy'),
+  medium: parBandOf('medium'),
+  hard: parBandOf('hard'),
+};
+
+function parBandOf(tier: EndlessTier): { min: number; max: number } {
+  const configs = ENDLESS_TIERS[tier];
+  return {
+    min: Math.min(...configs.map((c) => c.minPar)),
+    max: Math.max(...configs.map((c) => c.maxPar)),
+  };
+}
+
+const inBand = (tier: EndlessTier, par: number): boolean =>
+  par >= TIER_PAR[tier].min && par <= TIER_PAR[tier].max;
 
 /**
  * Quality generation for the POOL (off the request path: the scheduler cron and
@@ -89,11 +150,16 @@ const fallbackResult = (): { board: Board; par: number } => ({
  * ~38% (fall-through to easy + trivial fallback) and made Hard far slower, so
  * "<=2" is the sweet spot. The gate runs the solver's solution-counter, so it is
  * only affordable because this is the off-request pool path. Bounds attempts +
- * solver budget so a run stays quick; tries the tier's shapes shuffled, then easy
- * as a safety net.
+ * solver budget so a run stays quick; tries only the tier's OWN shapes (shuffled)
+ * and, if the gated pass is unlucky within budget, salvages an in-band board via
+ * the fast generator for the same tier - it never drops to an easier tier.
  */
 export const generateEndlessPuzzle = (tier: EndlessTier): { board: Board; par: number } => {
-  const configs = [...shuffle(ENDLESS_TIERS[tier]), ...ENDLESS_TIERS.easy];
+  // Only ever use the requested tier's own shapes - NEVER fall through to an
+  // easier tier's shapes, which is what leaked par 2-4 boards into Medium/Hard.
+  // `generate` guarantees the returned par is inside the config's [minPar,maxPar],
+  // so every board produced here is in-band for the tier.
+  const configs = shuffle(ENDLESS_TIERS[tier]);
   // Easy: no uniqueness gate (protect yield). Medium/Hard: allow at most 2
   // optimal solutions so the board has a real intended line, not a mush of equals.
   const maxOptimalSolutions = tier === 'easy' ? undefined : 2;
@@ -111,7 +177,11 @@ export const generateEndlessPuzzle = (tier: EndlessTier): { board: Board; par: n
     });
     if (generated) return generated;
   }
-  return fallbackResult();
+  // The gated pass was unlucky within budget. Keep the pool IN-BAND (correct
+  // difficulty) by dropping to the fast, gate-off generator for the SAME tier
+  // rather than to easy shapes - a slightly less "designed" board of the right
+  // difficulty beats a trivial one under the wrong label.
+  return generateEndlessFallback(tier);
 };
 
 /**
@@ -122,7 +192,10 @@ export const generateEndlessPuzzle = (tier: EndlessTier): { board: Board; par: n
  * pool supplies the nicer puzzles; this only guarantees the request never stalls.
  */
 export const generateEndlessFallback = (tier: EndlessTier): { board: Board; par: number } => {
-  const configs = [...shuffle(ENDLESS_TIERS[tier]), ...ENDLESS_TIERS.easy];
+  // Same rule as the pool: the tier's own shapes only, so a momentarily empty
+  // pool can never serve an easier tier's puzzle. Gates off + a small budget so
+  // it returns fast; `generate` still enforces the tier's par band on every hit.
+  const configs = shuffle(ENDLESS_TIERS[tier]);
   for (const config of configs) {
     const generated = generate({
       width: 5,
@@ -137,7 +210,10 @@ export const generateEndlessFallback = (tier: EndlessTier): { board: Board; par:
     });
     if (generated) return generated;
   }
-  return fallbackResult();
+  // Guaranteed IN-BAND board for this tier (see TIER_FALLBACK). Reached only if
+  // ~450 random attempts all missed the band - effectively never - and even then
+  // the player still gets a puzzle of the RIGHT difficulty for their tier.
+  return fallbackResult(tier);
 };
 
 /** Parse a non-negative integer stored in Redis (0 when missing/garbled). */
@@ -197,8 +273,11 @@ const ALL_TIERS: ReadonlyArray<EndlessTier> = ['easy', 'medium', 'hard'];
 
 /**
  * Pop one pre-generated puzzle from a tier's pool, or null when it is empty (the
- * caller then generates one on the fly). A random field is taken so concurrent
- * players rarely get the same board.
+ * caller then generates one on the fly). Fields are tried in random order so
+ * concurrent players rarely get the same board. Any entry whose par falls
+ * outside the tier band - e.g. a stale board left by an older build before the
+ * band was enforced - is dropped (deleted) and skipped, so the pool self-heals
+ * and never serves a too-easy puzzle under a Medium/Hard label.
  */
 export const popPooledPuzzle = async (
   tier: EndlessTier
@@ -206,17 +285,23 @@ export const popPooledPuzzle = async (
   const poolKey = keys.endlessPool(tier);
   const fields = await redis.hKeys(poolKey);
   if (fields.length === 0) return null;
-  const field = fields[Math.floor(Math.random() * fields.length)];
-  const json = await redis.hGet(poolKey, field);
-  await redis.hDel(poolKey, [field]);
-  if (!json) return null;
-  try {
-    const parsed: { board: Board; par: number } = JSON.parse(json);
-    if (!parsed || !parsed.board || typeof parsed.par !== 'number') return null;
-    return { board: parsed.board, par: parsed.par };
-  } catch {
-    return null;
+  // Bounded scan: in the healthy steady state the first random field is valid
+  // and returned (deleting just it, as before); the extra tries only matter
+  // while draining contaminated entries left by an older build.
+  for (const field of shuffle(fields).slice(0, 8)) {
+    const json = await redis.hGet(poolKey, field);
+    await redis.hDel(poolKey, [field]);
+    if (!json) continue;
+    try {
+      const parsed: { board: Board; par: number } = JSON.parse(json);
+      if (!parsed || !parsed.board || typeof parsed.par !== 'number') continue;
+      if (!inBand(tier, parsed.par)) continue; // stale/out-of-band -> drop it
+      return { board: parsed.board, par: parsed.par };
+    } catch {
+      continue;
+    }
   }
+  return null;
 };
 
 /**
