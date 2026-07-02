@@ -173,7 +173,7 @@ export class GameScene extends Scene {
     this.uiLayer = this.add.container(0, 0);
 
     this.hudText = this.add
-      .text(0, 0, '', { fontFamily: FONT.ui, fontSize: '20px', fontStyle: '800', color: COLORS.text })
+      .text(0, 0, 'Moves 0    Par 0', { fontFamily: FONT.ui, fontSize: '20px', fontStyle: '800', color: COLORS.text })
       .setOrigin(0.5);
     this.hintText = this.add
       .text(0, 0, 'Tap a penguin to hop, drag a seal to slide.\nGet every penguin into the water.', {
@@ -1020,12 +1020,15 @@ export class GameScene extends Scene {
     this.helpButton.setVisible(helpVisible);
 
     // Moves / Par: its own centred row beneath the chrome, using the full width,
-    // so the chrome chips can't crush it. It only shrinks if it somehow exceeds
-    // the whole row (never on real screens), so it always reads at full size.
+    // so the chrome chips can't crush it. Shrink only if it truly overflows the
+    // row, and never below a readable floor, so a bad width measurement can't
+    // collapse it to an invisible sliver.
     this.hudText.setScale(1);
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
     const maxStatsW = w - SPACE.lg * 2;
-    if (this.hudText.width > maxStatsW) this.hudText.setScale(maxStatsW / this.hudText.width);
+    if (this.hudText.width > maxStatsW) {
+      this.hudText.setScale(Math.max(0.6, maxStatsW / this.hudText.width));
+    }
     this.hudText.setPosition(w / 2, statsMidY);
     this.hintText.setPosition(w / 2, this.scale.height - 26);
     this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
