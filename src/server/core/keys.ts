@@ -9,6 +9,10 @@ export const keys = {
    *  post). Distinct prefix from postDate so daily and community posts don't
    *  collide. */
   ugcPost: (postId: string): string => `post:ugc:${postId}`,
+  /** Maps a post id to its pinned/stickied comment id, so a player's "Comment my
+   *  score" can be posted as a reply to it (Reddit's required pattern for
+   *  score-only comments) instead of a top-level comment on the post. */
+  pinnedComment: (postId: string): string => `post:pinned:${postId}`,
   /** A user's solve record for a given day (JSON). */
   solve: (date: string, user: string): string => `solve:${date}:${user}`,
   /** Per-day leaderboard (sorted set). */

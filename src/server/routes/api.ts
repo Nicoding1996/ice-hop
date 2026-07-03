@@ -28,6 +28,11 @@ const ENDLESS_TIERS: ReadonlyArray<EndlessTier> = ['easy', 'medium', 'hard'];
 const asTier = (value: string | undefined): EndlessTier =>
   ENDLESS_TIERS.find((t) => t === value) ?? 'easy';
 
+/** Narrow a stored id string to a Reddit comment id (`t1_`) without casting, so
+ *  a score can reply to the pinned comment; anything else falls back to the
+ *  post id (a top-level comment). */
+const isCommentId = (id: string): id is `t1_${string}` => id.startsWith('t1_');
+
 export const api = new Hono();
 
 // User-generated puzzle routes: /api/ugc/{submit,list,vote}
@@ -227,7 +232,13 @@ api.post('/comment-score', async (c) => {
     }
 
     const text = buildScoreComment({ moves, par, stars: computeStars(moves, par), creator });
-    await reddit.submitComment({ id: postId, text, runAs: 'USER' });
+    // Post the score as a reply under the post's pinned comment (Reddit's
+    // required pattern for score-only user comments); fall back to a top-level
+    // comment for older posts that predate the stored pinned-comment id.
+    const pinnedCommentId = await redis.get(keys.pinnedComment(postId));
+    const commentTarget =
+      pinnedCommentId && isCommentId(pinnedCommentId) ? pinnedCommentId : postId;
+    await reddit.submitComment({ id: commentTarget, text, runAs: 'USER' });
     return c.json<CommentScoreResponse>({ type: 'commentScore', ok: true });
   } catch (error) {
     console.error(`/api/comment-score failed: ${error}`);

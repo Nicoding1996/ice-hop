@@ -84,6 +84,8 @@ export const createDailyPost = async (date: string) => {
       ].join('\n\n'),
     });
     await comment.distinguish(true);
+    // Remember the pinned comment so score comments can reply under it.
+    await redis.set(keys.pinnedComment(post.id), comment.id);
   } catch (error) {
     console.error(`Failed to seed daily comment: ${error}`);
   }
@@ -141,6 +143,8 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
       ].join('\n\n'),
     });
     await comment.distinguish(true);
+    // Remember the pinned comment so score comments can reply under it.
+    await redis.set(keys.pinnedComment(post.id), comment.id);
   } catch (error) {
     console.error(`Failed to seed UGC comment: ${error}`);
   }
