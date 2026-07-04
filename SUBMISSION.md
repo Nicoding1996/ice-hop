@@ -422,3 +422,61 @@ Two Devpost-workflow habits that help:
       specific, actionable notes from building this.
 - [ ] **Draft submitted early** so reviewers can flag any eligibility issue.
 - [ ] README.md is in the repo root (it is).
+
+---
+
+## 10. Launch / deployment record
+
+A running record of what was actually shipped, so the app version, settings, and
+review status stay documented (and any significant post-submission updates are
+traceable, per the hackathon's "document significant updates" note).
+
+**Status:** Submitted for review (pending Reddit approval). Not yet public or
+installed on a live community.
+
+| Field | Value |
+| --- | --- |
+| App slug / listing | `ice-hop` — https://developers.reddit.com/apps/ice-hop |
+| Version submitted | 0.0.12 |
+| Submitted for review | 2026-07-03 |
+| Review reason (per CLI) | App creates custom posts |
+| Playtest subreddit | r/ice_hop_dev (`dev.subreddit` in devvit.json) |
+| Intended launch subreddit | r/IceHop (create, then `devvit install` after approval) |
+| Devvit CLI | 0.12.24 (update to 0.13.4 available; not yet applied) |
+
+**Commands used to launch**
+
+- `npm run launch` = `npm run deploy && devvit publish`
+- `npm run deploy` = `npm run type-check && devvit upload`
+- The first `devvit publish` failed once with a transient `TypeError: fetch
+  failed` (network); re-running `npx devvit publish` succeeded and chose
+  "Continue with the source code upload" when prompted for the review source zip.
+
+**What happens on approval**
+
+- Email confirmation from Reddit (typically 1-2 business days).
+- Then installable on any subreddit you moderate: `npx devvit install r/IceHop`.
+- Published apps are **unlisted by default** (other communities can't install
+  them) - the intended setting for this game.
+
+**Behavior tied to approval (don't mistake for a bug)**
+
+- The win-screen "Comment my score" posts via `runAs: 'USER'`. Before approval it
+  shows the app account (`u/ice-hop`) on those comments; after approval it posts
+  under each real player's username.
+
+**Updating after launch**
+
+- Change code, then `npm run launch` (or `npx devvit publish`) to submit a new
+  version for review; re-run `npx devvit install r/IceHop` to move the live
+  community to the approved version. Use `npm run dev` (playtest) for instant,
+  review-free iteration. Batch changes into fewer releases.
+
+**Significant update in this cycle**
+
+- Score comments now post as a **reply under the post's pinned comment** (Reddit's
+  required pattern for score-only user comments) instead of as top-level comments.
+  Implemented in `post.ts` (store the pinned comment id at post creation), `keys.ts`
+  (new `pinnedComment` key), and `api.ts` (`/api/comment-score` replies to it, with
+  a top-level fallback for posts created before this change). Type-check clean,
+  31/31 tests pass.
