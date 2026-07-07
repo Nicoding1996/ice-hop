@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Ice Hop - app icon exporter</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; gap: 18px; justify-content: center;
+    background: #0b1f3a; color: #eaf6fb;
+    font-family: 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 18px; font-weight: 700; margin: 0; }
+  p { margin: 0; opacity: 0.8; font-size: 13px; text-align: center; max-width: 640px; }
+  .previews { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .swatch { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .swatch span { font-size: 12px; opacity: 0.7; }
+  .square, .circle { width: 200px; height: 200px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); background: #091a33; overflow: hidden; }
+  .square { border-radius: 16px; }
+  .circle { border-radius: 50%; }
+  .square svg, .circle svg { width: 100%; height: 100%; display: block; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  button {
+    font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: 999px;
+    padding: 12px 22px; color: #062033; background: #ff8a5b;
+  }
+  button.alt { background: #ffd166; }
+  button:active { transform: translateY(1px); }
+</style>
+</head>
+<body>
+  <h1>Ice Hop app icon</h1>
+  <div class="previews">
+    <div class="swatch"><div class="square" id="pv-square"></div><span>square</span></div>
+    <div class="swatch"><div class="circle" id="pv-circle"></div><span>how Reddit masks it</span></div>
+  </div>
+  <div class="row">
+    <button id="dl1024">Download icon.png (1024 x 1024)</button>
+    <button id="dl512" class="alt">Download PNG (512 x 512)</button>
+  </div>
+  <p>Devvit wants a 1024&times;1024 PNG. Save the 1024 file as <strong>icon.png</strong> into this same <strong>brand/</strong> folder (next to icon.svg), then it gets wired into devvit.json.</p>
+
+<script>
+// The Ice Hop community icon, inline so export works from a local file with no
+// server, no install, and no third-party upload. Keep in sync with brand/icon.svg.
+const SVG = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ice Hop: a penguin at the water's edge on the ice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a1d38"/>
+      <stop offset="0.55" stop-color="#143a5c"/>
+      <stop offset="1" stop-color="#1c4a6e"/>
+    </linearGradient>
+    <linearGradient id="ice" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef9ff"/>
+      <stop offset="1" stop-color="#bfe3f2"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.46" r="0.5">
+      <stop offset="0" stop-color="#ff8a5b" stop-opacity="0.5"/>
+      <stop offset="0.6" stop-color="#ff8a5b" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ff8a5b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#eaf6fb" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#eaf6fb" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#sky)"/>
+
+  <g fill="#dff1fb">
+    <circle cx="116" cy="120" r="3" opacity="0.7"/>
+    <circle cx="402" cy="98" r="2.6" opacity="0.6"/>
+    <circle cx="436" cy="186" r="2" opacity="0.5"/>
+    <circle cx="86" cy="210" r="2.2" opacity="0.5"/>
+  </g>
+
+  <ellipse cx="256" cy="262" rx="280" ry="150" fill="url(#sun)"/>
+
+  <path d="M-20 286 C 130 232, 382 232, 532 286 L532 532 L-20 532 Z" fill="url(#ice)"/>
+  <path d="M-20 286 C 130 232, 382 232, 532 286" stroke="#ffffff" stroke-width="4" fill="none" opacity="0.65"/>
+
+  <ellipse cx="256" cy="444" rx="94" ry="30" fill="#1d6f9c"/>
+  <ellipse cx="256" cy="441" rx="76" ry="22" fill="#0e3a55"/>
+  <ellipse cx="224" cy="434" rx="22" ry="7" fill="#7fe0ff" opacity="0.55"/>
+
+  <ellipse cx="256" cy="250" rx="155" ry="180" fill="url(#halo)"/>
+
+  <g transform="translate(106 58) scale(3)">
+    <ellipse cx="33" cy="114" rx="15" ry="8.5" fill="#f6a623" stroke="#c77f15" stroke-width="2.5" transform="rotate(-12.6 33 114)"/>
+    <ellipse cx="67" cy="114" rx="15" ry="8.5" fill="#f6a623" stroke="#c77f15" stroke-width="2.5" transform="rotate(12.6 67 114)"/>
+    <ellipse cx="12" cy="79" rx="10" ry="26" fill="#2b3440" stroke="#141a22" stroke-width="4" transform="rotate(9.2 12 79)"/>
+    <ellipse cx="88" cy="79" rx="10" ry="26" fill="#2b3440" stroke="#141a22" stroke-width="4" transform="rotate(-9.2 88 79)"/>
+    <ellipse cx="50" cy="73" rx="42" ry="45" fill="#2b3440" stroke="#141a22" stroke-width="4"/>
+    <ellipse cx="50" cy="95" rx="27" ry="29" fill="#f4f9fc"/>
+    <ellipse cx="35" cy="58" rx="11" ry="13" fill="#ffffff"/>
+    <ellipse cx="65" cy="58" rx="11" ry="13" fill="#ffffff"/>
+    <circle cx="37" cy="60" r="7" fill="#15202b"/>
+    <circle cx="63" cy="60" r="7" fill="#15202b"/>
+    <circle cx="40" cy="56" r="2.5" fill="#ffffff"/>
+    <circle cx="66" cy="56" r="2.5" fill="#ffffff"/>
+    <polygon points="44,68 56,68 50,77" fill="#f6a623" stroke="#c77f15" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+
+  <circle cx="256" cy="256" r="250" fill="none" stroke="#eaf6fb" stroke-width="3" opacity="0.12"/>
+</svg>`;
+
+document.getElementById('pv-square').innerHTML = SVG;
+document.getElementById('pv-circle').innerHTML = SVG;
+
+function download(size, name) {
+  const blob = new Blob([SVG], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = function () {
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, size, size);
+    URL.revokeObjectURL(url);
+    const finish = (outUrl, revoke) => {
+      const a = document.createElement('a');
+      a.href = outUrl;
+      a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      if (revoke) setTimeout(() => URL.revokeObjectURL(outUrl), 1000);
+    };
+    if (canvas.toBlob) {
+      canvas.toBlob((b) => finish(URL.createObjectURL(b), true), 'image/png');
+    } else {
+      finish(canvas.toDataURL('image/png'), false);
+    }
+  };
+  img.onerror = function () { alert('Could not render the SVG in this browser.'); URL.revokeObjectURL(url); };
+  img.src = url;
+}
+
+document.getElementById('dl1024').addEventListener('click', () => download(1024, 'icon.png'));
+document.getElementById('dl512').addEventListener('click', () => download(512, 'ice-hop-icon-512.png'));
+</script>
+</body>
+</html>

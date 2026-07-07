@@ -24,6 +24,9 @@
       "asUser": ["SUBSCRIBE_TO_SUBREDDIT", "SUBMIT_COMMENT"]
     }
   },
+  "marketingAssets": {
+    "icon": "brand/icon.png"
+  },
   "menu": {
     "items": [
       {
