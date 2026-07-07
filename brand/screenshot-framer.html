@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Ice Hop - screenshot framer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; gap: 16px; padding: 22px;
+    background: #0b1f3a; color: #eaf6fb;
+    font-family: 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  p.hint { margin: 0; opacity: 0.75; font-size: 13px; text-align: center; max-width: 680px; }
+  #stage {
+    width: min(92vw, 660px); aspect-ratio: 3 / 2; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 12px 44px rgba(0,0,0,0.5); background: #091a33; position: relative;
+  }
+  #stage.drop { outline: 3px dashed #ffd166; outline-offset: -6px; }
+  #stage canvas { width: 100%; height: 100%; display: block; }
+  #empty {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; font-size: 15px; opacity: 0.8; pointer-events: none;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: center; max-width: 720px; }
+  .controls label { font-size: 13px; opacity: 0.85; display: inline-flex; align-items: center; gap: 6px; }
+  input[type="text"] { font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid #2c4a66; background: #0e2740; color: #eaf6fb; width: 320px; max-width: 80vw; }
+  select, input[type="file"] { font: inherit; color: #eaf6fb; }
+  select { background: #0e2740; border: 1px solid #2c4a66; border-radius: 8px; padding: 8px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  button { font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: 999px; padding: 11px 20px; color: #062033; background: #ff8a5b; }
+  button.alt { background: #ffd166; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:active:not(:disabled) { transform: translateY(1px); }
+</style>
+</head>
+<body>
+  <h1>Ice Hop screenshot framer</h1>
+  <p class="hint">Take a screenshot (Win+Shift+S), then just paste it here with Ctrl+V. You can also drag a file in or choose one. It gets placed on the Ice Hop dawn background at exactly 3:2 with your caption, then exports a PNG ready for the Devpost gallery.</p>
+
+  <div id="stage">
+    <canvas id="preview" width="1200" height="800"></canvas>
+    <div id="empty">Paste a screenshot (Ctrl+V), drag one here, or use "Choose file" below.</div>
+  </div>
+
+  <div class="controls">
+    <label>Screenshot: <input type="file" id="file" accept="image/*"></label>
+    <label>Caption: <input type="text" id="caption" placeholder="(caption / headline)" value=""></label>
+    <label>Subline: <input type="text" id="subline" placeholder="(optional, phone+text layout)" value=""></label>
+    <label>Position:
+      <select id="pos">
+        <option value="bottom" selected>Bottom</option>
+        <option value="top">Top</option>
+        <option value="none">None</option>
+      </select>
+    </label>
+    <label>Fit:
+      <select id="fit">
+        <option value="contain" selected>Fit (show all)</option>
+        <option value="cover">Fill (crop to 3:2)</option>
+      </select>
+    </label>
+    <label>Frame:
+      <select id="frame">
+        <option value="card" selected>Plain</option>
+        <option value="phone">Phone</option>
+      </select>
+    </label>
+    <label>Layout:
+      <select id="layout">
+        <option value="center" selected>Centered</option>
+        <option value="left">Phone left + text</option>
+        <option value="right">Phone right + text</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="row">
+    <button id="dl1" disabled>Download PNG (1200 x 800)</button>
+    <button id="dl2" class="alt" disabled>Download PNG (2400 x 1600)</button>
+  </div>
+  <p class="hint">Tip: shots that are already near-landscape look great on "Fill". Tall phone screenshots look best on "Fit" (they sit on the dawn background with room for the caption).</p>
+
+<script>
+  const BASE_W = 1200, BASE_H = 800;
+  const PAD = 56, CAP = 96, RADIUS = 22;
+  const FONT = "'Trebuchet MS','Segoe UI',Verdana,sans-serif";
+
+  let img = null;
+  const preview = document.getElementById('preview');
+  const emptyEl = document.getElementById('empty');
+  const stage = document.getElementById('stage');
+
+  const roundRect = (ctx, x, y, w, h, r) => {
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return; }
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  };
+
+  // Draw the screenshot inside a clean, flat phone silhouette centered in `box`.
+  const drawPhone = (ctx, box) => {
+    const aspect = 0.48; // body width / height
+    let H = box.h, W = H * aspect;
+    if (W > box.w) { W = box.w; H = W / aspect; }
+    const x = box.x + (box.w - W) / 2;
+    const y = box.y + (box.h - H) / 2;
+    const rad = Math.min(48, W * 0.16);
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 16;
+    ctx.fillStyle = '#0e1621';
+    roundRect(ctx, x, y, W, H, rad); ctx.fill();
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 2;
+    roundRect(ctx, x + 1, y + 1, W - 2, H - 2, rad - 1); ctx.stroke();
+
+    const bez = Math.max(10, W * 0.055);
+    const sx = x + bez, sy = y + bez, sw = W - 2 * bez, sh = H - 2 * bez, srad = Math.max(8, rad - bez);
+    ctx.save();
+    roundRect(ctx, sx, sy, sw, sh, srad); ctx.clip();
+    ctx.fillStyle = '#0a2a43'; ctx.fillRect(sx, sy, sw, sh); // game's own bg color
+    // Contain the whole shot so nothing gets cropped; any band top/bottom blends
+    // with the game's dark background.
+    const ir = img.width / img.height, sr = sw / sh;
+    let dw, dh;
+    if (ir > sr) { dw = sw; dh = sw / ir; } else { dh = sh; dw = sh * ir; }
+    ctx.drawImage(img, sx + (sw - dw) / 2, sy + (sh - dh) / 2, dw, dh);
+    ctx.restore();
+
+    // notch pill + side button
+    const nw = sw * 0.34, nh = Math.max(14, H * 0.024);
+    ctx.fillStyle = '#0e1621';
+    roundRect(ctx, x + W / 2 - nw / 2, sy + 4, nw, nh, nh / 2); ctx.fill();
+    ctx.fillStyle = '#0b121b';
+    roundRect(ctx, x + W - 3, y + H * 0.30, 6, H * 0.12, 3); ctx.fill();
+  };
+
+  // Big headline, wrapped and centered inside a box (used by the showcase layout).
+  const drawHeadline = (ctx, text, box) => {
+    if (!text) return;
+    const maxW = box.w - 24;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const wrap = (fontSize) => {
+      ctx.font = `800 ${fontSize}px ${FONT}`;
+      const words = text.split(/\s+/);
+      const lines = []; let cur = '';
+      for (const w of words) {
+        const t = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else { cur = t; }
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    };
+    let size = 58, lines = wrap(size);
+    while (lines.length * size * 1.18 > box.h - 20 && size > 22) { size -= 4; lines = wrap(size); }
+    ctx.font = `800 ${size}px ${FONT}`;
+    ctx.fillStyle = '#eaf6fb';
+    ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 1;
+    const lineH = size * 1.18;
+    let y = box.y + box.h / 2 - (lines.length * lineH) / 2 + lineH / 2;
+    const cx = box.x + box.w / 2;
+    for (const ln of lines) { ctx.fillText(ln, cx, y); y += lineH; }
+    ctx.shadowColor = 'transparent';
+  };
+
+  // App-store style: a phone offset to one side, headline text on the other.
+  const renderShowcase = (ctx, side, headline, subline) => {
+    const M = 54, phoneHalfW = 452, gap = 20;
+    let phoneBox, textBox;
+    if (side === 'left') {
+      phoneBox = { x: M, y: M, w: phoneHalfW, h: BASE_H - 2 * M };
+      textBox = { x: M + phoneHalfW + gap, y: M, w: BASE_W - (M + phoneHalfW + gap) - M, h: BASE_H - 2 * M };
+    } else {
+      phoneBox = { x: BASE_W - M - phoneHalfW, y: M, w: phoneHalfW, h: BASE_H - 2 * M };
+      textBox = { x: M, y: M, w: BASE_W - M - phoneHalfW - gap - M, h: BASE_H - 2 * M };
+    }
+    if (img) drawPhone(ctx, phoneBox);
+    if (!headline && !subline) return;
+
+    const cx = textBox.x + textBox.w / 2;
+    const maxW = textBox.w - 24;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    const wrapAt = (txt, fs, weight) => {
+      ctx.font = `${weight} ${fs}px ${FONT}`;
+      const words = (txt || '').split(/\s+/).filter(Boolean);
+      const lines = []; let cur = '';
+      for (const w of words) {
+        const t = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else { cur = t; }
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    };
+
+    let hSize = 60;
+    let hLines = wrapAt(headline, hSize, 800);
+    const maxHeadH = subline ? textBox.h * 0.5 : textBox.h * 0.8;
+    while (hLines.length * hSize * 1.16 > maxHeadH && hSize > 26) { hSize -= 4; hLines = wrapAt(headline, hSize, 800); }
+    const hLineH = hSize * 1.16;
+
+    const sSize = Math.max(20, Math.round(hSize * 0.4));
+    const sLines = subline ? wrapAt(subline, sSize, 400) : [];
+    const sLineH = sSize * 1.32;
+
+    const accentGap = 20, accentH = 5, accentW = Math.min(96, maxW * 0.4);
+    const subGap = sLines.length ? 20 : 0;
+    const totalH = hLines.length * hLineH + accentGap + accentH + subGap + sLines.length * sLineH;
+    let y = textBox.y + textBox.h / 2 - totalH / 2;
+
+    ctx.font = `800 ${hSize}px ${FONT}`;
+    ctx.fillStyle = '#eaf6fb';
+    ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 1;
+    for (const ln of hLines) { ctx.fillText(ln, cx, y); y += hLineH; }
+    ctx.shadowColor = 'transparent';
+
+    y += accentGap;
+    ctx.fillStyle = '#ffd166';
+    roundRect(ctx, cx - accentW / 2, y, accentW, accentH, accentH / 2); ctx.fill();
+    y += accentH;
+
+    if (sLines.length) {
+      y += subGap;
+      ctx.font = `400 ${sSize}px ${FONT}`;
+      ctx.fillStyle = 'rgba(234,246,251,0.82)';
+      for (const ln of sLines) { ctx.fillText(ln, cx, y); y += sLineH; }
+    }
+  };
+
+  // Draw everything in 1200x800 logical coords, scaled up by `scale`.
+  const render = (canvas, scale) => {
+    canvas.width = BASE_W * scale;
+    canvas.height = BASE_H * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+    // Dawn-gradient backdrop (matches thumbnail.svg / the game).
+    const sky = ctx.createLinearGradient(0, 0, 0, BASE_H);
+    sky.addColorStop(0, '#091a33');
+    sky.addColorStop(0.58, '#143a5c');
+    sky.addColorStop(1, '#1c4a6e');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+    // Soft sunrise glow + a few stars, only really seen in "Fit" mode.
+    const glow = ctx.createRadialGradient(BASE_W / 2, -60, 40, BASE_W / 2, -60, 620);
+    glow.addColorStop(0, 'rgba(255,138,91,0.20)');
+    glow.addColorStop(1, 'rgba(255,138,91,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, BASE_W, 300);
+    ctx.fillStyle = '#dff1fb';
+    [[150,60,2.2],[360,44,1.5],[560,54,1.8],[820,48,1.4],[1020,70,2],[1110,110,1.5]].forEach(([x,y,r]) => {
+      ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    const caption = document.getElementById('caption').value.trim();
+    const pos = document.getElementById('pos').value;
+    const fit = document.getElementById('fit').value;
+    const frame = document.getElementById('frame').value;
+    const layout = document.getElementById('layout').value;
+    if (layout !== 'center') { renderShowcase(ctx, layout, caption, document.getElementById('subline').value.trim()); return; }
+    const hasCap = caption.length > 0 && pos !== 'none';
+
+    // Content box for the screenshot (leaves room for a caption band).
+    let bx = PAD, bw = BASE_W - PAD * 2, by = PAD, bh = BASE_H - PAD * 2;
+    if (hasCap && pos === 'bottom') { bh = BASE_H - PAD * 2 - CAP; }
+    if (hasCap && pos === 'top') { by = PAD + CAP; bh = BASE_H - PAD * 2 - CAP; }
+
+    if (img && frame === 'phone') {
+      drawPhone(ctx, { x: bx, y: by, w: bw, h: bh });
+    } else if (img) {
+      const ir = img.width / img.height;
+      const br = bw / bh;
+      let dw, dh, dx, dy;
+      if (fit === 'cover') { // fill the box, crop overflow
+        if (ir > br) { dh = bh; dw = bh * ir; } else { dw = bw; dh = bw / ir; }
+      } else { // contain: fit fully inside the box
+        if (ir > br) { dw = bw; dh = bw / ir; } else { dh = bh; dw = bh * ir; }
+      }
+      dx = bx + (bw - dw) / 2;
+      dy = by + (bh - dh) / 2;
+
+      // Card = the visible framed area (the box for cover, the image for contain).
+      const cx = fit === 'cover' ? bx : dx;
+      const cy = fit === 'cover' ? by : dy;
+      const cw = fit === 'cover' ? bw : dw;
+      const ch = fit === 'cover' ? bh : dh;
+
+      // Drop shadow behind the card.
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.45)';
+      ctx.shadowBlur = 34; ctx.shadowOffsetY = 14;
+      ctx.fillStyle = '#0a1c30';
+      roundRect(ctx, cx, cy, cw, ch, RADIUS); ctx.fill();
+      ctx.restore();
+
+      // Clip to the rounded card and draw the screenshot.
+      ctx.save();
+      roundRect(ctx, cx, cy, cw, ch, RADIUS); ctx.clip();
+      ctx.drawImage(img, dx, dy, dw, dh);
+      ctx.restore();
+
+      // Thin light border for a crisp edge.
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = 2;
+      roundRect(ctx, cx + 1, cy + 1, cw - 2, ch - 2, RADIUS - 1); ctx.stroke();
+      ctx.restore();
+    }
+
+    if (hasCap) {
+      const cyText = pos === 'bottom' ? BASE_H - CAP / 2 : PAD + CAP / 2;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = "600 34px " + FONT;
+      ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 1;
+      ctx.fillStyle = '#eaf6fb';
+      ctx.fillText(caption, BASE_W / 2, cyText);
+      ctx.shadowColor = 'transparent';
+    }
+  };
+
+  const redraw = () => {
+    render(preview, 1);
+    emptyEl.style.display = img ? 'none' : 'flex';
+    document.getElementById('dl1').disabled = !img;
+    document.getElementById('dl2').disabled = !img;
+  };
+
+  const loadFile = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const im = new Image();
+      im.onload = () => { img = im; redraw(); };
+      im.src = reader.result; // data URL: same-origin, canvas stays exportable
+    };
+    reader.readAsDataURL(file);
+  };
+
+  document.getElementById('file').addEventListener('change', (e) => loadFile(e.target.files[0]));
+  ['caption', 'pos', 'fit', 'frame', 'layout', 'subline'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', redraw);
+    document.getElementById(id).addEventListener('change', redraw);
+  });
+
+  // Drag and drop onto the preview.
+  ['dragenter', 'dragover'].forEach((ev) => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.add('drop'); }));
+  ['dragleave', 'drop'].forEach((ev) => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.remove('drop'); }));
+  stage.addEventListener('drop', (e) => { if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+
+  // Paste from clipboard (Win+Shift+S then Ctrl+V, anywhere on the page).
+  document.addEventListener('paste', (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const it of items) {
+      if (it.type && it.type.startsWith('image/')) {
+        const blob = it.getAsFile();
+        if (blob) { loadFile(blob); e.preventDefault(); break; }
+      }
+    }
+  });
+
+  const download = (scale) => {
+    if (!img) return;
+    const c = document.createElement('canvas');
+    render(c, scale);
+    const cap = document.getElementById('caption').value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'frame';
+    const done = (url, revoke) => {
+      const a = document.createElement('a');
+      a.href = url; a.download = `ice-hop-${cap}-${c.width}x${c.height}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      if (revoke) setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    if (c.toBlob) c.toBlob((b) => done(URL.createObjectURL(b), true), 'image/png');
+    else done(c.toDataURL('image/png'), false);
+  };
+  document.getElementById('dl1').addEventListener('click', () => download(1));
+  document.getElementById('dl2').addEventListener('click', () => download(2));
+
+  redraw();
+</script>
+</body>
+</html>

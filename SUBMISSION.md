@@ -55,14 +55,16 @@ Ice Hop is a daily puzzle you play without leaving the feed. A small grid of ice
 holds a few penguins, a seal or two, and some open water. Tap a penguin and it
 hops over whatever's beside it. Drag a seal and it slides. Get every penguin into
 the water in as few moves as you can. That's the whole game, and you can read it
-in about three seconds without an instructions screen.
+in about three seconds. A quick how-to greets first-timers, then gets out of the
+way.
 
 Under the hood there's a solver that knows the optimal solution to every board.
 That one fact is what makes the rest work:
 
-- **Par scoring.** You're graded golf-style against the fewest possible moves, so
-  "I did it in 7" actually means something, and the comments fill up with people
-  comparing lines.
+- **Par scoring, if you want it.** Just getting every penguin into the water is a
+  win, so anyone can finish and feel good. For players who want a challenge,
+  you're also scored golf-style against the fewest possible moves, so "I did it in
+  7" actually means something and the comments fill up with people comparing lines.
 - **A real community, not a leaderboard with extra steps.** You build your own
   puzzle in an in-app editor. The solver checks it's actually solvable (you can
   play-test it first), then it drops into a community stream and becomes its own
@@ -80,9 +82,9 @@ stack of player-made puzzles once you've finished the daily.
 
 ### Why it fits "Games with a Hook"
 
-- **Delightful UX.** One screen, no tutorial, fits the viewport, plays with a tap
-  or a drag. Penguins breathe, hops squash and stretch, and a solved penguin dives
-  into the water and bobs there.
+- **Delightful UX.** One screen, reads at a glance, fits the viewport, plays with a
+  tap or a drag. Penguins bob gently, hops squash and stretch, and a solved penguin
+  dives into the water and floats there.
 - **Polish.** Hand-built vector art in a single "arctic at dawn" palette, smooth
   scene transitions, a calm loading state, synthesized sound, and a win screen
   that counts your score up and pops the stars in. No dead ends in the flow: every
@@ -99,9 +101,10 @@ stack of player-made puzzles once you've finished the daily.
 I love a puzzle that makes you work. The good ones stop you cold at first: you
 stare at the board certain there's no way it's possible, then something clicks,
 you see the line, and that little "ohhh" is one of the best feelings there is.
-It's even better with other people, getting stuck where a friend is stuck, racing
-them to a cleaner solution, and arguing about it after ("wait, you did it in
-seven?"). That's what the daily puzzles taking over group chats get right.
+It's even better with other people: getting stuck on the same board, working out
+the trick together, sometimes racing to a cleaner line, and arguing about it after
+("wait, you did it in seven?"). That's what the daily puzzles taking over group
+chats get right.
 
 I wanted that feeling, but living where the argument already happens: a Reddit
 thread. Hopping-and-sliding logic puzzles fit because they're deterministic, which
@@ -155,9 +158,9 @@ Built on Devvit Web so it runs natively inside a Reddit post.
   safe user-built puzzles, and the Endless hint all come off a single
   breadth-first search. It's the piece I'm proudest of, because everything else
   leans on it.
-- **It reads in three seconds, on a phone, with no tutorial.** Tap to hop, drag to
-  slide, get every penguin in the water. It fits the viewport and plays with one
-  thumb.
+- **It reads in three seconds, on a phone.** Tap to hop, drag to slide, get every
+  penguin in the water. It fits the viewport and plays with one thumb, and a quick
+  how-to is one tap away if you want it.
 - **Every pixel is hand-drawn in code.** Penguins, seals, rocks, water, and the
   win effects are vector art in one "arctic at dawn" palette. No sprite sheets, no
   stock assets, so the game has its own identity instead of a generic look.

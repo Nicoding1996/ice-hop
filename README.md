@@ -28,8 +28,9 @@ and open water holes.
   in a hole.** There are always exactly as many holes as penguins, so "everyone
   in the water" is the finish line.
 
-That's the whole game. No instructions screen needed: tap a penguin, watch it
-hop, and figure out the order that gets everyone into the water.
+That's the whole game: tap a penguin, watch it hop, and figure out the order that
+gets everyone into the water. A quick how-to greets first-timers, then gets out of
+the way.
 
 ### Scoring
 
@@ -193,3 +194,23 @@ npm run launch       # deploy + devvit publish
   the scoreboard and the bragging.
 - The puzzle mechanic is an original take on the classic peg-solitaire / sliding
   logic genre. The name, art, generated puzzles, and all user puzzles are our own.
+
+---
+
+## Changelog
+
+### 0.0.12
+
+Initial submission for review.
+
+- Daily solver-generated puzzle with a weekly difficulty ramp (easy early week,
+  hardest on weekends), par-based star scoring, and daily + all-time leaderboards.
+- Streaks, with a first-solve-of-day subreddit streak flair.
+- Endless mode (Easy / Medium / Hard) with a lifetime solved count and an
+  optional next-move Hint.
+- Build-a-puzzle editor with live solver validation and play-testing, feeding a
+  community puzzle stream (play, skip, upvote, with creator credit), plus per-day
+  submission limits and duplicate rejection.
+- Spoiler-free shareable result and one-tap "Comment my score"; guest play with a
+  win-screen sign-in / Join prompt.
+- Every daily post auto-seeds a pinned how-to-play / score-sharing comment.
