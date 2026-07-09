@@ -32,6 +32,13 @@ export type GenOptions = {
   /** Per-attempt solver budget (states explored). Lower = faster but may reject
    *  deeper-but-valid boards; default 60_000. Endless lowers this to stay fast. */
   maxStates?: number;
+  /** Optional wall-clock budget (ms). When set, generation stops starting new
+   *  attempts once this elapses and returns null, so the caller can cascade to a
+   *  cheaper pass instead of blocking. This guarantees a bounded return even when
+   *  the quality gates (the uniqueness proof in particular) make individual
+   *  attempts expensive - the daily uses it so a cache-miss /api/init can never
+   *  exceed the client's fetch timeout. */
+  deadlineMs?: number;
 };
 
 export type Generated = { readonly board: Board; readonly par: number };
@@ -88,8 +95,13 @@ export const generate = (opts: GenOptions = {}): Generated | null => {
   const maxStates = opts.maxStates ?? 60_000;
   const rng = mulberry32(opts.seed ?? Math.floor(Math.random() * 0x7fffffff));
   const cellCount = width * height;
+  const deadline = opts.deadlineMs != null ? Date.now() + opts.deadlineMs : Infinity;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
+    // Wall-clock bail: the quality gates (uniqueness proof) can make an attempt
+    // expensive, so stop starting new attempts once the budget elapses and let
+    // the caller fall through to a cheaper pass. Cheap check, checked per attempt.
+    if (Date.now() > deadline) break;
     const bag = shuffled(cellCount, rng);
     const used = new Array<boolean>(cellCount).fill(false);
     let cursor = 0;
