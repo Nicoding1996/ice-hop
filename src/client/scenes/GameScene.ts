@@ -1584,12 +1584,34 @@ export class GameScene extends Scene {
     // pulls new players in). A quieter ghost treatment with an "out" arrow so it
     // reads as distinct from the inward "Comment my score" - not a second
     // identical secondary pill (the two used to be indistinguishable).
+    let leaderboardData: LeaderboardResponse | undefined;
+    const compareButton = makePill(this, {
+      label: 'Compare',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => {
+        if (leaderboardData) this.showDailyLeaderboard(leaderboardData, 0);
+      },
+    });
+    compareButton.setVisible(false);
     const copyButton = makePill(this, {
       label: 'Share result \u2197',
       variant: 'ghost',
+      size: 'sm',
       x: w / 2,
       onClick: () => void this.copyResult(copyButton),
     });
+    const revealLeaderboard = (data: LeaderboardResponse): void => {
+      leaderboardData = data;
+      if (data.totalPlayers <= 3) return;
+      compareButton.setVisible(true);
+      const gap = SPACE.sm;
+      const rowWidth = compareButton.width + gap + copyButton.width;
+      let x = w / 2 - rowWidth / 2;
+      compareButton.setPosition(x + compareButton.width / 2, copyButton.y);
+      x += compareButton.width + gap;
+      copyButton.setX(x + copyButton.width / 2);
+    };
 
     // Drop the result straight into this post's comment thread (the comment
     // scoreboard / "how'd you do it in N?" culture), authored by the player.
@@ -1628,7 +1650,13 @@ export class GameScene extends Scene {
     });
     homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
 
-    const winButtons: Phaser.GameObjects.GameObject[] = [status, copyButton, morePuzzlesButton, homeButton];
+    const winButtons: Phaser.GameObjects.GameObject[] = [
+      status,
+      compareButton,
+      copyButton,
+      morePuzzlesButton,
+      homeButton,
+    ];
     if (postScoreButton) winButtons.push(postScoreButton);
     this.fxLayer.add(winButtons);
 
@@ -1656,7 +1684,7 @@ export class GameScene extends Scene {
     this.winStatusBottom = stackTop - SPACE.md;
     this.positionWinStatus(status);
 
-    this.completionPromise = this.submitSolve(status);
+    this.completionPromise = this.submitSolve(status, revealLeaderboard);
   }
 
   /** Lay out win-screen action buttons stacked up from the bottom of the screen
@@ -2350,7 +2378,10 @@ export class GameScene extends Scene {
     this.fxLayer.add([overlay, card, panel, endlessBtn, buildBtn, dailyBtn]);
   }
 
-  private async submitSolve(status: Phaser.GameObjects.Text): Promise<void> {
+  private async submitSolve(
+    status: Phaser.GameObjects.Text,
+    onLeaderboardLoaded: (leaderboard: LeaderboardResponse) => void
+  ): Promise<void> {
     const generation = this.playGeneration;
     const puzzleId = this.dailyPuzzleId;
     const body = JSON.stringify({
@@ -2412,24 +2443,45 @@ export class GameScene extends Scene {
       if (result.streak > 1) lines.push(`Streak: ${result.streak} days`);
       if (result.bestMoves < this.moves) lines.push(`Your best today: ${result.bestMoves} moves`);
 
-      if (result.totalPlayers >= 2) {
-        const top = await this.fetchLeaderboard();
-        if (!this.isCurrentPlay(generation)) return;
-        if (top.length > 0) {
-          lines.push('');
-          lines.push('Top solvers today');
-          top.forEach((entry, i) => lines.push(`${i + 1}. ${entry.username} - ${entry.moves} moves`));
-        }
-      }
-      if (!this.isCurrentPlay(generation) || !status.scene) return;
+      if (!status.scene) return;
       status.setText(lines.join('\n'));
       this.positionWinStatus(status);
+
+      // The verified completion promise must resolve here so an optional,
+      // potentially slow leaderboard request can never block score comments.
+      // Leaderboard enrichment continues independently behind generation guards.
+      void this.loadDailyLeaderboard(status, lines, generation, onLeaderboardLoaded);
     } catch (error) {
       console.error(error);
       if (!this.isCurrentPlay(generation) || !status.scene) return;
       status.setText('Score could not be verified. Try again.');
       this.positionWinStatus(status);
     }
+  }
+
+  private async loadDailyLeaderboard(
+    status: Phaser.GameObjects.Text,
+    baseLines: readonly string[],
+    generation: number,
+    onLeaderboardLoaded: (leaderboard: LeaderboardResponse) => void
+  ): Promise<void> {
+    // Guests may compare after solving even though they are not ranked. The
+    // response stays bounded to the top ten and, for signed players, five
+    // nearby rows.
+    const leaderboard = await this.fetchLeaderboard();
+    if (!leaderboard || !this.isCurrentPlay(generation) || !status.scene) return;
+
+    if (leaderboard.totalPlayers >= 2 && leaderboard.entries.length > 0) {
+      const lines = [...baseLines, '', 'Top solvers today'];
+      leaderboard.entries
+        .slice(0, 3)
+        .forEach((entry) =>
+          lines.push(`${entry.rank}. ${entry.username} - ${entry.moves} moves`)
+        );
+      status.setText(lines.join('\n'));
+      this.positionWinStatus(status);
+    }
+    onLeaderboardLoaded(leaderboard);
   }
 
   private async copyResult(button: PillButton): Promise<void> {
@@ -2446,23 +2498,227 @@ export class GameScene extends Scene {
     }
     try {
       await navigator.clipboard.writeText(this.shareText);
-      button.setLabelText('Copied! Paste it in the comments');
+      button.setLabelText('Copied!');
+      showToast('Copied \u2014 paste it in the comments.');
     } catch (error) {
       console.error(error);
-      button.setLabelText('Copy failed \u2014 select the text manually');
+      button.setLabelText('Copy failed');
+      showToast('Could not copy your result.');
     }
   }
 
-  private async fetchLeaderboard(): Promise<{ username: string; moves: number }[]> {
+  private showDailyLeaderboard(data: LeaderboardResponse, requestedPage: number): void {
+    const w = this.overlayBaseWidth || this.scale.width;
+    const h = this.overlayBaseHeight || this.scale.height;
+    const rowsPerPage = h < 400 ? 2 : h < 560 ? 3 : 5;
+    type LeaderboardPage = {
+      readonly label: string;
+      readonly entries: LeaderboardResponse['entries'];
+    };
+    const pages: LeaderboardPage[] = [];
+    const addPages = (section: string, entries: LeaderboardResponse['entries']): void => {
+      for (let start = 0; start < entries.length; start += rowsPerPage) {
+        const pageEntries = entries.slice(start, start + rowsPerPage);
+        const first = pageEntries[0];
+        const last = pageEntries.at(-1);
+        if (!first || !last) continue;
+        pages.push({
+          label: `${section} \u00B7 #${first.rank}${last.rank === first.rank ? '' : `\u2013#${last.rank}`}`,
+          entries: pageEntries,
+        });
+      }
+    };
+
+    // When the viewer is outside the first screenful, make their local context
+    // the first page. The global top ten remains available on following pages.
+    if (data.viewerRank > rowsPerPage && data.nearbyEntries.length > 0) {
+      addPages('Around you', data.nearbyEntries);
+    }
+    addPages('Top solvers', data.entries);
+    if (pages.length === 0) return;
+
+    const pageIndex = Math.max(0, Math.min(requestedPage, pages.length - 1));
+    const page = pages[pageIndex];
+    const compact = h < 560;
+    const cardW = Math.min(460, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const cardLeft = w / 2 - cardW / 2;
+    const cardRight = cardLeft + cardW;
+    const cardTop = h / 2 - cardH / 2;
+    const cardBottom = cardTop + cardH;
+    const modal = this.add.container(0, 0);
+
+    const shade = this.add
+      .rectangle(w / 2, h / 2, w, h, 0x05131f, 0.86)
+      .setInteractive();
+    const panel = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+    const title = this.add
+      .text(w / 2, cardTop + SPACE.xl, "Today's leaderboard", {
+        fontFamily: FONT.display,
+        fontSize: compact ? '21px' : '26px',
+        fontStyle: '700',
+        color: COLORS.text,
+      })
+      .setOrigin(0.5, 0);
+    const summary = this.add
+      .text(
+        w / 2,
+        title.y + title.height + SPACE.xs,
+        data.viewerRank > 0
+          ? `You're #${data.viewerRank} of ${data.totalPlayers}`
+          : `${data.totalPlayers} verified ${data.totalPlayers === 1 ? 'solver' : 'solvers'}`,
+        {
+          fontFamily: FONT.ui,
+          fontSize: compact ? '12px' : '14px',
+          fontStyle: '800',
+          color: COLORS.arrow,
+        }
+      )
+      .setOrigin(0.5, 0);
+    const rule = this.add
+      .text(w / 2, summary.y + summary.height + SPACE.xs, 'Fewest moves wins \u00B7 verified time breaks ties', {
+        fontFamily: FONT.ui,
+        fontSize: compact ? '10px' : '11px',
+        fontStyle: '600',
+        color: COLORS.text,
+      })
+      .setOrigin(0.5, 0)
+      .setAlpha(0.68);
+    const pageTitle = this.add
+      .text(w / 2, rule.y + rule.height + SPACE.md, page.label, {
+        fontFamily: FONT.ui,
+        fontSize: compact ? '12px' : '13px',
+        fontStyle: '800',
+        color: COLORS.arrow,
+      })
+      .setOrigin(0.5, 0);
+    modal.add([shade, panel, title, summary, rule, pageTitle]);
+
+    const hasPager = pages.length > 1;
+    const listTop = pageTitle.y + pageTitle.height + SPACE.sm;
+    const listBottom = cardBottom - (hasPager ? 98 : 70);
+    const availableListHeight = Math.max(1, listBottom - listTop);
+    const rowHeight = Math.min(58, availableListHeight / Math.max(1, page.entries.length));
+    const renderedListHeight = rowHeight * page.entries.length;
+    const firstRowTop = listTop + (availableListHeight - renderedListHeight) / 2;
+    const rowLeft = cardLeft + SPACE.xl;
+    const rowWidth = cardW - SPACE.xl * 2;
+
+    page.entries.forEach((entry, index) => {
+      const rowTop = firstRowTop + index * rowHeight;
+      const rowY = rowTop + rowHeight / 2;
+      const isViewer = Boolean(context.username) && entry.username === context.username;
+      const background = this.add.graphics();
+      background.fillStyle(isViewer ? COLORS.gold : 0x0e2740, isViewer ? 0.16 : 0.72);
+      background.fillRoundedRect(rowLeft, rowTop + 2, rowWidth, Math.max(28, rowHeight - 4), 11);
+      if (isViewer) {
+        background.lineStyle(1.5, COLORS.gold, 0.9);
+        background.strokeRoundedRect(rowLeft, rowTop + 2, rowWidth, Math.max(28, rowHeight - 4), 11);
+      }
+      const rank = this.add
+        .text(rowLeft + SPACE.md, rowY, `#${entry.rank}`, {
+          fontFamily: FONT.ui,
+          fontSize: compact ? '12px' : '13px',
+          fontStyle: '800',
+          color: isViewer ? COLORS.arrow : COLORS.text,
+        })
+        .setOrigin(0, 0.5);
+      const usernameLimit = cardW < 320 ? 11 : cardW < 400 ? 15 : 20;
+      const displayUsername =
+        isViewer || entry.username.length <= usernameLimit
+          ? isViewer
+            ? 'You'
+            : entry.username
+          : `${entry.username.slice(0, usernameLimit - 1)}\u2026`;
+      const username = this.add
+        .text(rowLeft + 54, rowY, displayUsername, {
+          fontFamily: FONT.ui,
+          fontSize: compact ? '13px' : '15px',
+          fontStyle: isViewer ? '800' : '700',
+          color: COLORS.text,
+        })
+        .setOrigin(0, 0.5);
+      const moves = this.add
+        .text(
+          cardRight - SPACE.xl - SPACE.md,
+          rowY,
+          `${entry.moves} ${entry.moves === 1 ? 'move' : 'moves'}`,
+          {
+            fontFamily: FONT.ui,
+            fontSize: compact ? '12px' : '14px',
+            fontStyle: '800',
+            color: isViewer ? COLORS.arrow : COLORS.text,
+          }
+        )
+        .setOrigin(1, 0.5);
+      modal.add([background, rank, username, moves]);
+    });
+
+    const close = makePill(this, {
+      label: 'Close',
+      variant: 'chip',
+      size: 'sm',
+      x: w / 2,
+      y: cardBottom - SPACE.xl,
+      onClick: () => modal.destroy(true),
+    });
+    modal.add(close);
+
+    if (hasPager) {
+      const pagerY = cardBottom - 70;
+      const pageCount = this.add
+        .text(w / 2, pagerY, `${pageIndex + 1} / ${pages.length}`, {
+          fontFamily: FONT.ui,
+          fontSize: '12px',
+          fontStyle: '700',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.72);
+      modal.add(pageCount);
+      if (pageIndex > 0) {
+        const previous = makePill(this, {
+          label: '\u2039 Prev',
+          variant: 'chip',
+          size: 'sm',
+          onClick: () => {
+            modal.destroy(true);
+            this.showDailyLeaderboard(data, pageIndex - 1);
+          },
+        });
+        previous.setPosition(cardLeft + SPACE.xl + previous.width / 2, pagerY);
+        modal.add(previous);
+      }
+      if (pageIndex < pages.length - 1) {
+        const next = makePill(this, {
+          label: 'Next \u203A',
+          variant: 'chip',
+          size: 'sm',
+          onClick: () => {
+            modal.destroy(true);
+            this.showDailyLeaderboard(data, pageIndex + 1);
+          },
+        });
+        next.setPosition(cardRight - SPACE.xl - next.width / 2, pagerY);
+        modal.add(next);
+      }
+    }
+
+    // Add the modal last so its interactive shade blocks every underlying win
+    // action while preserving the fitted base-coordinate system on resize.
+    this.fxLayer.add(modal);
+  }
+
+  private async fetchLeaderboard(): Promise<LeaderboardResponse | undefined> {
     try {
       const response = await fetch(
         `/api/leaderboard?puzzleId=${encodeURIComponent(this.dailyPuzzleId)}`
       );
-      if (!response.ok) return [];
+      if (!response.ok) return undefined;
       const data: LeaderboardResponse = await response.json();
-      return data.entries.slice(0, 3).map((e) => ({ username: e.username, moves: e.moves }));
+      return data.puzzleId === this.dailyPuzzleId ? data : undefined;
     } catch {
-      return [];
+      return undefined;
     }
   }
 }

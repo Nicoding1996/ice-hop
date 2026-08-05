@@ -11,48 +11,45 @@ import type { Board, Piece } from '../shared/game/types';
 import { validateBoardStructure } from '../shared/game/validation';
 import type { Difficulty } from '../shared/solver/difficulty';
 
-// --- Buttons -----------------------------------------------------------------
+// --- Launch actions ----------------------------------------------------------
 
 const startElement = document.getElementById('start-button');
 const startButton = startElement instanceof HTMLButtonElement ? startElement : null;
-const buildElement = document.getElementById('build-button');
-const buildButton = buildElement instanceof HTMLButtonElement ? buildElement : null;
 const exploreElement = document.getElementById('explore-button');
 const exploreButton = exploreElement instanceof HTMLButtonElement ? exploreElement : null;
 type ExpandedModeEvent = Parameters<typeof requestExpandedMode>[0];
-type LaunchIntent = 'play' | 'build' | 'home';
+type LaunchIntent = 'play' | 'home';
 
 let launchPending = false;
 let launchResetTimer: number | undefined;
 let idleStartLabel = startButton?.textContent ?? "Play today's puzzle";
-const idleBuildLabel = buildButton?.textContent ?? 'Build a puzzle';
-const idleExploreLabel = exploreButton?.textContent ?? 'Explore Ice Hop →';
+
+const clearLaunchIntent = (): void => {
+  try {
+    localStorage.removeItem('icehop.launch');
+  } catch {
+    /* localStorage is an optimization; default launch still opens the post */
+  }
+};
 
 const setIdleStartLabel = (label: string): void => {
   idleStartLabel = label;
   if (!launchPending && startButton) startButton.textContent = label;
 };
 
-const resetLaunchState = (): void => {
+const resetLaunchState = (clearIntent = false): void => {
   if (launchResetTimer !== undefined) window.clearTimeout(launchResetTimer);
   launchResetTimer = undefined;
+  if (clearIntent) clearLaunchIntent();
   launchPending = false;
   document.body.classList.remove('opening');
   startButton?.removeAttribute('aria-busy');
-  buildButton?.removeAttribute('aria-busy');
   exploreButton?.removeAttribute('aria-busy');
   if (startButton) {
     startButton.disabled = false;
     startButton.textContent = idleStartLabel;
   }
-  if (buildButton) {
-    buildButton.disabled = false;
-    buildButton.textContent = idleBuildLabel;
-  }
-  if (exploreButton) {
-    exploreButton.disabled = false;
-    exploreButton.textContent = idleExploreLabel;
-  }
+  if (exploreButton) exploreButton.disabled = false;
 };
 
 const openExpanded = (event: ExpandedModeEvent, intent: LaunchIntent): void => {
@@ -60,44 +57,35 @@ const openExpanded = (event: ExpandedModeEvent, intent: LaunchIntent): void => {
   launchPending = true;
   document.body.classList.add('opening');
   if (startButton) startButton.disabled = true;
-  if (buildButton) buildButton.disabled = true;
   if (exploreButton) exploreButton.disabled = true;
 
-  const activeButton =
-    intent === 'play' ? startButton : intent === 'build' ? buildButton : exploreButton;
-  activeButton?.setAttribute('aria-busy', 'true');
-  if (activeButton) {
-    activeButton.textContent =
-      intent === 'play'
-        ? 'Opening puzzle...'
-        : intent === 'build'
-          ? 'Opening editor...'
-          : 'Opening Ice Hop...';
-  }
-
-  try {
-    if (intent === 'play') localStorage.removeItem('icehop.launch');
-    else localStorage.setItem('icehop.launch', intent);
-  } catch {
-    /* localStorage is an optimization; default launch still opens the post */
+  if (intent === 'play') {
+    clearLaunchIntent();
+    startButton?.setAttribute('aria-busy', 'true');
+    if (startButton) startButton.textContent = 'Opening puzzle...';
+  } else {
+    exploreButton?.setAttribute('aria-busy', 'true');
+    try {
+      localStorage.setItem('icehop.launch', 'home');
+    } catch {
+      /* localStorage unavailable - Boot will play the host post */
+    }
   }
 
   try {
     // Keep this synchronous inside the click handler so Reddit retains the user gesture.
     requestExpandedMode(event, 'game');
-    // If expansion fails silently, or the inline iframe survives after closing,
-    // restore every control instead of leaving a permanently busy card.
-    launchResetTimer = window.setTimeout(resetLaunchState, 4000);
+    // If expansion fails silently, clear any one-shot route and restore the card.
+    launchResetTimer = window.setTimeout(() => resetLaunchState(true), 4000);
   } catch (error) {
     console.error(error);
-    resetLaunchState();
+    resetLaunchState(true);
   }
 };
 
 startButton?.addEventListener('click', (event) => openExpanded(event, 'play'));
-buildButton?.addEventListener('click', (event) => openExpanded(event, 'build'));
 exploreButton?.addEventListener('click', (event) => openExpanded(event, 'home'));
-window.addEventListener('pageshow', resetLaunchState);
+window.addEventListener('pageshow', () => resetLaunchState(true));
 
 // --- Meta line (date / hello) ------------------------------------------------
 
@@ -112,11 +100,10 @@ if (meta) {
 }
 
 // --- Community-puzzle preview ------------------------------------------------
-// A daily post keeps the static penguin hero. A community-puzzle post swaps in a
-// preview of that exact board. The art below is a faithful, 1:1 port of the
-// in-game Phaser draw helpers (art/theme.ts) - same proportions, same palette -
-// emitted as static SVG so the splash stays Phaser-free and fast. So the feed
-// preview looks like the real puzzle, not a simplified stand-in.
+// Daily posts use a spoiler-safe synthetic board. Community-puzzle posts
+// swap in the exact validated board because they are not timed. Both previews
+// mirror the in-game Phaser draw helpers (art/theme.ts): same proportions and
+// palette, emitted as static SVG so the splash stays Phaser-free and fast.
 
 const C = {
   sheet: '#d4ecf7',
@@ -584,8 +571,6 @@ const renderUgcStatic = (board: Board, difficulty: Difficulty, creator: string):
   paintBadge(difficulty);
   const byline = document.getElementById('byline');
   if (byline) byline.textContent = `by u/${creator}`;
-  const how = document.getElementById('how');
-  if (how) how.textContent = 'Tap a penguin to hop, drag a seal to slide.';
   setIdleStartLabel('Play this puzzle');
   if (meta) meta.textContent = 'Community puzzle';
   renderedKind = 'ugc';
@@ -625,10 +610,10 @@ const renderDailyStatic = (
     const hero = document.getElementById('hero');
     if (hero) {
       const boardLabel = isToday ? "today's puzzle" : 'this Daily puzzle';
-      hero.innerHTML = `<div class="daily-preview-shell">${renderBoardPreview(
+      hero.innerHTML = `<div class="daily-teaser"><div class="daily-preview-shell">${renderBoardPreview(
         board,
-        `Frosted illustration of ${boardLabel}; exact layout reveals on Play`
-      )}<div class="daily-frost" aria-hidden="true"></div><span class="daily-reveal">Layout reveals on Play</span></div>`;
+        `Frosted illustration of ${boardLabel}`
+      )}<div class="daily-frost" aria-hidden="true"></div></div><span class="daily-reveal"><span class="daily-reveal-icon" aria-hidden="true">&#10052;</span>Board hidden until Play</span></div>`;
     }
     renderedDailyKey = key;
   }
@@ -638,8 +623,6 @@ const renderDailyStatic = (
   if (byline) byline.textContent = '';
   const tag = document.querySelector('.tag');
   if (tag) tag.textContent = 'Get every penguin into the water!';
-  const how = document.getElementById('how');
-  if (how) how.textContent = 'Tap Play to reveal the layout and start the clock.';
   setIdleStartLabel(isToday ? "Play today's puzzle" : 'Play this puzzle');
   if (meta) {
     const label = date ? formatDailyDate(date) : 'Daily puzzle';

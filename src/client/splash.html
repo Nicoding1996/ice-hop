@@ -3,10 +3,7 @@
   <head>
     <link rel="stylesheet" href="splash.css" />
     <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, width=device-width, height=device-height, user-scalable=0"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -76,21 +73,21 @@
         </svg>
       </div>
 
-      <h1 class="title">ICE HOP</h1>
-      <p class="tag">Get every penguin into the water!</p>
-      <div class="credit" id="credit" hidden>
-        <span class="badge" id="badge"></span>
-        <span class="byline" id="byline"></span>
-      </div>
-      <div class="actions">
-        <button class="start" id="start-button">Play today's puzzle</button>
-        <button class="build" id="build-button">Build a puzzle</button>
-        <button class="explore" id="explore-button">
-          Explore Ice Hop <span aria-hidden="true">&rarr;</span>
-        </button>
-      </div>
-      <p class="meta" id="meta">Daily puzzle</p>
-      <p class="how" id="how">Tap a penguin to hop. Drag a seal to slide.</p>
+      <section class="content" aria-labelledby="splash-title">
+        <h1 class="title" id="splash-title">ICE HOP</h1>
+        <p class="tag">Get every penguin into the water!</p>
+        <div class="credit" id="credit" hidden>
+          <span class="badge" id="badge"></span>
+          <span class="byline" id="byline"></span>
+        </div>
+        <div class="actions">
+          <button class="start" id="start-button">Play today's puzzle</button>
+          <button class="explore" id="explore-button">
+            Explore Ice Hop <span aria-hidden="true">&rarr;</span>
+          </button>
+        </div>
+        <p class="meta" id="meta">Daily puzzle</p>
+      </section>
     </main>
 
     <script type="module" src="splash.ts" defer></script>

@@ -140,6 +140,8 @@ export type SolveResultDTO = {
 };
 
 export type LeaderboardEntry = {
+  /** One-based position after sorting by moves, then verified elapsed time. */
+  readonly rank: number;
   readonly username: string;
   readonly moves: number;
   readonly timeMs: number;
@@ -148,7 +150,13 @@ export type LeaderboardEntry = {
 export type LeaderboardResponse = {
   readonly puzzleId: string;
   readonly date: string;
+  readonly totalPlayers: number;
+  /** Zero for guests or a signed-in viewer without a ranked solve. */
+  readonly viewerRank: number;
+  /** Bounded global leaders, currently capped at ten by the server. */
   readonly entries: readonly LeaderboardEntry[];
+  /** Bounded window centred on the signed-in viewer when they are ranked. */
+  readonly nearbyEntries: readonly LeaderboardEntry[];
 };
 
 // --- User-generated content ---

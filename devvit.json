@@ -6,7 +6,7 @@
       "default": {
         "inline": true,
         "entry": "splash.html",
-        "height": "tall"
+        "height": "regular"
       },
       "game": {
         "entry": "game.html"

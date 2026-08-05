@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { context, reddit, redis } from '@devvit/web/server';
-import type { LeaderboardEntry } from '../../shared/api';
+import type { LeaderboardEntry, LeaderboardResponse } from '../../shared/api';
 import {
   CURRENT_DAILY_SCHEMA,
   LEGACY_DAILY_SCHEMA,
@@ -427,13 +427,65 @@ export const recordSolve = async (
   };
 };
 
+type DailyLeaderboardSnapshot = Pick<
+  LeaderboardResponse,
+  'totalPlayers' | 'viewerRank' | 'entries' | 'nearbyEntries'
+>;
+
+const leaderboardEntries = (
+  rows: readonly { readonly member: string; readonly score: number }[],
+  startIndex: number
+): LeaderboardEntry[] =>
+  rows.map((row, index) => {
+    const decoded = decodeScore(row.score);
+    return {
+      rank: startIndex + index + 1,
+      username: row.member,
+      moves: decoded.moves,
+      timeMs: decoded.timeMs,
+    };
+  });
+
+/**
+ * Return only bounded leaderboard slices: the first ten at most, plus five rows
+ * centred on the signed-in viewer. This keeps comparison useful to players far
+ * from the leaders without ever reading the whole sorted set.
+ */
 export const getDailyLeaderboard = async (
   ref: DailyPuzzleRef,
-  topN: number
-): Promise<LeaderboardEntry[]> => {
-  const rows = await redis.zRange(keys.dailyLeaderboard(ref), 0, topN - 1, { by: 'rank' });
-  return rows.map((row) => {
-    const decoded = decodeScore(row.score);
-    return { username: row.member, moves: decoded.moves, timeMs: decoded.timeMs };
-  });
+  topN: number,
+  viewer?: string
+): Promise<DailyLeaderboardSnapshot> => {
+  const leaderboardKey = keys.dailyLeaderboard(ref);
+  const boundedTopN = Number.isSafeInteger(topN) ? Math.max(0, Math.min(topN, 10)) : 0;
+  const [topRows, totalPlayers, viewerIndex] = await Promise.all([
+    boundedTopN > 0
+      ? redis.zRange(leaderboardKey, 0, boundedTopN - 1, { by: 'rank' })
+      : Promise.resolve([]),
+    redis.zCard(leaderboardKey),
+    viewer ? redis.zRank(leaderboardKey, viewer) : Promise.resolve(undefined),
+  ]);
+
+  const rankedViewerIndex = typeof viewerIndex === 'number' ? viewerIndex : undefined;
+  const viewerRank = rankedViewerIndex === undefined ? 0 : rankedViewerIndex + 1;
+  let nearbyEntries: LeaderboardEntry[] = [];
+  if (rankedViewerIndex !== undefined) {
+    const windowSize = 5;
+    const maxStart = Math.max(0, totalPlayers - windowSize);
+    const nearbyStart = Math.min(Math.max(0, rankedViewerIndex - 2), maxStart);
+    const nearbyRows = await redis.zRange(
+      leaderboardKey,
+      nearbyStart,
+      Math.min(totalPlayers - 1, nearbyStart + windowSize - 1),
+      { by: 'rank' }
+    );
+    nearbyEntries = leaderboardEntries(nearbyRows, nearbyStart);
+  }
+
+  return {
+    totalPlayers,
+    viewerRank,
+    entries: leaderboardEntries(topRows, 0),
+    nearbyEntries,
+  };
 };

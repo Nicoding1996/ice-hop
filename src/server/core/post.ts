@@ -104,9 +104,9 @@ export const createDailyPost = async (date: string) => {
  * creator. This is the community/retention loop: each player-built puzzle gets
  * its own post that Reddit can surface in people's feeds, with a discussion
  * thread of its own. The post uses the same splash entrypoint as the daily; the
- * splash reads /api/init, sees this post maps to a UGC puzzle, and renders a
- * preview + "Play" / "Build". Returns the new post id so the caller can record
- * the post <-> puzzle link.
+ * splash renders its postData preview immediately, refreshes live UGC status
+ * through /api/post-preview, and offers Play plus Explore. Returns the new post
+ * id so the caller can record the post <-> puzzle link.
  */
 export const createUgcPost = async (submission: UgcSubmission): Promise<string> => {
   // Title-case the solver-derived band and pick the right article so the feed
@@ -145,7 +145,7 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
       text: [
         `\uD83D\uDC27 **A community puzzle by u/${submission.creator}!**`,
         'Tap a penguin to hop it over things, drag a seal to slide. Get every penguin into the water in as few moves as you can.',
-        'Solved it? Drop your move count below \uD83D\uDC47 and upvote the puzzle if you liked it. Want to make your own? Tap **Build a puzzle**.',
+        'Solved it? Drop your move count below \uD83D\uDC47 and upvote the puzzle if you liked it. Want to make your own? Tap **Explore Ice Hop**, then choose **Build a puzzle**.',
       ].join('\n\n'),
     });
     await comment.distinguish(true);

@@ -437,10 +437,12 @@ api.get('/leaderboard', async (c) => {
     if (!ref) {
       return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
     }
+    const username = await reddit.getCurrentUsername();
+    const leaderboard = await getDailyLeaderboard(ref, 10, username);
     return c.json<LeaderboardResponse>({
       puzzleId: dailyPuzzleId(ref),
       date: ref.date,
-      entries: await getDailyLeaderboard(ref, 10),
+      ...leaderboard,
     });
   } catch (error) {
     console.error(`/api/leaderboard failed: ${error}`);
