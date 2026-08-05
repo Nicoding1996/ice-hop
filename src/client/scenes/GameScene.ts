@@ -2,19 +2,34 @@ import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { Board, Move, Piece } from '../../shared/game/types';
 import type {
+  CommentScoreResponse,
+  EndlessHintResponse,
   EndlessResponse,
-  EndlessSolvedResponse,
+  EndlessSolveResponse,
   EndlessTier,
   InitResponse,
   LeaderboardResponse,
+  MarkPlayedResponse,
   SolveResultDTO,
   UgcListResponse,
   UgcSubmission,
   VoteResponse,
 } from '../../shared/api';
+import {
+  buildAchievementSnapshot,
+  qualifiedAchievementIds,
+  type AchievementId,
+  type AchievementSnapshot,
+} from '../../shared/achievements';
+import { boardSignature } from '../../shared/game/board';
 import { legalMoves } from '../../shared/game/moves';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
+import {
+  guestDailyCompletionFor,
+  mergeProgressCount,
+  rememberGuestDailyCompletion,
+} from '../../shared/progression';
 import { buildShareText } from '../../shared/share';
 import { solve } from '../../shared/solver/solver';
 import {
@@ -45,6 +60,7 @@ import {
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { showHowToPlay } from '../howToPlay';
+import { trackClientEvent } from '../telemetry';
 
 type DragState = {
   pieceIndex: number;
@@ -61,20 +77,27 @@ export class GameScene extends Scene {
   private pieces: Piece[] = [];
   private par = 0;
   private moves = 0;
+  /** Canonical legal moves committed for the current attempt. */
+  private moveHistory: Move[] = [];
   private date = '';
+  private dailyPuzzleId = '';
+  private dailyPlayId = '';
   private selected: number | null = null;
   private busy = false;
   private won = false;
+  /** True while the returning-player recap owns the interactive surface. */
+  private dailyRecapOpen = false;
   /** Whether the player has already posted their score to this post's comment
    *  thread (so "Comment my score" can't double-post). Reset for each puzzle. */
   private scorePosted = false;
+  /** Completion save in flight; comments wait for this verified record. */
+  private completionPromise?: Promise<void>;
   /** Whether the puzzle on screen came straight from the host post, so its
    *  thread, par and creator match context.postId. True only for a non-forced
    *  /api/init load; gates "Comment my score" so it can never post a mismatched
    *  comment after the player navigates to a different puzzle in the same
    *  webview (Next, a hub community puzzle, or a forced daily inside a UGC post). */
   private isHostPostPuzzle = false;
-  private startTime = 0;
   private shareText = '';
   /** Whether we've recorded the viewer as subscribed (drives the Join CTA). */
   private subscribed = false;
@@ -92,7 +115,13 @@ export class GameScene extends Scene {
   private forceDaily = false;
   private isEndless = false;
   private endlessTier: EndlessTier = 'easy';
+  private endlessIssueId = '';
   private endlessSolved = 0;
+  private endlessSaveGeneration = 0;
+  /** Invalidates async work whenever Phaser reuses this scene for a new puzzle. */
+  private playGeneration = 0;
+  /** Keep the warmed issue only for the explicit Endless "Next" transition. */
+  private preserveEndlessPrefetch = false;
   private endlessBanner!: PillButton;
   private skipButton!: PillButton;
   private resetButton!: PillButton;
@@ -104,6 +133,7 @@ export class GameScene extends Scene {
   private hintLayer!: Phaser.GameObjects.Container;
   private hintStage = 0;
   private hintUsed = false;
+  private hintRequestPending = false;
   private dragState: DragState | null = null;
 
   private bgLayer!: Phaser.GameObjects.Container;
@@ -125,6 +155,10 @@ export class GameScene extends Scene {
    *  win screen, between the result cluster and the bottom button stack. */
   private winStatusTop = 0;
   private winStatusBottom = 0;
+  /** Viewport dimensions used when the active recap/win overlay was drawn. */
+  private overlayBaseWidth = 0;
+  private overlayBaseHeight = 0;
+  private blockingShield?: Phaser.GameObjects.Rectangle;
 
   constructor() {
     super('GameScene');
@@ -145,18 +179,35 @@ export class GameScene extends Scene {
     this.endlessTier = data?.endless?.tier ?? 'easy';
     this.forceDaily = Boolean(data?.daily);
     this.scorePosted = false;
+    this.completionPromise = undefined;
     this.isHostPostPuzzle = false;
+    this.dailyPuzzleId = '';
+    this.dailyPlayId = '';
+    this.endlessIssueId = '';
     this.endlessSolved = 0;
-    // Scene instances are reused across restarts, so reset transient state here.
+    this.endlessSaveGeneration += 1;
+    this.playGeneration += 1;
+    this.preserveEndlessPrefetch = false;
+    // Scene instances are reused across restarts, so reset transient and
+    // board-derived state before an asynchronous load can be resized.
+    this.board = undefined;
+    this.par = 0;
+    this.date = '';
     this.pieces = [];
     this.moves = 0;
+    this.moveHistory = [];
     this.selected = null;
     this.busy = false;
     this.won = false;
+    this.dailyRecapOpen = false;
     this.dragState = null;
     this.shareText = '';
     this.hintStage = 0;
     this.hintUsed = false;
+    this.hintRequestPending = false;
+    this.overlayBaseWidth = 0;
+    this.overlayBaseHeight = 0;
+    this.blockingShield = undefined;
     this.howTo = undefined;
     this.loadErrorViews = [];
   }
@@ -225,7 +276,7 @@ export class GameScene extends Scene {
       label: 'Hint',
       variant: 'chip',
       size: 'sm',
-      onClick: () => this.showHint(),
+      onClick: () => void this.showHint(),
     });
     this.uiLayer.add(this.hintButton);
 
@@ -256,7 +307,13 @@ export class GameScene extends Scene {
     this.input.on(
       'pointerdown',
       (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
-        if (!this.busy && !this.won && currentlyOver.length === 0 && this.selected !== null) {
+        if (
+          !this.busy &&
+          !this.won &&
+          !this.dailyRecapOpen &&
+          currentlyOver.length === 0 &&
+          this.selected !== null
+        ) {
           this.selected = null;
           this.renderHighlights();
         }
@@ -280,6 +337,11 @@ export class GameScene extends Scene {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       if (this.loadingText) this.loadingText.setPosition(this.scale.width / 2, this.scale.height / 2);
       if (!this.board) return;
+      if (this.won || this.dailyRecapOpen) {
+        this.fitBlockingOverlay();
+        return;
+      }
+      this.resetFxTransform();
       this.layout();
       this.renderBoard();
       this.updateHud();
@@ -289,7 +351,17 @@ export class GameScene extends Scene {
     // attached would pile up on every scene (re)start - endless restarts this
     // same scene on each "Next" - firing stale handlers on destroyed objects.
     // Remove it when the scene shuts down.
-    this.events.once('shutdown', () => this.scale.off('resize', onResize));
+    this.events.once('shutdown', () => {
+      this.scale.off('resize', onResize);
+      // A board abandoned before its win should not occupy a server issue slot.
+      if (this.isEndless && !this.won && this.endlessIssueId) {
+        this.releaseEndlessIssue(this.endlessIssueId);
+        this.endlessIssueId = '';
+      }
+      if (this.isEndless && !this.preserveEndlessPrefetch) {
+        this.abandonPrefetchedEndless();
+      }
+    });
 
     // Hide the UI behind a calm loading state until the board is ready, so the
     // half-built frame (empty backdrop + unpositioned HUD) never flashes.
@@ -307,15 +379,21 @@ export class GameScene extends Scene {
     void this.loadPuzzle();
   }
 
+  private isCurrentPlay(generation: number): boolean {
+    return generation === this.playGeneration && this.sys.isActive();
+  }
+
   private async loadPuzzle(): Promise<void> {
+    const generation = this.playGeneration;
     this.clearLoadError();
+    this.moveHistory = [];
     if (this.isTest && this.testBoard) {
       this.board = this.testBoard;
       this.pieces = this.testBoard.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.par = this.testPar;
       this.date = '';
       this.moves = 0;
-      this.startTime = Date.now();
+
       this.layout();
       this.renderBoard();
       this.updateHud();
@@ -327,49 +405,57 @@ export class GameScene extends Scene {
       this.par = this.communityPuzzle.par;
       this.date = '';
       this.moves = 0;
-      this.startTime = Date.now();
+
       this.layout();
       this.renderBoard();
       this.updateHud();
+      trackClientEvent('community_started');
       return;
     }
     if (this.isEndless) {
       try {
-        const { data, fromPrefetch } = await this.takeOrFetchEndless();
+        const data = await this.takeOrFetchEndless();
+        if (!this.isCurrentPlay(generation)) {
+          this.releaseEndlessIssue(data.issueId);
+          return;
+        }
         this.board = data.board;
         this.pieces = data.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
         this.par = data.par;
-        // On a fresh fetch the server count is authoritative; on a prefetched
-        // board it predates this session's solves, so prefer the locally tracked
-        // count (kept in the registry, updated on every solve).
-        if (fromPrefetch) {
-          const known = this.registry.get('endless.solved');
-          this.endlessSolved = typeof known === 'number' ? known : data.solved;
-        } else {
-          this.endlessSolved = data.solved;
-        }
+        this.endlessIssueId = data.issueId;
+        // Issue and completion responses can race; preserve the highest
+        // server-confirmed/session total regardless of which response arrives last.
+        this.endlessSolved = mergeProgressCount(
+          this.registry.get('endless.solved'),
+          data.solved
+        );
         this.registry.set('endless.solved', this.endlessSolved);
         this.date = '';
         this.moves = 0;
-        this.startTime = Date.now();
+
         this.layout();
         this.renderBoard();
         this.updateHud();
+        trackClientEvent('endless_started');
         // Warm the next puzzle in the background so "Next" is instant. The short
         // delay avoids competing with this board's first render and skips the
         // fetch if the player immediately bounces.
         this.time.delayedCall(500, () => this.prefetchNextEndless());
       } catch (error) {
         console.error(error);
-        this.showLoadError('Could not load an endless puzzle.');
+        if (this.isCurrentPlay(generation)) {
+          this.showLoadError('Could not load an endless puzzle.');
+        }
       }
       return;
     }
     try {
       const url = this.forceDaily ? '/api/init?daily=1' : '/api/init';
       const response = await this.fetchWithTimeout(url);
+      if (!this.isCurrentPlay(generation)) return;
       if (!response.ok) throw new Error(`init failed: ${response.status}`);
       const data: InitResponse = await response.json();
+      if (!this.isCurrentPlay(generation)) return;
       // The puzzle matches the host post (its thread, par and creator) only on a
       // non-forced load. A forced daily (?daily=1) reached from inside a UGC post
       // must NOT be treated as the host post's own puzzle.
@@ -386,28 +472,43 @@ export class GameScene extends Scene {
         this.par = data.puzzle.par;
         this.date = '';
         this.moves = 0;
-        this.startTime = Date.now();
+
         this.layout();
         this.renderBoard();
         this.updateHud();
+        trackClientEvent('community_started');
         return;
       }
       this.board = data.board;
       this.pieces = data.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.par = data.par;
       this.date = data.date;
+      this.dailyPuzzleId = data.puzzleId;
+      this.dailyPlayId = data.playId;
       this.subscribed = data.subscribed;
       this.subredditName = data.subredditName ?? '';
       this.moves = 0;
-      this.startTime = Date.now();
+
       this.layout();
       this.renderBoard();
       this.updateHud();
-      if (data.solved) this.showDailySolvedRecap(data.solvedResult);
-      else this.maybeAutoShowHowTo();
+      trackClientEvent('daily_started');
+      const guestResult = context.username
+        ? null
+        : guestDailyCompletionFor(
+            this.registry.get('daily.solved.guest'),
+            data.puzzleId
+          );
+      if (data.solved || guestResult) {
+        this.showDailySolvedRecap(data.solvedResult ?? guestResult ?? undefined);
+      } else {
+        this.maybeAutoShowHowTo();
+      }
     } catch (error) {
       console.error(error);
-      this.showLoadError('Could not load today\u2019s puzzle.');
+      if (this.isCurrentPlay(generation)) {
+        this.showLoadError('Could not load today\u2019s puzzle.');
+      }
     }
   }
 
@@ -474,16 +575,18 @@ export class GameScene extends Scene {
   }
 
   /** Use a prefetched endless puzzle if one is warmed for this tier, else fetch. */
-  private async takeOrFetchEndless(): Promise<{ data: EndlessResponse; fromPrefetch: boolean }> {
+  private async takeOrFetchEndless(): Promise<EndlessResponse> {
     const stash: EndlessResponse | undefined = this.registry.get('endless.prefetch');
     if (stash && stash.tier === this.endlessTier && stash.board) {
       this.registry.remove('endless.prefetch');
-      return { data: stash, fromPrefetch: true };
+      return stash;
     }
-    // A stash for a different tier is stale (the player changed level) - drop it.
-    if (stash) this.registry.remove('endless.prefetch');
-    const data = await this.fetchEndless(this.endlessTier);
-    return { data, fromPrefetch: false };
+    // A stash for a different tier is abandoned; release its server slot.
+    if (stash) {
+      this.registry.remove('endless.prefetch');
+      this.releaseEndlessIssue(stash.issueId);
+    }
+    return this.fetchEndless(this.endlessTier);
   }
 
   /** fetch() with an abort timeout, so a stalled request fails fast (-> the
@@ -499,6 +602,33 @@ export class GameScene extends Scene {
     }
   }
 
+  /** Retry idempotent verified-completion POSTs with the exact same transcript. */
+  private async postCompletionWithRetries(url: string, body: string): Promise<Response> {
+    let lastError: Error = new Error('completion request failed');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12_000);
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: controller.signal,
+        });
+        if (response.ok) return response;
+        lastError = new Error(`completion failed: ${response.status}`);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('completion request failed');
+      } finally {
+        clearTimeout(timer);
+      }
+      if (attempt < 2) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+    throw lastError;
+  }
+
   private async fetchEndless(tier: EndlessTier): Promise<EndlessResponse> {
     const response = await this.fetchWithTimeout(`/api/endless?tier=${encodeURIComponent(tier)}`);
     if (!response.ok) throw new Error(`endless failed: ${response.status}`);
@@ -506,15 +636,91 @@ export class GameScene extends Scene {
     return data;
   }
 
+  /** Best-effort release of a signed user's abandoned issued board. */
+  private releaseEndlessIssue(issueId: string): void {
+    if (!context.username || !issueId) return;
+    void fetch('/api/endless/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issueId }),
+    }).catch((error) => console.error(error));
+  }
+
+  /** Release a warmed board when navigation abandons Endless instead of using Next. */
+  private abandonPrefetchedEndless(): void {
+    const stash: EndlessResponse | undefined = this.registry.get('endless.prefetch');
+    if (!stash) return;
+    this.registry.remove('endless.prefetch');
+    this.releaseEndlessIssue(stash.issueId);
+  }
+
   /** Fetch the next puzzle for the current tier and stash it so "Next" is instant. */
   private prefetchNextEndless(): void {
     if (!this.isEndless) return;
     const existing: EndlessResponse | undefined = this.registry.get('endless.prefetch');
-    if (existing && existing.tier === this.endlessTier) return; // already warmed
+    if (existing && existing.tier === this.endlessTier) return;
+    if (existing) {
+      this.registry.remove('endless.prefetch');
+      this.releaseEndlessIssue(existing.issueId);
+    }
+
+    const generation = this.playGeneration;
     const tier = this.endlessTier;
     void this.fetchEndless(tier)
-      .then((data) => this.registry.set('endless.prefetch', data))
+      .then((data) => {
+        if (!this.isCurrentPlay(generation) || !this.isEndless || tier !== this.endlessTier) {
+          this.releaseEndlessIssue(data.issueId);
+          return;
+        }
+        const current: EndlessResponse | undefined = this.registry.get('endless.prefetch');
+        if (current) {
+          // Another request won the stash race. Keep its board and release ours.
+          this.releaseEndlessIssue(data.issueId);
+          return;
+        }
+        this.registry.set('endless.prefetch', data);
+      })
       .catch((error) => console.error(error));
+  }
+
+  private resetFxTransform(): void {
+    this.fxLayer.setPosition(0, 0);
+    this.fxLayer.setScale(1);
+  }
+
+  private beginBlockingOverlay(): void {
+    if (this.blockingShield?.active) this.blockingShield.destroy();
+    this.blockingShield = undefined;
+    this.resetFxTransform();
+    this.overlayBaseWidth = this.scale.width;
+    this.overlayBaseHeight = this.scale.height;
+  }
+
+  /** Uniformly fit an already-rendered modal and keep its input shield full-screen. */
+  private fitBlockingOverlay(): void {
+    if (this.overlayBaseWidth <= 0 || this.overlayBaseHeight <= 0) return;
+    const scale = Math.min(
+      this.scale.width / this.overlayBaseWidth,
+      this.scale.height / this.overlayBaseHeight
+    );
+    const layerX = (this.scale.width - this.overlayBaseWidth * scale) / 2;
+    const layerY = (this.scale.height - this.overlayBaseHeight * scale) / 2;
+    this.fxLayer.setScale(scale);
+    this.fxLayer.setPosition(layerX, layerY);
+
+    if (this.blockingShield?.active) this.blockingShield.destroy();
+    const shield = this.add
+      .rectangle(
+        (this.scale.width / 2 - layerX) / scale,
+        (this.scale.height / 2 - layerY) / scale,
+        this.scale.width / scale,
+        this.scale.height / scale,
+        0x000000,
+        0.001
+      )
+      .setInteractive();
+    this.fxLayer.addAt(shield, 0);
+    this.blockingShield = shield;
   }
 
   private layout(): void {
@@ -654,14 +860,15 @@ export class GameScene extends Scene {
       Phaser.Geom.Rectangle.Contains
     );
     container.on('pointerdown', () => {
-      if (this.busy || this.won || this.dragState) return;
+      if (this.busy || this.won || this.dailyRecapOpen || this.dragState) return;
       this.selected = this.selected === idx ? null : idx;
       this.renderHighlights();
     });
   }
 
   private renderHighlights(): void {
-    if (!this.board) return;
+    if (!this.board || this.won || this.dailyRecapOpen) return;
+    this.blockingShield = undefined;
     this.fxLayer.removeAll(true);
     this.clearHint();
     // Reset selection emphasis on every piece.
@@ -730,7 +937,7 @@ export class GameScene extends Scene {
   }
 
   private onSealDragStart(obj: Phaser.GameObjects.GameObject): void {
-    if (!this.board || this.busy || this.won) return;
+    if (!this.board || this.busy || this.won || this.dailyRecapOpen) return;
     if (obj.getData('slider') !== true) return;
     const pieceIndex: number = obj.getData('pieceIndex');
     const piece = this.pieces[pieceIndex];
@@ -809,7 +1016,7 @@ export class GameScene extends Scene {
   }
 
   private doMove(move: Move): void {
-    if (!this.board || this.busy || this.won) return;
+    if (!this.board || this.busy || this.won || this.dailyRecapOpen) return;
     this.busy = true;
     this.fxLayer.removeAll(true);
     const view = this.pieceViews[move.pieceIndex];
@@ -824,6 +1031,7 @@ export class GameScene extends Scene {
       }
       this.pieces = applyMove(this.pieces, move);
       this.moves += 1;
+      this.moveHistory.push({ pieceIndex: move.pieceIndex, kind: move.kind, to: [...move.to] });
       this.selected = null;
       this.busy = false;
       // Rebuild only the moved piece's art (its outer view is already tweened to
@@ -867,49 +1075,80 @@ export class GameScene extends Scene {
     }
   }
 
-  /** Restore the current board to its starting layout (moves -> 0, timer reset). */
+  /**
+   * Restore the current board to its starting layout. Once a signed-in player
+   * has received a server hint, this issued puzzle remains ineligible; only a
+   * newly issued puzzle can clear knowledge of that hint.
+   */
   private resetPuzzle(): void {
-    if (!this.board || this.busy || this.won || this.moves === 0) return;
+    if (!this.board || this.busy || this.won || this.dailyRecapOpen || this.moves === 0) return;
     this.pieces = this.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
     this.moves = 0;
+    this.moveHistory = [];
     this.selected = null;
-    this.hintUsed = false;
-    this.startTime = Date.now();
+
     this.renderBoard();
     this.updateHud();
   }
 
   /**
-   * Reveal the solver's best next move, progressively: the first tap glows the
-   * piece to move, the second shows a translucent ghost of where it goes. The
-   * move is recomputed from the CURRENT board so it stays valid after any number
-   * of moves. Using a hint flags the puzzle so its solve won't count toward the
-   * Endless "Solved" total (cleared by Restart / a new puzzle).
+   * Reveal the solver's best next move progressively. Signed-in hints are
+   * computed from a server replay of this issue and atomically make the issue
+   * ineligible before the move is returned. Guest hints remain session-local.
    */
-  private showHint(): void {
-    if (!this.board || this.busy || this.won) return;
-    // Bound the search so the hint can never block the main thread on a
-    // pathological board (a long synchronous solve would freeze input and could
-    // stall an in-flight scene fade). Real endless boards explore only a few
-    // thousand states, far under this cap; if it is ever exceeded the position
-    // is effectively stuck, so the stranded hint (-> Restart) is the right call.
-    const result = solve({ ...this.board, pieces: this.pieces }, { maxStates: 60_000 });
-    if (!result.solvable || result.solution.length === 0) {
-      this.showStrandedHint();
-      return;
+  private async showHint(): Promise<void> {
+    if (!this.board || this.busy || this.won || this.hintRequestPending) return;
+    const generation = this.playGeneration;
+    this.hintRequestPending = true;
+    this.busy = true;
+    this.hintButton.setEnabled(false);
+    try {
+      const move = await this.getHintMove();
+      if (!this.isCurrentPlay(generation)) return;
+      if (!move) {
+        this.showStrandedHint();
+        return;
+      }
+      this.hintUsed = true;
+      this.selected = null;
+      this.fxLayer.removeAll(true);
+      this.clearHintGraphics();
+      this.hintStage = this.hintStage >= 1 ? 2 : 1;
+      this.glowHintPiece(move.pieceIndex);
+      if (this.hintStage === 1) {
+        this.addHintCaption('Tap Hint again to see the move');
+      } else {
+        this.showHintDestination(move);
+      }
+    } catch (error) {
+      console.error(error);
+      if (this.isCurrentPlay(generation)) {
+        showToast('Hint unavailable. Please try again.');
+      }
+    } finally {
+      if (this.isCurrentPlay(generation)) {
+        this.busy = false;
+        this.hintRequestPending = false;
+        if (this.hintButton.active) this.hintButton.setEnabled(true);
+      }
     }
-    const move = result.solution[0];
-    this.hintUsed = true;
-    this.selected = null;
-    this.fxLayer.removeAll(true);
-    this.clearHintGraphics();
-    this.hintStage = this.hintStage >= 1 ? 2 : 1;
-    this.glowHintPiece(move.pieceIndex);
-    if (this.hintStage === 1) {
-      this.addHintCaption('Tap Hint again to see the move');
-    } else {
-      this.showHintDestination(move);
+  }
+
+  private async getHintMove(): Promise<Move | null> {
+    if (!this.board) return null;
+    if (!context.username) {
+      const result = solve({ ...this.board, pieces: this.pieces }, { maxStates: 60_000 });
+      return result.solvable ? result.solution[0] ?? null : null;
     }
+    if (!this.endlessIssueId) throw new Error('missing Endless issue id');
+    const response = await fetch('/api/endless/hint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issueId: this.endlessIssueId, moves: this.moveHistory }),
+    });
+    if (!response.ok) throw new Error(`endless hint failed: ${response.status}`);
+    const result: EndlessHintResponse = await response.json();
+    return result.move;
   }
 
   /** A pulsing gold outline around the piece the player should move. */
@@ -1119,6 +1358,8 @@ export class GameScene extends Scene {
    *  We don't set `won` - the board stays playable; the interactive overlay just
    *  blocks accidental taps until the player chooses. */
   private showDailySolvedRecap(result?: { moves: number; stars: number }): void {
+    this.dailyRecapOpen = true;
+    this.beginBlockingOverlay();
     const w = this.scale.width;
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
@@ -1178,21 +1419,31 @@ export class GameScene extends Scene {
       label: 'Endless puzzles \u25B6',
       variant: 'primary',
       minWidth: Math.min(240, contentW),
-      onClick: () => fadeToScene(this, 'EndlessScene'),
+      onClick: () => {
+        trackClientEvent('daily_to_endless');
+        fadeToScene(this, 'EndlessScene');
+      },
     });
     const communityBtn = makePill(this, {
       label: 'Community puzzles',
       variant: 'secondary',
       minWidth: Math.min(240, contentW),
-      onClick: () => fadeToScene(this, 'CommunityScene'),
+      onClick: () => {
+        trackClientEvent('daily_to_community');
+        fadeToScene(this, 'CommunityScene');
+      },
     });
     const replayBtn = makePill(this, {
       label: "Play today's again",
       variant: 'ghost',
       size: 'sm',
       onClick: () => {
+        this.dailyRecapOpen = false;
+        this.resetFxTransform();
         this.fxLayer.removeAll(true);
-        this.hudText.setVisible(true);
+        this.blockingShield = undefined;
+        this.layout();
+        this.renderBoard();
         this.updateHud();
       },
     });
@@ -1205,7 +1456,9 @@ export class GameScene extends Scene {
   }
 
   private onWin(): void {
+    this.dailyRecapOpen = false;
     this.won = true;
+    this.beginBlockingOverlay();
     this.menuButton.setVisible(false);
     this.muteButton.setVisible(false);
     this.skipButton.setVisible(false);
@@ -1361,7 +1614,10 @@ export class GameScene extends Scene {
       label: 'More puzzles \u25B6',
       variant: 'primary',
       x: w / 2,
-      onClick: () => fadeToScene(this, 'EndlessScene'),
+      onClick: () => {
+        trackClientEvent('daily_to_endless');
+        fadeToScene(this, 'EndlessScene');
+      },
     });
 
     const homeButton = makePill(this, {
@@ -1387,7 +1643,7 @@ export class GameScene extends Scene {
     // score/leaderboard block fill the gap above them. Anchoring to the bottom
     // keeps them clear of the leaderboard no matter how many lines it grows to
     // once submitSolve resolves. Order is lowest-first (best thumb reach at the
-    // bottom): primary loop CTA, then the inward Reddity action (Comment my
+    // bottom): primary loop CTA, then the inward thread action (Comment my
     // score), then the quieter outward Share, then the opt-in nudge on top.
     const stack: PillButton[] = [morePuzzlesButton];
     if (postScoreButton) stack.push(postScoreButton);
@@ -1400,7 +1656,7 @@ export class GameScene extends Scene {
     this.winStatusBottom = stackTop - SPACE.md;
     this.positionWinStatus(status);
 
-    void this.submitSolve(status);
+    this.completionPromise = this.submitSolve(status);
   }
 
   /** Lay out win-screen action buttons stacked up from the bottom of the screen
@@ -1446,7 +1702,7 @@ export class GameScene extends Scene {
 
   private onWinCommunity(): void {
     const playedId = this.communityPuzzle?.id;
-    if (playedId) void this.markPlayed(playedId);
+    if (playedId) this.completionPromise = this.markPlayed(playedId);
     playWin();
     const w = this.scale.width;
     const h = this.scale.height;
@@ -1562,6 +1818,10 @@ export class GameScene extends Scene {
   private onWinEndless(): void {
     playWin();
     const counts = !this.hintUsed;
+    if (!counts && this.endlessIssueId) {
+      this.releaseEndlessIssue(this.endlessIssueId);
+      this.endlessIssueId = '';
+    }
     const stars = computeStars(this.moves, this.par);
     const blurb = counts
       ? stars === 3
@@ -1572,6 +1832,11 @@ export class GameScene extends Scene {
       : 'You found the way with a hint.';
     const w = this.scale.width;
     const h = this.scale.height;
+    const showGuestPrompt = !context.username;
+    const countY = h * 0.52;
+    const signInY = h * 0.635;
+    const nextY = h * (showGuestPrompt ? 0.74 : 0.7);
+    const levelY = h * (showGuestPrompt ? 0.85 : 0.81);
     this.fxLayer.removeAll(true);
 
     const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
@@ -1618,7 +1883,7 @@ export class GameScene extends Scene {
       }
 
       const movesText = this.add
-        .text(w / 2, h * 0.44, `${this.moves} moves   (par ${this.par})`, {
+        .text(w / 2, h * 0.43, `${this.moves} moves   (par ${this.par})`, {
           fontFamily: FONT.ui,
           fontSize: '18px',
           fontStyle: '700',
@@ -1629,15 +1894,15 @@ export class GameScene extends Scene {
 
       // The progression payoff: the lifetime solved count ticks up by one.
       const fromCount = this.endlessSolved;
-      // Optimistically record the increment so a fast "Next" (before the solve
-      // POST resolves) still shows the correct banner; recordEndless reconciles it.
-      this.registry.set('endless.solved', fromCount + 1);
       const countText = this.add
-        .text(w / 2, h * 0.54, `Solved: ${fromCount}`, {
+        .text(w / 2, countY, `Solved: ${fromCount}`, {
           fontFamily: FONT.ui,
-          fontSize: '22px',
+          fontSize: '20px',
           fontStyle: '800',
           color: '#ffd166',
+          align: 'center',
+          lineSpacing: 4,
+          wordWrap: { width: contentW },
         })
         .setOrigin(0.5);
       this.fxLayer.add(countText);
@@ -1647,7 +1912,7 @@ export class GameScene extends Scene {
     } else {
       // Hinted solve: honest and encouraging, but it does not add to the total.
       const note = this.add
-        .text(w / 2, h * 0.34, 'Solved with a hint', {
+        .text(w / 2, h * 0.33, 'Solved with a hint', {
           fontFamily: FONT.ui,
           fontSize: '18px',
           fontStyle: '800',
@@ -1655,7 +1920,7 @@ export class GameScene extends Scene {
         })
         .setOrigin(0.5);
       const sub = this.add
-        .text(w / 2, h * 0.44, "This one doesn't add to your total \u2014 try the next one solo", {
+        .text(w / 2, h * 0.42, "This one doesn't add to your total \u2014 try the next one solo", {
           fontFamily: FONT.ui,
           fontSize: '13px',
           fontStyle: '600',
@@ -1666,7 +1931,7 @@ export class GameScene extends Scene {
         .setOrigin(0.5)
         .setAlpha(0.85);
       const countText = this.add
-        .text(w / 2, h * 0.54, `Solved: ${this.endlessSolved}`, {
+        .text(w / 2, countY, `Solved: ${this.endlessSolved}`, {
           fontFamily: FONT.ui,
           fontSize: '18px',
           fontStyle: '700',
@@ -1680,9 +1945,13 @@ export class GameScene extends Scene {
       label: 'Next puzzle \u25B6',
       variant: 'primary',
       x: w / 2,
-      y: h * 0.7,
+      y: nextY,
       minWidth: Math.min(240, contentW),
-      onClick: () => fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } }),
+      onClick: () => {
+        trackClientEvent('endless_next');
+        this.preserveEndlessPrefetch = true;
+        fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } });
+      },
     });
 
     const levelButton = makePill(this, {
@@ -1690,8 +1959,11 @@ export class GameScene extends Scene {
       variant: 'secondary',
       size: 'sm',
       x: w / 2,
-      y: h * 0.81,
-      onClick: () => fadeToScene(this, 'EndlessScene'),
+      y: levelY,
+      onClick: () => {
+        trackClientEvent('endless_change_level');
+        fadeToScene(this, 'EndlessScene');
+      },
     });
 
     const homeButton = makePill(this, {
@@ -1703,49 +1975,149 @@ export class GameScene extends Scene {
     homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
 
     this.fxLayer.add([nextButton, levelButton, homeButton]);
-    this.addSignInPrompt(h * 0.62, 'Sign in to save your progress');
+    this.addSignInPrompt(signInY, 'Sign in to save your progress');
   }
 
-  /** Record the endless solve server-side and tick the lifetime count up. */
+  private endlessSolvedLabel(solved: number, achievements: AchievementSnapshot): string {
+    const first = achievements.newlyUnlocked[0];
+    if (!first) return `Solved: ${solved}`;
+    const extra = achievements.newlyUnlocked.length > 1
+      ? ` +${achievements.newlyUnlocked.length - 1}`
+      : '';
+    return `Solved: ${solved}\nAward unlocked: ${first.title}${extra}`;
+  }
+
+  /** Verify the Endless solve server-side, or keep guest progress in this session. */
   private async recordEndless(countText: Phaser.GameObjects.Text, fromCount: number): Promise<void> {
+    if (!context.username) {
+      const solved = fromCount + 1;
+      const tierKey = `endless.solved.${this.endlessTier}`;
+      const previousTier = this.registry.get(tierKey);
+      const nextTier = (typeof previousTier === 'number' ? previousTier : 0) + 1;
+      this.endlessSolved = solved;
+      this.registry.set('endless.solved', solved);
+      this.registry.set(tierKey, nextTier);
+
+      const easyValue = this.registry.get('endless.solved.easy');
+      const mediumValue = this.registry.get('endless.solved.medium');
+      const hardValue = this.registry.get('endless.solved.hard');
+      const hardAtPar =
+        this.registry.get('endless.hardAtPar') === true ||
+        (this.endlessTier === 'hard' && this.moves === this.par);
+      this.registry.set('endless.hardAtPar', hardAtPar);
+      const stats = {
+        solved,
+        byTier: {
+          easy: typeof easyValue === 'number' ? easyValue : 0,
+          medium: typeof mediumValue === 'number' ? mediumValue : 0,
+          hard: typeof hardValue === 'number' ? hardValue : 0,
+        },
+        hardAtPar,
+      };
+      const persisted: AchievementId[] = this.registry.get('endless.achievementIds') ?? [];
+      const qualified = qualifiedAchievementIds(stats);
+      const newlyUnlocked = qualified.filter((id) => !persisted.includes(id));
+      const achievements = buildAchievementSnapshot(stats, qualified, newlyUnlocked);
+      this.registry.set('endless.achievementIds', qualified);
+      this.registry.set('endless.achievements', achievements);
+      if (countText.scene) countText.setText(this.endlessSolvedLabel(solved, achievements));
+      return;
+    }
+
+    const generation = this.endlessSaveGeneration;
+    const issueId = this.endlessIssueId;
+    const transcript = this.moveHistory.map((move) => ({
+      pieceIndex: move.pieceIndex,
+      kind: move.kind,
+      to: [...move.to],
+    }));
     try {
-      const response = await fetch('/api/endless/solved', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier: this.endlessTier }),
-      });
-      if (!response.ok) throw new Error(`endless solve failed: ${response.status}`);
-      const result: EndlessSolvedResponse = await response.json();
-      this.endlessSolved = result.solved;
-      // Persist the authoritative count so the next puzzle (which may load from
-      // the prefetch cache, whose own count is stale) shows the right banner.
-      this.registry.set('endless.solved', result.solved);
-      // If the player already moved on (tapped Next / Menu) before this POST
-      // resolved, the win-screen text is destroyed. Adding a tween that writes to
-      // it would throw from inside the game loop and permanently kill Phaser's
-      // render loop - the next puzzle would load and then freeze. Bail out; the
-      // count is already stored above.
+      if (!issueId) throw new Error('missing Endless issue id');
+      const response = await this.postCompletionWithRetries(
+        '/api/endless/solved',
+        JSON.stringify({ issueId, moves: transcript })
+      );
+      const result: EndlessSolveResponse = await response.json();
+      const knownValue = this.registry.get('endless.solved');
+      const known = typeof knownValue === 'number' ? knownValue : 0;
+      const solved = Math.max(known, result.solved);
+      const mergeTier = (tier: EndlessTier, authoritative: number): void => {
+        const key = `endless.solved.${tier}`;
+        const current = this.registry.get(key);
+        this.registry.set(key, Math.max(typeof current === 'number' ? current : 0, authoritative));
+      };
+      this.registry.set('endless.solved', solved);
+      mergeTier('easy', result.byTier.easy);
+      mergeTier('medium', result.byTier.medium);
+      mergeTier('hard', result.byTier.hard);
+      const persistedIds: AchievementId[] =
+        this.registry.get('endless.achievementIds') ?? [];
+      const resultIds = result.achievements.progress
+        .filter((achievement) => achievement.unlocked)
+        .map((achievement) => achievement.id);
+      const mergedIds = [...new Set<AchievementId>([...persistedIds, ...resultIds])];
+      const mergedEasy = this.registry.get('endless.solved.easy');
+      const mergedMedium = this.registry.get('endless.solved.medium');
+      const mergedHard = this.registry.get('endless.solved.hard');
+      const mergedAchievements = buildAchievementSnapshot(
+        {
+          solved,
+          byTier: {
+            easy: typeof mergedEasy === 'number' ? mergedEasy : 0,
+            medium: typeof mergedMedium === 'number' ? mergedMedium : 0,
+            hard: typeof mergedHard === 'number' ? mergedHard : 0,
+          },
+          hardAtPar: mergedIds.includes('cold-logic'),
+        },
+        mergedIds
+      );
+      this.registry.set('endless.achievements', mergedAchievements);
+      this.registry.set('endless.achievementIds', mergedIds);
+      if (generation !== this.endlessSaveGeneration) return;
+
+      this.endlessSolved = solved;
       if (!countText.scene) return;
       const counter = { v: fromCount };
       this.tweens.add({
         targets: counter,
-        v: result.solved,
+        v: solved,
         duration: 500,
         ease: 'Cubic.easeOut',
         onUpdate: () => {
           if (countText.scene) countText.setText(`Solved: ${Math.round(counter.v)}`);
         },
         onComplete: () => {
-          if (countText.scene) countText.setText(`Solved: ${result.solved}`);
+          if (countText.scene) {
+            countText.setText(this.endlessSolvedLabel(solved, result.achievements));
+          }
         },
       });
     } catch (error) {
       console.error(error);
-      // Non-fatal: leave the banner at the pre-solve count.
+      this.releaseEndlessIssue(issueId);
+      if (generation !== this.endlessSaveGeneration) return;
+      const currentValue = this.registry.get('endless.solved');
+      // Signed play never increments optimistically. Preserve any newer solve
+      // confirmed by another in-flight request instead of rolling it backward.
+      const preserved = mergeProgressCount(currentValue, fromCount);
+      this.endlessSolved = preserved;
+      this.registry.set('endless.solved', preserved);
+      if (countText.scene) countText.setText(`Solved: ${preserved}`);
     }
   }
 
   private onWinTest(): void {
+    if (this.testBoard) {
+      this.registry.set('editor.proof', {
+        signature: boardSignature(this.testBoard),
+        moves: this.moveHistory.map((move) => ({
+          pieceIndex: move.pieceIndex,
+          kind: move.kind,
+          to: [...move.to],
+        })),
+      });
+    }
+    trackClientEvent('creator_test_solved');
     playWin();
     const w = this.scale.width;
     const h = this.scale.height;
@@ -1780,18 +2152,39 @@ export class GameScene extends Scene {
   }
 
   private async markPlayed(id: string): Promise<void> {
+    const rememberLocally = (): void => {
+      const locallyPlayed: string[] = this.registry.get('ugc.played.local') ?? [];
+      if (!locallyPlayed.includes(id)) {
+        this.registry.set('ugc.played.local', [...locallyPlayed, id]);
+      }
+    };
+    if (!context.username) {
+      rememberLocally();
+      return;
+    }
+
+    const body = JSON.stringify({
+      id,
+      moves: this.moveHistory.map((move) => ({
+        pieceIndex: move.pieceIndex,
+        kind: move.kind,
+        to: [...move.to],
+      })),
+    });
     try {
-      await fetch('/api/ugc/played', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
+      const response = await this.postCompletionWithRetries('/api/ugc/played', body);
+      const result: MarkPlayedResponse = await response.json();
+      if (!result.ok) throw new Error(result.reason);
+      // Signed players only hide the puzzle locally after durable server evidence
+      // succeeds; a failed request remains visible and retryable this session.
+      rememberLocally();
     } catch (error) {
       console.error(error);
     }
   }
 
   private async upvoteCurrent(button: PillButton): Promise<void> {
+    const generation = this.playGeneration;
     const id = this.communityPuzzle?.id;
     if (!id) return;
     // Guests can play freely; upvoting needs an account. Prompt right on the
@@ -1811,10 +2204,12 @@ export class GameScene extends Scene {
       // (already voted / own puzzle) comes back 200 and disables below.
       if (!response.ok) throw new Error(`vote failed: ${response.status}`);
       const data: VoteResponse = await response.json();
+      if (!this.isCurrentPlay(generation) || !button.active) return;
       button.setLabelText(data.ok ? `Upvoted! (${data.votes})` : data.reason ?? 'Already upvoted');
       button.setEnabled(false);
     } catch (error) {
       console.error(error);
+      if (!this.isCurrentPlay(generation) || !button.active) return;
       button.setLabelText('Could not upvote');
     }
   }
@@ -1824,24 +2219,31 @@ export class GameScene extends Scene {
    *  vs par. The scorePosted guard blocks a double-tap within this win screen. */
   private async postScore(button: PillButton): Promise<void> {
     if (this.scorePosted) return;
+    const generation = this.playGeneration;
     // Commenting needs an account; prompt right on the tap (intent-driven).
     if (!context.username) {
       showLoginPrompt();
       return;
     }
-    button.setLabelText('Posting\u2026').setEnabled(false);
+    button.setLabelText('Posting…').setEnabled(false);
     try {
+      if (this.completionPromise) await this.completionPromise;
+      if (!this.isCurrentPlay(generation) || !button.active) return;
       const response = await fetch('/api/comment-score', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ moves: this.moves }),
+        body: JSON.stringify({}),
       });
       if (!response.ok) throw new Error(`comment failed: ${response.status}`);
+      const result: CommentScoreResponse = await response.json();
+      if (!this.isCurrentPlay(generation) || !button.active) return;
+      if (!result.ok) throw new Error('comment was not accepted');
       this.scorePosted = true;
-      button.setLabelText('Posted to comments \u2713');
-      showToast('Your score is in the comments!');
+      button.setLabelText(result.alreadyPosted ? 'Already posted ✓' : 'Posted to comments ✓');
+      showToast(result.alreadyPosted ? 'Your score is already in the comments.' : 'Your score is in the comments!');
     } catch (error) {
       console.error(error);
+      if (!this.isCurrentPlay(generation) || !button.active) return;
       button.setLabelText('Comment my score').setEnabled(true);
       showToast('Could not post your score.');
     }
@@ -1862,6 +2264,8 @@ export class GameScene extends Scene {
   }
 
   private async nextCommunity(): Promise<void> {
+    const generation = this.playGeneration;
+    trackClientEvent('community_next');
     const queue: UgcSubmission[] = this.registry.get('ugc.queue') ?? [];
     const idx = (this.registry.get('ugc.index') ?? 0) + 1;
     if (idx < queue.length) {
@@ -1873,6 +2277,7 @@ export class GameScene extends Scene {
     // in resurfaced/discovery ones, so pull a fresh batch before declaring the
     // stream done - it shouldn't dead-end while unsolved puzzles still exist.
     const more = await this.fetchCommunityBatch(this.communityPuzzle?.id);
+    if (!this.isCurrentPlay(generation)) return;
     if (more.length > 0) {
       this.registry.set('ugc.queue', more);
       this.registry.set('ugc.index', 0);
@@ -1889,7 +2294,10 @@ export class GameScene extends Scene {
       const response = await fetch('/api/ugc/list');
       if (!response.ok) throw new Error(`list failed: ${response.status}`);
       const data: UgcListResponse = await response.json();
-      return data.submissions.filter((s) => s.id !== excludeId);
+      const locallyPlayed: string[] = this.registry.get('ugc.played.local') ?? [];
+      return data.submissions.filter(
+        (submission) => submission.id !== excludeId && !locallyPlayed.includes(submission.id)
+      );
     } catch (error) {
       console.error(error);
       return [];
@@ -1900,6 +2308,7 @@ export class GameScene extends Scene {
     const w = this.scale.width;
     const h = this.scale.height;
     this.won = true;
+    this.beginBlockingOverlay();
     this.skipButton.setVisible(false);
     this.muteButton.setVisible(false);
     this.fxLayer.removeAll(true);
@@ -1942,15 +2351,45 @@ export class GameScene extends Scene {
   }
 
   private async submitSolve(status: Phaser.GameObjects.Text): Promise<void> {
+    const generation = this.playGeneration;
+    const puzzleId = this.dailyPuzzleId;
+    const body = JSON.stringify({
+      puzzleId,
+      playId: this.dailyPlayId,
+      moves: this.moveHistory.map((move) => ({
+        pieceIndex: move.pieceIndex,
+        kind: move.kind,
+        to: [...move.to],
+      })),
+    });
     try {
-      const timeMs = Date.now() - this.startTime;
-      const response = await fetch('/api/solve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: this.date, moves: this.moves, timeMs }),
-      });
-      if (!response.ok) throw new Error(`solve failed: ${response.status}`);
+      const response = await this.postCompletionWithRetries('/api/solve', body);
       const result: SolveResultDTO = await response.json();
+      if (!context.username) {
+        this.registry.set(
+          'daily.solved.guest',
+          rememberGuestDailyCompletion(this.registry.get('daily.solved.guest'), {
+            puzzleId,
+            moves: result.moves,
+            stars: result.stars,
+          })
+        );
+      }
+      if (!this.isCurrentPlay(generation)) {
+        // Phaser reuses this scene instance. If an immediate guest reopen loaded
+        // the same Daily before this verified response arrived, reconcile that
+        // already-active board instead of waiting for another navigation.
+        if (
+          !context.username &&
+          this.sys.isActive() &&
+          this.dailyPuzzleId === puzzleId &&
+          !this.won &&
+          !this.dailyRecapOpen
+        ) {
+          this.showDailySolvedRecap({ moves: result.moves, stars: result.stars });
+        }
+        return;
+      }
 
       this.shareText = buildShareText({
         date: this.date,
@@ -1975,17 +2414,20 @@ export class GameScene extends Scene {
 
       if (result.totalPlayers >= 2) {
         const top = await this.fetchLeaderboard();
+        if (!this.isCurrentPlay(generation)) return;
         if (top.length > 0) {
           lines.push('');
           lines.push('Top solvers today');
           top.forEach((entry, i) => lines.push(`${i + 1}. ${entry.username} - ${entry.moves} moves`));
         }
       }
+      if (!this.isCurrentPlay(generation) || !status.scene) return;
       status.setText(lines.join('\n'));
       this.positionWinStatus(status);
     } catch (error) {
       console.error(error);
-      status.setText('Score saved. (Leaderboard unavailable.)');
+      if (!this.isCurrentPlay(generation) || !status.scene) return;
+      status.setText('Score could not be verified. Try again.');
       this.positionWinStatus(status);
     }
   }
@@ -2013,7 +2455,9 @@ export class GameScene extends Scene {
 
   private async fetchLeaderboard(): Promise<{ username: string; moves: number }[]> {
     try {
-      const response = await fetch(`/api/leaderboard?date=${encodeURIComponent(this.date)}`);
+      const response = await fetch(
+        `/api/leaderboard?puzzleId=${encodeURIComponent(this.dailyPuzzleId)}`
+      );
       if (!response.ok) return [];
       const data: LeaderboardResponse = await response.json();
       return data.entries.slice(0, 3).map((e) => ({ username: e.username, moves: e.moves }));

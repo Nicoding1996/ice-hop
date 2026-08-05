@@ -2,79 +2,91 @@
 
 ## What we are building
 
-**Ice Hop** - a daily logic-puzzle game that runs natively inside a Reddit post
-via Devvit Web, built for Reddit's "Games with a Hook" hackathon (June 17 - July
-15, 2026). Display name "Ice Hop"; app slug `ice-hop`.
+**Ice Hop** is a live daily logic-puzzle game that runs inside Reddit posts via
+Devvit Web. Display name: "Ice Hop". App slug and package name: `ice-hop`.
 
-Core mechanic (genre, not a clone): a small grid where "hopper" pieces must jump
-over occupied cells to land in empty target holes, while "slider" pieces move
-along an axis and "blocker" pieces stay fixed. A puzzle is solved when every
-hopper occupies a hole. This is a peg-solitaire / sliding-logic hybrid. Every
-puzzle is deterministic with a known optimal solution computed by our solver.
+The board combines peg-solitaire and sliding-block ideas: `HOPPER` pieces jump
+over contiguous occupied cells, `SLIDER` pieces move along one axis, and fixed
+`BLOCKER` pieces shape the route. A puzzle is solved when every hopper reaches a
+hole. The engine remains theme-agnostic; the product skin maps those pieces to
+penguins, seals, ice rocks, and water.
 
-Theme (the art skin over the abstract engine): penguins (hoppers) hop over ice
-rocks (blockers) and seals (sliders) to dive into water holes (goals). The number
-of penguins always equals the number of water holes, so "get every penguin into
-the water" reads at a glance.
+Every shipped puzzle is deterministic and has a solver-computed optimal solution.
+The number of penguins always equals the number of water holes, so the player goal
+reads immediately: get every penguin into the water.
 
-## Why it can win
+## Why the solver matters
 
-The whole strategy hinges on one fact: the puzzle is deterministic, so we can
-write a solver. The solver unlocks three things that turn a solo puzzle into a
-retentive, community-run game:
+One pure TypeScript solver supports the product's core systems:
 
-1. Par scoring (golf): score players against the known optimal move count.
-2. Procedural generation: an endless supply of graded puzzles.
-3. UGC validation: verify that any user-built puzzle is solvable before publish.
+1. **Fair scoring:** par is the known optimal move count.
+2. **Reliable supply:** daily and Endless boards are generated and graded before
+   players receive them.
+3. **Safe creation:** a community board must be structurally valid, solver-valid,
+   and personally solved by its creator in the exact submitted form.
+4. **Progressive help:** Endless hints recompute a valid next move from the current
+   position without weakening daily competition.
 
-## The player loop (the "hook")
+Server completion is authoritative. Daily, Endless, and Community progress is
+recorded only after legal transcript replay against the exact board. Guest
+progress remains session-local, and retries cannot increment persistent progress
+more than once.
 
-- Daily puzzle: one shared, freshly generated puzzle per day, auto-posted to the
-  feed (the ritual). Difficulty ramps across the week (Mon/Tue easy -> weekend
-  hard). The daily is always solver-generated; it is NOT sourced from user
-  submissions.
-- Endless mode (the "play more" loop): after the daily, the player picks a tier
-  (Easy / Medium / Hard) and gets an unlimited shuffle of freshly generated,
-  solver-verified puzzles from that bucket, with a lifetime "Solved: N" count for
-  a sense of progression. This is the always-full path that solves the cold
-  start: the daily is a single puzzle and a brand-new subreddit has no community
-  puzzles yet, so Endless guarantees a new visitor always has something to do
-  next. It is the primary CTA on the daily win screen.
-- Streak: consecutive days solved; loss aversion brings people back. The first
-  solve each day sets a streak-based subreddit flair (e.g. "🔥 7-day streak").
-- Score: moves vs par -> star rating; time is only a tiebreaker.
-- Share: a spoiler-free emoji-grid of your result, via the native share sheet
-  (clipboard fallback) to paste into comments or send to a friend, plus a one-tap
-  "Comment my score" that posts the same spoiler-free line straight into the
-  post's thread on your behalf (so the comment section fills up without leaving
-  the game).
-- Returning + sign-in: re-opening a solved daily shows a recap that routes you
-  onward to Endless / Community (never a silent replay of a beaten board);
-  logged-out players get a win-screen "sign in to save your streak / progress"
-  prompt (showLoginPrompt) to convert guests into returning players, and signed-in
-  players who haven't joined get a one-tap "Join r/{subreddit}" CTA so a fan
-  becomes a subscriber who'll see tomorrow's daily in their feed.
-- Comment hub: each daily post auto-seeds a pinned how-to-play comment that
-  invites players to drop their scores, so the comment section is part of play.
-- Leaderboard: daily + all-time, sorted by fewest moves then fastest time.
-- Build + Community stream (the differentiator): players build their own puzzles
-  in the editor and can play-test them before submitting; the solver validates
-  each one is solvable before it is accepted; accepted puzzles enter a community
-  stream that anyone can play (solve -> next, or skip), upvoting the ones they
-  like and seeing the creator credited. Each
-  player's stream excludes puzzles they have already solved and interleaves the
-  top-voted with the newest, so popular puzzles stay visible while fresh ones
-  still get exposure. Submissions are de-duplicated and rate-limited (a few per
-  day) to keep the stream spam-free. This fuses Hook + User Contributions +
-  Reddity. (A future step could promote a top-voted community puzzle into a
-  curated daily, but today the daily and the community stream are independent.)
-- My puzzles (the creator payoff): a dashboard listing the puzzles you've built
-  with their live solve and upvote counts plus headline totals, so a maker has a
-  concrete reason to come back - watching their puzzle get played and liked.
+## Player loops
 
-## Success criteria (hackathon)
+- **Daily:** one shared solver-generated puzzle is posted each day. Difficulty
+  ramps from par 4 on Monday/Tuesday to Medium on Wednesday-Friday and Hard on
+  weekends. Community submissions never silently become the daily.
+- **Endless:** Easy, Medium, and Hard provide an always-full path after the daily.
+  A no-hint solve adds one to the lifetime total and one to that tier; every solve
+  has equal progression value. Hinted solves remain playable but do not count.
+- **Awards:** quantity milestones reward 10, 25, 50, 100, and 250 Endless solves.
+  Tier awards recognize Easy, Medium, first/ten Hard solves, a Hard solve at par,
+  and ten solves in every tier.
+- **Daily return:** consecutive daily solves build a streak and update subreddit
+  flair. A solved-daily recap routes returning players toward Endless or
+  Community rather than silently replaying completed content.
+- **Competition:** each immutable daily puzzle has its own leaderboard, ranked by
+  fewest moves with server-derived elapsed time only as a tiebreaker.
+- **Discussion:** each puzzle post seeds a pinned prompt. Sharing and the
+  user-authorized "Comment my score" action put spoiler-free results into the
+  post thread under the player's account.
+- **Creation:** the editor provides live solver feedback, Undo, Random, and Test.
+  Submit stays locked until the creator legally solves that exact board. Accepted
+  puzzles become playable posts and enter the Community stream.
+- **Community discovery:** solved puzzles are filtered per player; skips may
+  resurface. Top-voted, recent, and discovery candidates are interleaved so both
+  established and new creators receive exposure.
+- **Creator payoff:** My Puzzles reports per-board and aggregate solve/upvote
+  counts, giving makers a concrete reason to return.
+- **Low-friction conversion:** guests can play before signing in. Win screens are
+  the natural point to offer sign-in and an optional community subscription.
 
-Primary target: Best Use of Retention ($3k) and Best Use of User Contributions
-($3k), plus Honorable Mention, with an outside shot at Best App with a Hook
-($15k) and Best Use of Phaser ($5k). Judged on Delightful UX, Polish, Reddity,
-Hook (all equally weighted). Must be launch-ready and great on mobile.
+## Product health
+
+Use bounded, allowlisted counters rather than free-form analytics. Signed unique
+and next-day-return measurements temporarily store username-keyed membership in
+Redis hashes with a 32-day TTL; longer-lived telemetry contains only daily totals.
+The public fixed-event endpoint is capped per signed user or host post with a
+short-lived request counter. Monitor the events currently emitted:
+
+- daily, Endless, and Community starts versus verified completions;
+- daily-to-Endless and daily-to-Community continuation;
+- signed daily actives and next-day returners;
+- Endless issue/completion rates by tier and at-par frequency;
+- creator test starts/solves and accepted submissions;
+- daily generation tier, quality pass, and resulting par.
+
+The product is healthy when puzzles load reliably, daily completion and next-day
+return remain strong, players continue into Endless/Community, and creators see
+real plays on valid submissions. Mobile fit, clear recovery states, and truthful
+progress take priority over adding more systems.
+
+## Originality and identity guardrail
+
+Ice Hop uses familiar public-domain puzzle genres, but its name, artwork, code,
+scoring, generated boards, and community boards are its own. Never copy another
+product's name, artwork, or puzzle set. Keep engine concepts abstract
+(`HOPPER`/`SLIDER`/`BLOCKER`) and the Arctic theme as a replaceable skin. Daily
+and Endless content must remain generated; Community content must come from
+players and pass the product's validation and proof rules.

@@ -1,9 +1,9 @@
 # Art Direction: "Arctic at Dawn"
 
 Ice Hop's look is **code-drawn vector art** (no raster sprites). Cohesion is the
-whole game: one palette, one shape language, consistent spacing. A deliberate,
-internally consistent flat/vector style is what makes it read as "designed"
-rather than AI-generated. Source of truth for values: `src/client/art/theme.ts`.
+whole game: one palette, one shape language, consistent spacing. The deliberate,
+internally consistent flat/vector style gives every screen a recognizable Ice Hop
+identity. Source of truth for values: `src/client/art/theme.ts`.
 
 ## Mood
 
@@ -78,7 +78,7 @@ Respect calm: no screen shake except meaningful moments; prefer ease-out curves.
 - Backdrop is calm: dawn gradient + a couple of soft snow drifts, optional faint
   stars/aurora near the top. Never busy.
 
-## Anti-"AI slop" checklist
+## Visual consistency checklist
 
 - One palette, one shape language; every element looks related.
 - Consistent corner radius, spacing, and alignment.

@@ -1,13 +1,14 @@
 # Ice Hop 🐧
 
-A daily logic-puzzle game that runs natively inside a Reddit post, built on
-[Devvit Web](https://developers.reddit.com/docs) for Reddit's "Games with a Hook"
-hackathon.
+A daily logic-puzzle game that runs natively inside a Reddit post, powered by
+[Devvit Web](https://developers.reddit.com/docs).
 
 Guide every penguin into the water. Every penguin hops, every seal slides, and
 the ice never moves. Solve the daily in as few moves as possible, keep your
 streak alive, climb the leaderboard, race through Endless mode, and build puzzles
 for everyone else to play.
+
+**Play it live on Reddit: [r/IceHop](https://www.reddit.com/r/IceHop/)**
 
 ---
 
@@ -47,8 +48,8 @@ insight matters more than speed.
 
 ### While you play
 
-- **Restart** the board any time from the bottom bar to take a fresh run at par —
-  a wrong move is never a dead end.
+- **Restart** the board any time from the bottom bar to take a fresh run at par.
+  A wrong move is never a dead end.
 - **Endless mode** has an optional **Hint** that glows the next good move when
   you're stuck, so you keep learning. A hinted solve doesn't count toward your
   Endless total, so the number stays honest.
@@ -57,26 +58,29 @@ insight matters more than speed.
 
 ---
 
-## The hook (why you come back)
+## Ways to keep playing
 
 - **A fresh puzzle every day.** One shared daily puzzle, auto-posted to the feed.
   Difficulty ramps across the week: easy on Monday and Tuesday, medium midweek,
   hardest on the weekend.
 - **Endless mode.** Finished the daily and still want more? Pick Easy, Medium, or
-  Hard and play a never-ending shuffle of fresh, solver-made puzzles, with a
-  running "Solved" count to grow. It's the always-full path when you want one more.
+  Hard and play a never-ending shuffle of fresh, solver-made puzzles. Every
+  no-hint solve adds one to your lifetime and tier totals; awards mark overall
+  milestones, tier mastery, and a Hard solve exactly at par. Hinted solves stay
+  available for learning but do not advance progress.
 - **Streaks.** Solve day after day to build a streak. Miss a day and it resets.
   Your first solve each day sets a streak flair on the subreddit ("🔥 7-day
   streak"), a public nudge to keep coming back.
-- **Leaderboards.** Daily and all-time, so there's always a race.
+- **Leaderboards.** A fresh daily race ranked by fewest moves, then trusted time.
 - **A built-in comment hub.** Every daily post auto-seeds a pinned how-to-play
   comment that invites players to drop their scores, so the comment section
   becomes part of the game instead of an afterthought.
 - **Shareable result.** Copy a spoiler-free emoji summary of your solve (par,
   moves, streak) straight into the comments to compare without spoiling the board.
 - **Build your own + a community stream.** Make your own puzzle in the editor;
-  the solver checks it's actually solvable (and you can play-test it) before it's
-  accepted. Accepted puzzles go into a community stream anyone can play through
+  the solver checks that it is structurally valid and solvable, and Submit stays
+  locked until you personally solve that exact board in Test mode. Accepted
+  puzzles go into a community stream anyone can play through
   (solve one, jump to the next, or skip), upvoting the ones they like with the
   creator credited. That's an endless supply of "one more" puzzles and a reason
   for creators to come back and see how their puzzle is doing.
@@ -91,9 +95,12 @@ Open the **Build** screen from the game to design a board:
 - Tap the **Seal** tool again to rotate the seal between horizontal and vertical.
 - **Random** drops a solver-generated starter board you can riff on.
 - **Undo** steps back your last placement.
-- **Test** drops you into your own board to play it before you commit.
+- **Test** drops you into your own board. You must solve the exact current board
+  before **Submit** unlocks; changing anything invalidates that proof and asks you
+  to test again.
 - The editor runs the solver live and tells you whether the board is **solvable**
-  and its **par** before you submit, so you never publish a dead end.
+  and its **par**, while the server independently replays the creator proof before
+  publication.
 
 A valid submission is a 4-6 wide/tall board with 1-4 penguins, an equal number of
 water holes, a real solution, and a par of at least 2. You can submit up to 5
@@ -142,7 +149,7 @@ See `.kiro/steering/` for the full design, tech, and structure notes.
 
 ## Local development
 
-Requires **Node >= 22.2.0** (Devvit's runtime) and a Reddit account with the
+Requires **Node >= 22.12.0** (matching the pinned Vite toolchain) and a Reddit account with the
 [Devvit CLI](https://developers.reddit.com/docs/quickstart) set up.
 
 ```sh
@@ -175,36 +182,64 @@ npm run launch       # deploy + devvit publish
 
 ---
 
-## Hackathon notes
+## Community and progression
 
-- **What to play:** the daily puzzle post in the test subreddit, then tap
-  **‹ Menu** for the hub — **Endless** mode (Easy / Medium / Hard), the **Build**
-  screen, **My puzzles** (your builds with their solve/upvote counts), and the
-  **Community** puzzle stream. On a win you can **Share** or **Comment my score**
-  straight into the thread, and signed-in players can one-tap **Join** the
-  subreddit.
-- **Retention:** daily puzzle + streaks + daily/all-time leaderboards + a weekly
-  difficulty ramp + an always-on Endless mode, plus a win-screen sign-in prompt
-  that turns guests into returning players who can subscribe.
-- **User contributions:** a solver-validated puzzle editor feeding a playable,
-  upvotable community stream with creator credit.
-- **Reddity:** every daily auto-seeds a pinned how-to/score-sharing comment,
-  spoiler-free shareable results are built to be pasted into the thread, and a
-  streak flair gives regulars a public badge, turning the comment section into
-  the scoreboard and the bragging.
-- The puzzle mechanic is an original take on the classic peg-solitaire / sliding
-  logic genre. The name, art, generated puzzles, and all user puzzles are our own.
+- **Start anywhere:** open a daily or Community post, then use **‹ Menu** for
+  Endless, Build, My Puzzles, and the Community stream. Wins always route to a
+  useful next action instead of leaving the player at a dead end.
+- **Return tomorrow:** the daily, streak, daily leaderboard, weekly difficulty
+  ramp, and subreddit flair provide a shared recurring challenge.
+- **Keep playing today:** Endless is always available, even before a community has
+  player-made boards. Counts and awards are quantity-based, so Easy, Medium, and
+  Hard each add one honest solve when completed without a hint.
+- **Create for other players:** Community submissions are solver-validated,
+  de-duplicated, rate-limited, and require a legal creator solve of the exact
+  submitted board. My Puzzles reports live solves and votes afterward.
+- **Use the thread:** every puzzle post seeds a pinned prompt, spoiler-free results
+  are shareable, and signed-in players can post a verified score beneath it.
+- **Protect progress:** server-side transcript replay verifies persistent Daily,
+  Endless, and Community completions. Guests can play freely, but their progress
+  remains local to the current session until they sign in.
+- **Keep the identity original:** the mechanic draws from classic peg-solitaire
+  and sliding-logic genres; Ice Hop's name, art, generated boards, and community
+  boards are its own.
 
 ---
 
 ## Changelog
 
+Repository release numbers describe this source tree; Devvit assigns its own app
+version to each uploaded build.
+
+### 0.1.0 - 2026-08-05
+
+First live-product hardening release.
+
+- Daily, Endless, and Community progress now requires legal move-by-move replay
+  against the exact server-known board; retries are idempotent and guest progress
+  never shares a Redis identity.
+- Community publication now requires the creator to solve the exact submitted
+  board, with the server independently validating the proof.
+- Added bounded product telemetry and quantity-plus-tier Endless awards; hinted
+  solves remain playable but do not advance counts or awards. Signed unique and
+  next-day-return metrics use short-lived Redis membership hashes.
+- Daily difficulty now stays in non-overlapping weekday bands with minimum par 4
+  and an in-band solver-verified fallback for every tier.
+- Pinned Vite 7.3.2 for the Devvit 0.12.24 toolchain and expanded focused policy,
+  replay, validation, and achievement coverage.
+- Archived event-era submission material and made active documentation evergreen.
+
+### 0.0.16
+
+Approved launch build installed on r/IceHop, including user-attributed score
+comments beneath each puzzle's pinned discussion prompt.
+
 ### 0.0.12
 
-Initial submission for review.
+Initial Reddit review build.
 
 - Daily solver-generated puzzle with a weekly difficulty ramp (easy early week,
-  hardest on weekends), par-based star scoring, and daily + all-time leaderboards.
+  hardest on weekends), par-based star scoring, and a daily leaderboard.
 - Streaks, with a first-solve-of-day subreddit streak flair.
 - Endless mode (Easy / Medium / Hard) with a lifetime solved count and an
   optional next-move Hint.

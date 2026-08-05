@@ -221,43 +221,128 @@ const readCount = async (key: string): Promise<number> => {
   const stored = await redis.get(key);
   if (!stored) return 0;
   const n = Number.parseInt(stored, 10);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+};
+
+type EndlessBaseline = {
+  readonly solved: number;
+  readonly byTier: EndlessTierCounts;
+};
+
+const baselineProperty = (value: object, key: string): unknown => Reflect.get(value, key);
+const isBaselineObject = (value: unknown): value is object =>
+  typeof value === 'object' && value !== null;
+const readBaselineCount = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+const parseEndlessBaseline = (raw: string | undefined): EndlessBaseline | null => {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isBaselineObject(value)) return null;
+    const byTierValue = baselineProperty(value, 'byTier');
+    if (!isBaselineObject(byTierValue)) return null;
+    const solved = readBaselineCount(baselineProperty(value, 'solved'));
+    const easy = readBaselineCount(baselineProperty(byTierValue, 'easy'));
+    const medium = readBaselineCount(baselineProperty(byTierValue, 'medium'));
+    const hard = readBaselineCount(baselineProperty(byTierValue, 'hard'));
+    if (solved === null || easy === null || medium === null || hard === null) return null;
+    return { solved, byTier: { easy, medium, hard } };
+  } catch {
+    return null;
+  }
+};
+
+const ledgerEntryIsAtPar = (raw: string): boolean => {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return isBaselineObject(value) && baselineProperty(value, 'atPar') === true;
+  } catch {
+    return false;
+  }
 };
 
 /**
- * Record one endless solve for a user: bump both the lifetime total and the
- * per-tier counter, then return the fresh stats (total + per-tier split). The
- * total stays authoritative for the in-game banner; the split drives the
- * tier-select labels.
+ * Read atomic Hard-at-par metadata, repairing the short-lived rollout state in
+ * which the permanent ledger committed before the old standalone flag write.
+ * A checked ledger cardinality avoids rescanning unchanged negative histories.
  */
-export const recordEndlessSolve = async (
-  user: string,
-  tier: EndlessTier
-): Promise<{ solved: number; byTier: EndlessTierCounts }> => {
-  await Promise.all([
-    redis.incrBy(keys.endlessSolved(user), 1),
-    redis.incrBy(keys.endlessSolvedTier(user, tier), 1),
+export const getEndlessHardAtPar = async (user: string): Promise<boolean> => {
+  if (user === 'anon') return false;
+  const metaKey = keys.endlessLedgerMeta(user);
+  const hardLedgerKey = keys.endlessLedger(user, 'hard');
+  const [rawState, rawCheckedCount, legacyFlag, hardCount] = await Promise.all([
+    redis.hGet(metaKey, 'hardAtPar'),
+    redis.hGet(metaKey, 'hardAtParCheckedCount'),
+    redis.get(keys.endlessHardAtPar(user)),
+    redis.hLen(hardLedgerKey),
   ]);
-  return getEndlessStats(user);
+  if (rawState === '1' || legacyFlag === '1') {
+    if (rawState !== '1') await redis.hSet(metaKey, { hardAtPar: '1' });
+    return true;
+  }
+
+  const checkedCount = rawCheckedCount ? Number.parseInt(rawCheckedCount, 10) : -1;
+  if (rawState === '0' && checkedCount === hardCount) return false;
+
+  const entries = await redis.hGetAll(hardLedgerKey);
+  const hardAtPar = Object.values(entries).some(ledgerEntryIsAtPar);
+  await redis.hSet(metaKey, {
+    hardAtPar: hardAtPar ? '1' : '0',
+    hardAtParCheckedCount: String(hardCount),
+  });
+  return hardAtPar;
 };
 
-/** Read a user's lifetime endless solve count (0 if they have none). */
-export const getEndlessSolved = async (user: string): Promise<number> =>
-  readCount(keys.endlessSolved(user));
+/**
+ * Atomically capture the old counter values once. All new completions live in
+ * append-only per-tier ledgers, so retries can derive and repair exact totals.
+ */
+const getEndlessBaseline = async (user: string): Promise<EndlessBaseline> => {
+  const metaKey = keys.endlessLedgerMeta(user);
+  const existing = parseEndlessBaseline(await redis.hGet(metaKey, 'baseline'));
+  if (existing) return existing;
 
-/** Read a user's endless stats: the lifetime total plus the per-tier split.
- *  (For pre-existing players the per-tier counts start at 0 and accrue from
- *  here, so they may not sum to the older total - the total stays the headline.) */
-export const getEndlessStats = async (
-  user: string
-): Promise<{ solved: number; byTier: EndlessTierCounts }> => {
   const [solved, easy, medium, hard] = await Promise.all([
     readCount(keys.endlessSolved(user)),
     readCount(keys.endlessSolvedTier(user, 'easy')),
     readCount(keys.endlessSolvedTier(user, 'medium')),
     readCount(keys.endlessSolvedTier(user, 'hard')),
   ]);
-  return { solved, byTier: { easy, medium, hard } };
+  const candidate: EndlessBaseline = { solved, byTier: { easy, medium, hard } };
+  const raw = JSON.stringify(candidate);
+  const added = Boolean(await redis.hSetNX(metaKey, 'baseline', raw));
+  if (added) return candidate;
+  const winner = parseEndlessBaseline(await redis.hGet(metaKey, 'baseline'));
+  if (!winner) throw new Error('Endless progression baseline is invalid.');
+  return winner;
+};
+
+/** Read a user's lifetime endless solve count (0 for guests or missing data). */
+export const getEndlessSolved = async (user: string): Promise<number> =>
+  (await getEndlessStats(user)).solved;
+
+/** Read baseline + authoritative ledgers without touching shared guest Redis keys. */
+export const getEndlessStats = async (
+  user: string
+): Promise<{ solved: number; byTier: EndlessTierCounts }> => {
+  if (user === 'anon') return { solved: 0, byTier: { easy: 0, medium: 0, hard: 0 } };
+
+  const [baseline, easyAdded, mediumAdded, hardAdded] = await Promise.all([
+    getEndlessBaseline(user),
+    redis.hLen(keys.endlessLedger(user, 'easy')),
+    redis.hLen(keys.endlessLedger(user, 'medium')),
+    redis.hLen(keys.endlessLedger(user, 'hard')),
+  ]);
+  const byTier = {
+    easy: baseline.byTier.easy + easyAdded,
+    medium: baseline.byTier.medium + mediumAdded,
+    hard: baseline.byTier.hard + hardAdded,
+  };
+  return {
+    solved: baseline.solved + easyAdded + mediumAdded + hardAdded,
+    byTier,
+  };
 };
 
 // --- Pre-generated pool ---

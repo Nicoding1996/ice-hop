@@ -33,20 +33,22 @@ players, and the solver counts moves the same way.
 - Leaderboard sort: primary = fewest moves, tiebreak = fastest time. This avoids
   a giant tie at optimal and rewards insight first, speed second.
 - Moves-based scoring also drives comment discussion ("how did you do it in 8?"),
-  which is our Reddity lever.
+  giving each puzzle thread a natural conversation prompt.
 
-## Retention loops (the hook)
+## Retention and progression loops
 
 1. Daily ritual: one shared puzzle/day via cron-posted feed item + streak. Each
    daily post auto-seeds a pinned how-to-play comment inviting score-sharing, so
-   the comment section is a built-in discussion home (Reddity lever).
-2. Competition: daily + all-time leaderboards; reset gives a fresh daily race.
+   the comment section is a built-in discussion home.
+2. Competition: each immutable daily puzzle has its own leaderboard; reset gives
+   a fresh daily race.
    The first solve each day also sets a streak-based subreddit flair (e.g.
    "🔥 7-day streak"), a public, recurring status that nudges return visits.
 3. Completion: hit par, get clean closure, anticipate tomorrow (healthier than
    time-grinding the same board).
-4. Difficulty ladder: the daily ramps across the week (Mon/Tue easy -> Wed-Fri
-   medium -> weekend hard) so regulars get a build-up, not a flat experience.
+4. Difficulty ladder: daily bands are non-overlapping and never below par 4:
+   Monday/Tuesday par 4, Wednesday-Friday par 5-7, weekend par 8-11. Each
+   generation pass and fallback remains inside that day's band.
 5. Build + community stream (the differentiator): users build puzzles in the
    in-app editor; the solver validates each is solvable (and computes its par)
    before it is accepted; accepted puzzles join a community stream others can
@@ -57,15 +59,15 @@ players, and the solver counts moves the same way.
 6. Endless mode (the "play more" loop): a tier picker (Easy / Medium / Hard)
    backed by the same solver-graded generator as the daily, serving an unlimited
    random shuffle of fresh puzzles from the chosen bucket. A lifetime "Solved: N"
-   count (Redis `endless:{user}`) is the progression payoff and ticks up on the
-   win screen; a per-tier split (`endless:{user}:{tier}`) labels the
-   Easy/Medium/Hard buttons on the tier picker. Endless is the cold-start answer:
-   it is always full even when a
-   subreddit has zero community puzzles, so it - not the (possibly empty)
-   community stream - is the CTA after a daily solve. Tiers are defined purely by
-   the generator levers (par range + piece counts): Easy is trap-free
-   (`requireAllPiecesUsed`, par ~2-4), Medium allows decoys (par ~5-8), Hard is
-   harder (more pieces, par ~5-10) but always solvable. Endless drops the daily's
+   count is derived from a migration baseline plus permanent per-tier completion
+   ledgers, and the same tier totals label the Easy/Medium/Hard buttons. Quantity
+   milestones and tier awards use those verified no-hint counts; each tier solve
+   adds exactly one, and Hard-at-par is tracked separately. Endless is the cold-start answer: it is always full even
+   when a subreddit has zero community puzzles, so it - not the (possibly empty)
+   community stream - is the CTA after a daily solve. Tiers use non-overlapping
+   par bands plus piece-count levers: Easy is trap-free
+   (`requireAllPiecesUsed`, par 2-4), Medium allows decoys (par 5-7), and Hard
+   uses heavier boards (par 8-11), while every served board remains solvable. Endless drops the daily's
    uniqueness gate (it's solo, so a single optimal line doesn't matter) and bounds
    the solver budget, so generation stays cheap. Puzzles are served from a small
    per-tier Redis pool (`endless:pool:1:{tier}`, quality generation) refilled off
@@ -78,9 +80,10 @@ players, and the solver counts moves the same way.
    kept in the registry so a prefetched board still shows the right banner. A
    progressive **Hint** (Endless only) reveals the solver's best next move - first
    tap glows the piece, second shows a translucent ghost of where it goes,
-   recomputed from the current board so it is always valid - but using it flags
-   the puzzle so that solve does NOT count toward the Solved total (Restart or a
-   new puzzle clears the flag). The daily has no hint, to protect its leaderboard
+   recomputed from the current board so it is always valid. For signed-in play,
+   the server atomically marks the issued puzzle ineligible before returning the
+   hint, so a modified client cannot claim it afterward; only a newly issued
+   puzzle clears that eligibility state. The daily has no hint, to protect its leaderboard
    and the "how'd you do it in N" comment culture; there, stuck players use
    Restart and the community shares approaches in the comments.
 
@@ -96,8 +99,11 @@ the Endless hint (the best next move recomputed from the current board state).
 ## Generated puzzle quality (not just "solvable")
 
 Daily boards are random placements filtered by the solver, but "solvable + par
-in range" alone does not feel designed. The generator applies extra gates (the
-`generate` options in `generator.ts`):
+in range" alone does not feel designed. The preferred daily pass applies the
+quality gates below. If its request-safe deadline expires, relaxed and fast
+passes progressively drop expensive gates while preserving the exact weekday par
+band; the final fallback is also solver-verified and in-band. Endless pool
+refills use similar quality gates off the player request path.
 
 - `requireUnique`: exactly one optimal solution (no mushy many-solution boards).
 - `rejectInert`: drop boards with an inert piece, one the player can never even
@@ -110,8 +116,9 @@ in range" alone does not feel designed. The generator applies extra gates (the
 touchable - clutter). Difficulty then has three independent levers: par length,
 solution uniqueness, and decoys. Easy tiers use `requireAllPiecesUsed` for clean,
 trap-free teaching boards; harder tiers keep uniqueness + no-clutter but allow
-decoys. UGC puzzles are deliberately NOT held to these gates (only solvable +
-sane size/par) so player creativity is not over-constrained.
+decoys. UGC puzzles are deliberately NOT held to these generation-quality gates
+so player creativity is not over-constrained; they still require sane structure,
+solvability/par policy, and a legal creator solve of the exact board.
 
 ## Community stream: fairness & anti-spam
 
@@ -121,9 +128,9 @@ The community stream is built per player (`listStreamForUser` + the pure
 - Excludes puzzles the player has already solved (tracked in `ugc:played:{user}`,
   recorded when a community puzzle is solved). Skips do NOT mark a puzzle played,
   so a skipped puzzle can resurface later.
-- Includes the player's own puzzles, so a creator (or a solo tester/judge) can
-  see their submission go live instead of an empty stream; solved ones still drop
-  out via the played set.
+- Includes the player's own puzzles, so a creator (including one in a small or
+  newly launched community) can see their submission go live instead of an empty
+  stream; solved ones still drop out via the played set.
 - Interleaves the top-voted pool with the newest pool, so favourites stay visible
   and new submissions still get seen (no pure vote-ranking that buries new work).
 
@@ -132,7 +139,9 @@ Anti-spam / integrity on submit + vote:
 - Rate limit: at most 5 accepted submissions per user per UTC day.
 - De-duplication: identical boards are rejected via a canonical `boardSignature`
   (a player cannot flood the queue with the same puzzle).
-- Must be signed in and pass solver validation to submit.
+- Must be signed in, pass structural/solver validation, and include a legal
+  creator transcript that solves the exact canonical board. Any editor mutation
+  invalidates the previous proof.
 - No self-upvotes: `votePuzzle` rejects a vote when the voter is the creator, and
   enforces one vote per user per puzzle via a voters hash.
 
@@ -168,8 +177,8 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 
 - Grid is 5x5 for the daily. Boards stay small so they read on mobile.
 - Penguins (hoppers): 1-3. Seals (sliders): 0-2. Ice rocks (blockers): 1-2.
-  Counts ramp with the weekly difficulty tier (see `daily.ts`), echoing the
-  variety of Jump In'-style boards. #penguins always == #water holes.
+  Counts ramp with the weekly difficulty tier while preserving mobile readability.
+  #penguins always == #water holes.
 
 ## Editor & controls
 
@@ -183,7 +192,9 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 - Undo: an in-editor history stack reverts the last placement.
 - Test: play your own board before submitting. It saves a draft, jumps into a
   GameScene "test" mode, and returns you to the editor with the board intact.
-- Submit turns active (coral) only once the board passes validation.
+- Submit turns active (coral) only after the board validates and the creator has
+  solved that exact board in Test mode. Placement, erase, undo, random, and clear
+  all invalidate the proof.
 - Play controls: tap a penguin to hop it; drag a seal along its axis to slide it.
 
 ## Navigation & flow
@@ -201,9 +212,9 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   overlap the header/footer; data from GET `/api/ugc/mine`. Empty and error
   states route to Build or a retry.
 - Endless tier select (`EndlessScene`): pick Easy / Medium / Hard; shows the
-  lifetime "Solved so far" banner plus a per-tier solved count on each button
-  (from GET `/api/endless/stats`: the total + a `byTier` split) and routes into
-  `GameScene` in endless mode.
+  lifetime "Solved so far" banner, per-tier counts, and a paginated Awards panel
+  (from GET `/api/endless/stats`: total, `byTier`, and the achievement snapshot),
+  then routes into `GameScene` in Endless mode.
 - In play, the HUD nav is a single "‹ Menu" button (top-left) back to the hub
   plus a "↺ Restart" button (bottom strip) that restores the current board to its
   start; Restart only appears once a move has been made (it swaps in for the

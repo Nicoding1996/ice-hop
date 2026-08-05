@@ -1,35 +1,103 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
-import type { InitResponse, InitUgcPuzzle, SplashPostData } from '../shared/api';
+import type {
+  DailyBoardTeaser,
+  PostPreviewResponse,
+  SplashPostData,
+} from '../shared/api';
 import { POST_DATA_SPLASH_KEY } from '../shared/api';
-import type { Board } from '../shared/game/types';
+import { todayUtc } from '../shared/date';
+import { isDailyDate } from '../shared/daily';
+import type { Board, Piece } from '../shared/game/types';
+import { validateBoardStructure } from '../shared/game/validation';
 import type { Difficulty } from '../shared/solver/difficulty';
 
 // --- Buttons -----------------------------------------------------------------
 
-const startButton = document.getElementById('start-button');
-startButton?.addEventListener('click', (e) => {
-  // Play the current post's puzzle. Clear any stale build intent so the expanded
-  // view opens straight onto the board.
-  try {
-    localStorage.removeItem('icehop.launch');
-  } catch {
-    /* ignore */
-  }
-  // Open the expanded Phaser view (the 'game' entrypoint in devvit.json).
-  requestExpandedMode(e, 'game');
-});
+const startElement = document.getElementById('start-button');
+const startButton = startElement instanceof HTMLButtonElement ? startElement : null;
+const buildElement = document.getElementById('build-button');
+const buildButton = buildElement instanceof HTMLButtonElement ? buildElement : null;
+const exploreElement = document.getElementById('explore-button');
+const exploreButton = exploreElement instanceof HTMLButtonElement ? exploreElement : null;
+type ExpandedModeEvent = Parameters<typeof requestExpandedMode>[0];
+type LaunchIntent = 'play' | 'build' | 'home';
 
-const buildButton = document.getElementById('build-button');
-buildButton?.addEventListener('click', (e) => {
-  // Stash an intent the expanded view's Boot scene reads to open the editor.
-  // (Build is also reachable from the in-game menu, so this is a shortcut.)
-  try {
-    localStorage.setItem('icehop.launch', 'build');
-  } catch {
-    /* ignore */
+let launchPending = false;
+let launchResetTimer: number | undefined;
+let idleStartLabel = startButton?.textContent ?? "Play today's puzzle";
+const idleBuildLabel = buildButton?.textContent ?? 'Build a puzzle';
+const idleExploreLabel = exploreButton?.textContent ?? 'Explore Ice Hop →';
+
+const setIdleStartLabel = (label: string): void => {
+  idleStartLabel = label;
+  if (!launchPending && startButton) startButton.textContent = label;
+};
+
+const resetLaunchState = (): void => {
+  if (launchResetTimer !== undefined) window.clearTimeout(launchResetTimer);
+  launchResetTimer = undefined;
+  launchPending = false;
+  document.body.classList.remove('opening');
+  startButton?.removeAttribute('aria-busy');
+  buildButton?.removeAttribute('aria-busy');
+  exploreButton?.removeAttribute('aria-busy');
+  if (startButton) {
+    startButton.disabled = false;
+    startButton.textContent = idleStartLabel;
   }
-  requestExpandedMode(e, 'game');
-});
+  if (buildButton) {
+    buildButton.disabled = false;
+    buildButton.textContent = idleBuildLabel;
+  }
+  if (exploreButton) {
+    exploreButton.disabled = false;
+    exploreButton.textContent = idleExploreLabel;
+  }
+};
+
+const openExpanded = (event: ExpandedModeEvent, intent: LaunchIntent): void => {
+  if (launchPending) return;
+  launchPending = true;
+  document.body.classList.add('opening');
+  if (startButton) startButton.disabled = true;
+  if (buildButton) buildButton.disabled = true;
+  if (exploreButton) exploreButton.disabled = true;
+
+  const activeButton =
+    intent === 'play' ? startButton : intent === 'build' ? buildButton : exploreButton;
+  activeButton?.setAttribute('aria-busy', 'true');
+  if (activeButton) {
+    activeButton.textContent =
+      intent === 'play'
+        ? 'Opening puzzle...'
+        : intent === 'build'
+          ? 'Opening editor...'
+          : 'Opening Ice Hop...';
+  }
+
+  try {
+    if (intent === 'play') localStorage.removeItem('icehop.launch');
+    else localStorage.setItem('icehop.launch', intent);
+  } catch {
+    /* localStorage is an optimization; default launch still opens the post */
+  }
+
+  try {
+    // Keep this synchronous inside the click handler so Reddit retains the user gesture.
+    requestExpandedMode(event, 'game');
+    // If expansion fails silently, or the inline iframe survives after closing,
+    // restore every control instead of leaving a permanently busy card.
+    launchResetTimer = window.setTimeout(resetLaunchState, 4000);
+  } catch (error) {
+    console.error(error);
+    resetLaunchState();
+  }
+};
+
+startButton?.addEventListener('click', (event) => openExpanded(event, 'play'));
+buildButton?.addEventListener('click', (event) => openExpanded(event, 'build'));
+exploreButton?.addEventListener('click', (event) => openExpanded(event, 'home'));
+window.addEventListener('pageshow', resetLaunchState);
 
 // --- Meta line (date / hello) ------------------------------------------------
 
@@ -77,6 +145,132 @@ const C = {
 
 const CELL = 44;
 const PAD = 12;
+
+// postData and fetch responses are trust boundaries even though their TypeScript
+// contracts are shared with the server. Parse them before drawing any board.
+const property = (value: object, key: string): unknown => Reflect.get(value, key);
+const isObject = (value: unknown): value is object =>
+  typeof value === 'object' && value !== null;
+const readDifficulty = (value: unknown): Difficulty | null =>
+  value === 'EASY' || value === 'MEDIUM' || value === 'HARD' || value === 'EXPERT'
+    ? value
+    : null;
+
+const parseDailyBoardTeaser = (value: unknown): DailyBoardTeaser | null => {
+  if (!isObject(value)) return null;
+  const width = property(value, 'width');
+  const height = property(value, 'height');
+  const hoppers = property(value, 'hoppers');
+  const sliders = property(value, 'sliders');
+  const blockers = property(value, 'blockers');
+  const holes = property(value, 'holes');
+  const values = [width, height, hoppers, sliders, blockers, holes];
+  if (
+    values.some(
+      (entry) =>
+        typeof entry !== 'number' || !Number.isSafeInteger(entry) || entry < 0
+    ) ||
+    typeof width !== 'number' ||
+    typeof height !== 'number' ||
+    typeof hoppers !== 'number' ||
+    typeof sliders !== 'number' ||
+    typeof blockers !== 'number' ||
+    typeof holes !== 'number' ||
+    width < 1 ||
+    height < 1 ||
+    width > 20 ||
+    height > 20
+  ) {
+    return null;
+  }
+  const cells = width * height;
+  if (
+    holes > cells ||
+    hoppers !== holes ||
+    hoppers + blockers + sliders * 2 > cells
+  ) {
+    return null;
+  }
+  return { width, height, hoppers, sliders, blockers, holes };
+};
+
+const parseSplashPostData = (value: unknown): SplashPostData | null => {
+  if (!isObject(value)) return null;
+  const kind = property(value, 'kind');
+  const difficulty = readDifficulty(property(value, 'difficulty'));
+  if (!difficulty) return null;
+
+  if (kind === 'daily') {
+    const dateValue = property(value, 'date');
+    if (dateValue !== undefined && !isDailyDate(dateValue)) return null;
+    const teaserValue = property(value, 'teaser');
+    if (teaserValue === undefined) {
+      return dateValue === undefined
+        ? { kind, difficulty }
+        : { kind, date: dateValue, difficulty };
+    }
+    const teaser = parseDailyBoardTeaser(teaserValue);
+    if (!teaser) return null;
+    return dateValue === undefined
+      ? { kind, difficulty, teaser }
+      : { kind, date: dateValue, difficulty, teaser };
+  }
+  if (kind !== 'ugc') return null;
+
+  const creator = property(value, 'creator');
+  const structure = validateBoardStructure(property(value, 'board'));
+  if (
+    typeof creator !== 'string' ||
+    creator.length < 1 ||
+    creator.length > 100 ||
+    !structure.ok
+  ) {
+    return null;
+  }
+  return { kind, board: structure.board, difficulty, creator };
+};
+
+const parsePostPreviewResponse = (value: unknown): PostPreviewResponse | null => {
+  if (!isObject(value) || property(value, 'type') !== 'post-preview') return null;
+  const kind = property(value, 'kind');
+  const difficulty = readDifficulty(property(value, 'difficulty'));
+  if (!difficulty) return null;
+
+  if (kind === 'daily') {
+    const date = property(value, 'date');
+    const teaser = parseDailyBoardTeaser(property(value, 'teaser'));
+    return isDailyDate(date) && teaser
+      ? { type: 'post-preview', kind, date, difficulty, teaser }
+      : null;
+  }
+  if (kind !== 'ugc') return null;
+
+  const creator = property(value, 'creator');
+  const solves = property(value, 'solves');
+  const solved = property(value, 'solved');
+  const structure = validateBoardStructure(property(value, 'board'));
+  if (
+    typeof creator !== 'string' ||
+    creator.length < 1 ||
+    creator.length > 100 ||
+    typeof solves !== 'number' ||
+    !Number.isSafeInteger(solves) ||
+    solves < 0 ||
+    typeof solved !== 'boolean' ||
+    !structure.ok
+  ) {
+    return null;
+  }
+  return {
+    type: 'post-preview',
+    kind,
+    board: structure.board,
+    difficulty,
+    creator,
+    solves,
+    solved,
+  };
+};
 
 // --- tiny SVG builders (mirror Phaser's ellipse/circle/rect/triangle) --------
 // Phaser ellipse/rect take full width/height; circle takes a radius; rotations
@@ -176,7 +370,7 @@ const sealArt = (x: number, y: number, s: number, vertical: boolean): string => 
   return vertical ? `<g transform="rotate(90 ${n(x)} ${n(y)})">${art}</g>` : art;
 };
 
-const renderBoardPreview = (board: Board): string => {
+const renderBoardPreview = (board: Board, label: string): string => {
   const colOf = (i: number): number => i % board.width;
   const rowOf = (i: number): number => Math.floor(i / board.width);
   const cx = (i: number): number => PAD + colOf(i) * CELL + CELL / 2;
@@ -233,7 +427,124 @@ const renderBoardPreview = (board: Board): string => {
     }
   }
 
-  return `<svg class="preview-art" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Community puzzle board preview">${parts.join('')}</svg>`;
+  return `<svg class="preview-art" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${label}">${parts.join('')}</svg>`;
+};
+
+// The Daily teaser mirrors the real board's dimensions and piece counts, but
+// places everything at synthetic anchors. It feels like the game while keeping
+// the actual layout unavailable until /api/init starts the play clock.
+type Anchor = readonly [number, number];
+type SliderCandidate = {
+  readonly cells: readonly [number, number];
+  readonly orient: 'H' | 'V';
+  readonly distance: number;
+};
+
+const HOLE_ANCHORS: readonly Anchor[] = [
+  [0.86, 0.14],
+  [0.14, 0.84],
+  [0.86, 0.84],
+];
+const SLIDER_ANCHORS: readonly Anchor[] = [
+  [0.42, 0.24],
+  [0.72, 0.54],
+];
+const BLOCKER_ANCHORS: readonly Anchor[] = [
+  [0.5, 0.52],
+  [0.22, 0.42],
+];
+const HOPPER_ANCHORS: readonly Anchor[] = [
+  [0.14, 0.14],
+  [0.5, 0.84],
+  [0.82, 0.66],
+];
+
+const buildDailyTeaserBoard = (teaser: DailyBoardTeaser): Board => {
+  const { width, height } = teaser;
+  const cellCount = width * height;
+  const occupied = new Set<number>();
+  const holes: number[] = [];
+  const pieces: Piece[] = [];
+  const allCells = Array.from({ length: cellCount }, (_, index) => index);
+  const distanceTo = (cell: number, anchor: Anchor): number => {
+    const col = cell % width;
+    const row = Math.floor(cell / width);
+    const targetCol = anchor[0] * Math.max(0, width - 1);
+    const targetRow = anchor[1] * Math.max(0, height - 1);
+    return (col - targetCol) ** 2 + (row - targetRow) ** 2;
+  };
+  const takeCell = (anchor: Anchor): number | null => {
+    const candidates = allCells
+      .filter((cell) => !occupied.has(cell))
+      .sort((a, b) => distanceTo(a, anchor) - distanceTo(b, anchor) || a - b);
+    const cell = candidates[0];
+    if (cell === undefined) return null;
+    occupied.add(cell);
+    return cell;
+  };
+
+  for (let index = 0; index < teaser.holes; index++) {
+    const anchor = HOLE_ANCHORS[index % HOLE_ANCHORS.length] ?? [0.5, 0.5];
+    const cell = takeCell(anchor);
+    if (cell !== null) holes.push(cell);
+  }
+
+  const placeSlider = (orient: 'H' | 'V', anchor: Anchor): boolean => {
+    const candidates: SliderCandidate[] = [];
+    for (let cell = 0; cell < cellCount; cell++) {
+      const col = cell % width;
+      const row = Math.floor(cell / width);
+      const second = orient === 'H' ? cell + 1 : cell + width;
+      if ((orient === 'H' && col + 1 >= width) || (orient === 'V' && row + 1 >= height)) {
+        continue;
+      }
+      const midCol = orient === 'H' ? col + 0.5 : col;
+      const midRow = orient === 'V' ? row + 0.5 : row;
+      const targetCol = anchor[0] * Math.max(0, width - 1);
+      const targetRow = anchor[1] * Math.max(0, height - 1);
+      candidates.push({
+        cells: [cell, second],
+        orient,
+        distance: (midCol - targetCol) ** 2 + (midRow - targetRow) ** 2,
+      });
+    }
+    const winner = candidates
+      .sort((a, b) => a.distance - b.distance || a.cells[0] - b.cells[0])
+      .find(({ cells }) => !occupied.has(cells[0]) && !occupied.has(cells[1]));
+    if (!winner) return false;
+    occupied.add(winner.cells[0]);
+    occupied.add(winner.cells[1]);
+    pieces.push({ kind: 'SLIDER', cells: winner.cells, orient: winner.orient });
+    return true;
+  };
+
+  for (let index = 0; index < teaser.sliders; index++) {
+    const anchor = SLIDER_ANCHORS[index % SLIDER_ANCHORS.length] ?? [0.5, 0.5];
+    const preferred: 'H' | 'V' = index % 2 === 0 ? 'H' : 'V';
+    if (!placeSlider(preferred, anchor)) {
+      void placeSlider(preferred === 'H' ? 'V' : 'H', anchor);
+    }
+  }
+
+  for (let index = 0; index < teaser.blockers; index++) {
+    const anchor = BLOCKER_ANCHORS[index % BLOCKER_ANCHORS.length] ?? [0.5, 0.5];
+    const cell = takeCell(anchor);
+    if (cell !== null) pieces.push({ kind: 'BLOCKER', cells: [cell] });
+  }
+  for (let index = 0; index < teaser.hoppers; index++) {
+    const anchor = HOPPER_ANCHORS[index % HOPPER_ANCHORS.length] ?? [0.5, 0.5];
+    const cell = takeCell(anchor);
+    if (cell !== null) pieces.push({ kind: 'HOPPER', cells: [cell] });
+  }
+
+  return { width, height, holes: holes.sort((a, b) => a - b), pieces };
+};
+
+const FALLBACK_DAILY_TEASER: Record<Difficulty, DailyBoardTeaser> = {
+  EASY: { width: 5, height: 5, hoppers: 1, sliders: 0, blockers: 1, holes: 1 },
+  MEDIUM: { width: 5, height: 5, hoppers: 2, sliders: 1, blockers: 1, holes: 2 },
+  HARD: { width: 5, height: 5, hoppers: 2, sliders: 2, blockers: 2, holes: 2 },
+  EXPERT: { width: 5, height: 5, hoppers: 3, sliders: 2, blockers: 2, holes: 3 },
 };
 
 // Difficulty-dot colours: a small colour-coded cue inside an otherwise cool
@@ -245,42 +556,43 @@ const DIFFICULTY_DOT: Record<Difficulty, string> = {
   EXPERT: '#b59bff',
 };
 
-// Whether the community board has been painted yet (from postData or /api/init),
-// so the two paths never double-render it.
-let boardRendered = false;
+let renderedKind: 'daily' | 'ugc' | null = null;
+let renderedDailyKey = '';
+let ugcBoardRendered = false;
 
-// The static half of a community card (board + difficulty badge + credit + how).
-// Drawn from postData on first paint when available, else from /api/init.
-const renderUgcStatic = (board: Board, difficulty: Difficulty, creator: string): void => {
-  if (boardRendered) return;
-  // Switch the splash into "community puzzle" layout: the board becomes the
-  // hero (bigger), the wordmark shrinks, and the tagline gives way to credit.
-  document.body.classList.add('ugc');
-
-  const hero = document.getElementById('hero');
-  if (hero) hero.innerHTML = renderBoardPreview(board);
-
-  // Difficulty badge + creator credit share one row, with a colour-coded dot.
+const paintBadge = (difficulty: Difficulty, prefix = ''): void => {
   const badge = document.getElementById('badge');
   if (badge) {
-    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[difficulty]}"></span>${difficulty}`;
+    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[difficulty]}"></span>${prefix}${difficulty}`;
   }
-  const byline = document.getElementById('byline');
-  if (byline) byline.textContent = `by u/${creator}`;
   document.getElementById('credit')?.removeAttribute('hidden');
-
-  const how = document.getElementById('how');
-  if (how) how.textContent = 'Tap a penguin to hop, drag a seal to slide.';
-
-  // Neutral meta until /api/init brings the live solve count.
-  if (meta) meta.textContent = 'Community puzzle';
-  boardRendered = true;
 };
 
-// The live half only /api/init knows: the solved-state button label and the
-// social-proof solve count (or an inviting empty state).
+// Community layouts are not timed, so their exact board is the strongest feed
+// thumbnail: players can understand the challenge before opening it.
+const renderUgcStatic = (board: Board, difficulty: Difficulty, creator: string): void => {
+  if (!ugcBoardRendered) {
+    document.body.classList.add('puzzle-preview', 'ugc');
+    document.body.classList.remove('daily-preview');
+    const hero = document.getElementById('hero');
+    if (hero) {
+      hero.innerHTML = renderBoardPreview(board, 'Community puzzle board preview');
+    }
+    ugcBoardRendered = true;
+  }
+
+  paintBadge(difficulty);
+  const byline = document.getElementById('byline');
+  if (byline) byline.textContent = `by u/${creator}`;
+  const how = document.getElementById('how');
+  if (how) how.textContent = 'Tap a penguin to hop, drag a seal to slide.';
+  setIdleStartLabel('Play this puzzle');
+  if (meta) meta.textContent = 'Community puzzle';
+  renderedKind = 'ugc';
+};
+
 const applyUgcStatus = (solved: boolean, solves: number): void => {
-  if (startButton) startButton.textContent = solved ? 'Play again' : 'Play this puzzle';
+  setIdleStartLabel(solved ? 'Play again' : 'Play this puzzle');
   if (meta) {
     meta.textContent =
       solves > 0
@@ -289,49 +601,94 @@ const applyUgcStatus = (solved: boolean, solves: number): void => {
   }
 };
 
-const showUgcPost = (puzzle: InitUgcPuzzle, solved: boolean): void => {
-  renderUgcStatic(puzzle.board, puzzle.difficulty, puzzle.creator);
-  applyUgcStatus(solved, puzzle.solves);
-};
+const formatDailyDate = (date: string): string =>
+  new Date(`${date}T00:00:00.000Z`).toLocaleDateString(undefined, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 
-// Ask the server what this post is. A community-puzzle post swaps the hero for a
-// preview of its board; a daily post is left as-is.
-const showDailyBadge = (difficulty: Difficulty): void => {
-  // Spoiler-free enticement on the daily card: show only the band (never the
-  // board or par), which ties into the weekly difficulty ramp ("today is Hard").
-  const badge = document.getElementById('badge');
-  if (badge) {
-    badge.innerHTML = `<span class="dot" style="background:${DIFFICULTY_DOT[difficulty]}"></span>Today: ${difficulty}`;
+const renderDailyStatic = (
+  difficulty: Difficulty,
+  teaser = FALLBACK_DAILY_TEASER[difficulty],
+  date?: string
+): void => {
+  if (renderedKind === 'ugc') return;
+  const key = `${date ?? 'legacy'}:${difficulty}:${teaser.width}:${teaser.height}:${teaser.hoppers}:${teaser.sliders}:${teaser.blockers}:${teaser.holes}`;
+  const isToday = date === todayUtc();
+  if (key !== renderedDailyKey) {
+    document.body.classList.add('puzzle-preview', 'daily-preview');
+    document.body.classList.remove('ugc');
+    const board = buildDailyTeaserBoard(teaser);
+    const hero = document.getElementById('hero');
+    if (hero) {
+      const boardLabel = isToday ? "today's puzzle" : 'this Daily puzzle';
+      hero.innerHTML = `<div class="daily-preview-shell">${renderBoardPreview(
+        board,
+        `Frosted illustration of ${boardLabel}; exact layout reveals on Play`
+      )}<div class="daily-frost" aria-hidden="true"></div><span class="daily-reveal">Layout reveals on Play</span></div>`;
+    }
+    renderedDailyKey = key;
   }
-  document.getElementById('credit')?.removeAttribute('hidden');
+
+  paintBadge(difficulty, isToday ? 'Today: ' : 'Daily: ');
+  const byline = document.getElementById('byline');
+  if (byline) byline.textContent = '';
+  const tag = document.querySelector('.tag');
+  if (tag) tag.textContent = 'Get every penguin into the water!';
+  const how = document.getElementById('how');
+  if (how) how.textContent = 'Tap Play to reveal the layout and start the clock.';
+  setIdleStartLabel(isToday ? "Play today's puzzle" : 'Play this puzzle');
+  if (meta) {
+    const label = date ? formatDailyDate(date) : 'Daily puzzle';
+    meta.textContent = context.username ? `${label} \u00B7 hi ${context.username}` : label;
+  }
+  renderedKind = 'daily';
 };
 
-const loadPostContext = async (): Promise<void> => {
+// Refine static postData with live Community status or a legacy Daily's actual
+// counts. This endpoint is read-only: it never issues a Daily play.
+const loadPostPreview = async (): Promise<void> => {
   try {
-    const response = await fetch('/api/init');
+    const response = await fetch('/api/post-preview', { cache: 'no-store' });
     if (!response.ok) return;
-    const data: InitResponse = await response.json();
-    if (data.kind === 'ugc') showUgcPost(data.puzzle, data.solved);
-    else if (data.kind === 'daily') showDailyBadge(data.difficulty);
+    const raw: unknown = await response.json();
+    const data = parsePostPreviewResponse(raw);
+    if (!data) return;
+    if (data.kind === 'ugc') {
+      renderUgcStatic(data.board, data.difficulty, data.creator);
+      applyUgcStatus(data.solved, data.solves);
+    } else {
+      renderDailyStatic(data.difficulty, data.teaser, data.date);
+    }
   } catch (error) {
     console.error(error);
   }
 };
 
-// Paint the card from postData first (instant, no network), then refine with
-// /api/init for the live bits (solve count + solved state). Posts created before
-// postData existed have no payload, so they fall back to the /api/init render.
-const renderFromPostData = (): void => {
+// Paint from postData first for an instant feed card. Runtime parsing keeps a
+// malformed post payload from reaching the SVG renderer. A complete Daily
+// teaser needs no follow-up request; Community still refreshes live solve state.
+const renderFromPostData = (): boolean => {
   try {
     const raw = context.postData?.[POST_DATA_SPLASH_KEY];
-    if (typeof raw !== 'string') return;
-    const data: SplashPostData = JSON.parse(raw);
-    if (data.kind === 'ugc') renderUgcStatic(data.board, data.difficulty, data.creator);
-    else if (data.kind === 'daily') showDailyBadge(data.difficulty);
+    if (typeof raw !== 'string') return false;
+    const value: unknown = JSON.parse(raw);
+    const data = parseSplashPostData(value);
+    if (!data) return false;
+    if (data.kind === 'ugc') {
+      renderUgcStatic(data.board, data.difficulty, data.creator);
+      return false;
+    }
+    renderDailyStatic(data.difficulty, data.teaser, data.date);
+    return data.teaser !== undefined && data.date !== undefined;
   } catch (error) {
     console.error(error);
+    return false;
   }
 };
 
-renderFromPostData();
-void loadPostContext();
+const hasCompleteDailyPostData = renderFromPostData();
+if (!hasCompleteDailyPostData) void loadPostPreview();

@@ -10,6 +10,113 @@ body,
   background: #0a2a43;
 }
 
+#app {
+  position: relative;
+}
+
 #game-container {
+  position: relative;
+  z-index: 2;
   touch-action: none; /* let Phaser handle taps/drags cleanly on mobile */
+}
+
+/* Immediate expanded-view cover: it echoes the feed's ice board while Phaser
+   and the web fonts initialize, avoiding a blank flash between preview and play. */
+#launch-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: #eaf6fb;
+  background: linear-gradient(180deg, #0b1f3a 0%, #14395a 58%, #1c4a6e 100%);
+  font-family: 'Nunito', 'Segoe UI', system-ui, sans-serif;
+  transition: opacity 120ms ease;
+}
+
+#launch-cover.launch-failed {
+  z-index: 4;
+}
+
+#launch-cover.launch-failed .launch-board {
+  animation: none;
+  opacity: 0.65;
+}
+
+#launch-cover.launch-failed p {
+  max-width: 280px;
+  padding: 0 16px;
+  text-align: center;
+  line-height: 1.45;
+}
+
+#launch-cover p {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  opacity: 0.84;
+}
+
+.launch-board {
+  position: relative;
+  width: min(46vw, 190px);
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 3px solid #7fb4d4;
+  border-radius: 18%;
+  background-color: #d4ecf7;
+  background-image:
+    linear-gradient(rgba(127, 180, 212, 0.42) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(127, 180, 212, 0.42) 1px, transparent 1px);
+  background-size: 20% 20%;
+  box-shadow: 0 14px 26px rgba(6, 18, 31, 0.36), inset 0 0 24px rgba(232, 247, 255, 0.36);
+  animation: launch-breathe 1.6s ease-in-out infinite;
+}
+
+.launch-hole,
+.launch-penguin {
+  position: absolute;
+  border-radius: 50%;
+}
+
+.launch-hole {
+  top: 10%;
+  right: 10%;
+  width: 15%;
+  aspect-ratio: 1;
+  border: 4px solid #1d6f9c;
+  background: #0e3a55;
+  box-shadow: inset 0 4px 0 rgba(8, 41, 60, 0.55);
+}
+
+.launch-penguin {
+  left: 10%;
+  bottom: 9%;
+  width: 16%;
+  aspect-ratio: 0.84;
+  border: 3px solid #141a22;
+  background: #2b3440;
+  box-shadow: inset 0 -9px 0 #f4f9fc;
+}
+
+@keyframes launch-breathe {
+  0%,
+  100% {
+    transform: scale(0.985);
+    opacity: 0.86;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .launch-board {
+    animation: none;
+  }
 }

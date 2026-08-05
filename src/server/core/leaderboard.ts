@@ -1,5 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { context, reddit, redis } from '@devvit/web/server';
 import type { LeaderboardEntry } from '../../shared/api';
+import {
+  CURRENT_DAILY_SCHEMA,
+  LEGACY_DAILY_SCHEMA,
+  dailyPuzzleId,
+  isDailyDate,
+  type DailyPuzzleRef,
+} from '../../shared/daily';
 import { computeStars, decodeScore, leaderboardScore } from '../../shared/scoring';
 import { previousDate, todayUtc } from '../../shared/date';
 import { keys } from './keys';
@@ -7,23 +15,271 @@ import { keys } from './keys';
 export type SolveOutcome = {
   readonly stars: number;
   readonly bestMoves: number;
-  readonly rank: number; // 1-based; 0 when unranked
+  readonly rank: number;
   readonly totalPlayers: number;
   readonly streak: number;
+  readonly firstSolve: boolean;
 };
 
-type SolveRecord = { moves: number; timeMs: number; stars: number };
-type StreakRecord = { count: number; lastDate: string };
+export type SolveRecord = {
+  readonly moves: number;
+  readonly timeMs: number;
+  readonly stars: number;
+};
+
+type CandidateProgress = 'claim' | 'baseline';
+type SolveCandidate = SolveRecord & {
+  readonly id: string;
+  readonly progress: CandidateProgress;
+};
+type StreakRecord = { readonly count: number; readonly lastDate: string };
+type DailyProgressBaseline = {
+  readonly allTime: number;
+  readonly streak: StreakRecord;
+};
+
+const property = (value: object, key: string): unknown => Reflect.get(value, key);
+const isObject = (value: unknown): value is object =>
+  typeof value === 'object' && value !== null;
+
+const parseSolveRecord = (raw: string | undefined): SolveRecord | null => {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isObject(value)) return null;
+    const moves = property(value, 'moves');
+    const timeMs = property(value, 'timeMs');
+    const stars = property(value, 'stars');
+    if (
+      typeof moves !== 'number' ||
+      !Number.isSafeInteger(moves) ||
+      moves < 1 ||
+      typeof timeMs !== 'number' ||
+      !Number.isFinite(timeMs) ||
+      timeMs < 0 ||
+      typeof stars !== 'number' ||
+      !Number.isSafeInteger(stars) ||
+      stars < 1 ||
+      stars > 3
+    ) {
+      return null;
+    }
+    return { moves, timeMs, stars };
+  } catch {
+    return null;
+  }
+};
+
+const parseSolveCandidate = (raw: string): SolveCandidate | null => {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isObject(value)) return null;
+    const id = property(value, 'id');
+    const progressValue = property(value, 'progress');
+    const progress: CandidateProgress =
+      progressValue === 'claim' || progressValue === 'baseline'
+        ? progressValue
+        : 'baseline';
+    const record = parseSolveRecord(raw);
+    return typeof id === 'string' && record ? { id, progress, ...record } : null;
+  } catch {
+    return null;
+  }
+};
+
+const parseStreak = (raw: string | undefined): StreakRecord => {
+  if (!raw) return { count: 0, lastDate: '' };
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isObject(value)) return { count: 0, lastDate: '' };
+    const count = property(value, 'count');
+    const lastDate = property(value, 'lastDate');
+    if (
+      typeof count !== 'number' ||
+      !Number.isSafeInteger(count) ||
+      count < 0 ||
+      (lastDate !== '' && !isDailyDate(lastDate))
+    ) {
+      return { count: 0, lastDate: '' };
+    }
+    return { count, lastDate };
+  } catch {
+    return { count: 0, lastDate: '' };
+  }
+};
+
+const parseProgressBaseline = (raw: string | undefined): DailyProgressBaseline | null => {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isObject(value)) return null;
+    const allTime = property(value, 'allTime');
+    const streakValue = property(value, 'streak');
+    if (
+      typeof allTime !== 'number' ||
+      !Number.isSafeInteger(allTime) ||
+      allTime < 0 ||
+      !isObject(streakValue)
+    ) {
+      return null;
+    }
+    const streak = parseStreak(JSON.stringify(streakValue));
+    return { allTime, streak };
+  } catch {
+    return null;
+  }
+};
+
+const toSolveRecord = (record: SolveRecord): SolveRecord => ({
+  moves: record.moves,
+  timeMs: record.timeMs,
+  stars: record.stars,
+});
+
+const betterSolve = (left: SolveRecord, right: SolveRecord): SolveRecord =>
+  toSolveRecord(
+    leaderboardScore(left.moves, left.timeMs) <= leaderboardScore(right.moves, right.timeMs)
+      ? left
+      : right
+  );
+
+const candidateJson = (
+  record: SolveRecord,
+  id: string,
+  progress: CandidateProgress
+): string => JSON.stringify({ id, progress, ...record });
+
+const TRANSACTION_ATTEMPTS = 8;
+const transactionCommitted = (result: unknown, expectedResults: number): boolean =>
+  Array.isArray(result) && result.length === expectedResults;
+
+/** Return the authoritative candidate minimum, falling back to a legacy record. */
+export const getBestDailySolve = async (
+  ref: DailyPuzzleRef,
+  username: string
+): Promise<SolveRecord | null> => {
+  const [rows, legacyRaw] = await Promise.all([
+    redis.zRange(keys.dailyBestCandidates(ref, username), 0, -1, { by: 'rank' }),
+    redis.get(keys.solve(ref, username)),
+  ]);
+  let best = parseSolveRecord(legacyRaw);
+  for (const row of rows) {
+    const candidate = parseSolveCandidate(row.member);
+    if (!candidate) continue;
+    best = best ? betterSolve(best, candidate) : toSolveRecord(candidate);
+  }
+  return best;
+};
+
+/** Atomically compact candidates and publish the same winner everywhere. */
+const compactDailyBest = async (
+  ref: DailyPuzzleRef,
+  username: string,
+  ranked: boolean
+): Promise<SolveRecord> => {
+  const candidateKey = keys.dailyBestCandidates(ref, username);
+  const solveKey = keys.solve(ref, username);
+  const leaderboardKey = keys.dailyLeaderboard(ref);
+
+  for (let attempt = 0; attempt < TRANSACTION_ATTEMPTS; attempt++) {
+    const transaction = await redis.watch(candidateKey);
+    const rows = await redis.zRange(candidateKey, 0, -1, { by: 'rank' });
+    let best: SolveRecord | null = null;
+    let bestMember = '';
+    const remove: string[] = [];
+    for (const row of rows) {
+      const candidate = parseSolveCandidate(row.member);
+      if (!candidate) {
+        remove.push(row.member);
+      } else if (!best) {
+        best = toSolveRecord(candidate);
+        bestMember = row.member;
+      } else {
+        remove.push(row.member);
+      }
+    }
+    if (!best) {
+      await transaction.unwatch();
+      throw new Error('Verified daily solve candidate is missing.');
+    }
+
+    await transaction.multi();
+    let expectedResults = 1;
+    if (remove.length > 0) {
+      await transaction.zRem(candidateKey, remove);
+      expectedResults += 1;
+    }
+    await transaction.set(solveKey, JSON.stringify(best));
+    if (ranked) {
+      await transaction.zAdd(leaderboardKey, {
+        member: username,
+        score: leaderboardScore(best.moves, best.timeMs),
+      });
+      expectedResults += 1;
+    }
+    const result: unknown = await transaction.exec();
+    if (transactionCommitted(result, expectedResults)) return best;
+
+    // A racing writer changed the candidate source. Retry from its new minimum.
+    if (bestMember) continue;
+  }
+  throw new Error('Daily best score was too busy to publish.');
+};
+
+const refsForDate = (date: string): readonly DailyPuzzleRef[] => [
+  { schema: LEGACY_DAILY_SCHEMA, date },
+  { schema: CURRENT_DAILY_SCHEMA, date },
+];
+
+const hasSolveOnDate = async (date: string, username: string): Promise<boolean> => {
+  const records = await Promise.all(
+    refsForDate(date).map((ref) => getBestDailySolve(ref, username))
+  );
+  return records.some((record) => record !== null);
+};
+
+/** Only explicitly fresh candidate evidence may repair the post-baseline date ledger. */
+const hasClaimCandidateOnDate = async (
+  date: string,
+  username: string
+): Promise<boolean> => {
+  const rowGroups = await Promise.all(
+    refsForDate(date).map((ref) =>
+      redis.zRange(keys.dailyBestCandidates(ref, username), 0, -1, { by: 'rank' })
+    )
+  );
+  return rowGroups.some((rows) =>
+    rows.some((row) => parseSolveCandidate(row.member)?.progress === 'claim')
+  );
+};
+
+const getDailyProgressBaseline = async (username: string): Promise<DailyProgressBaseline> => {
+  const metaKey = keys.dailyProgressMeta(username);
+  const existing = parseProgressBaseline(await redis.hGet(metaKey, 'baseline'));
+  if (existing) return existing;
+
+  const [allTimeScore, streakRaw] = await Promise.all([
+    redis.zScore(keys.allTimeLeaderboard(), username),
+    redis.get(keys.streak(username)),
+  ]);
+  const candidate: DailyProgressBaseline = {
+    allTime:
+      typeof allTimeScore === 'number' && Number.isSafeInteger(allTimeScore) && allTimeScore >= 0
+        ? allTimeScore
+        : 0,
+    streak: parseStreak(streakRaw),
+  };
+  const raw = JSON.stringify(candidate);
+  const added = Boolean(await redis.hSetNX(metaKey, 'baseline', raw));
+  if (added) return candidate;
+  const winner = parseProgressBaseline(await redis.hGet(metaKey, 'baseline'));
+  if (!winner) throw new Error('Daily progression baseline is invalid.');
+  return winner;
+};
 
 /**
  * Set the player's subreddit flair from their returning-player streak AND their
- * creator output (puzzles built), so a regular's flair shows both "I keep
- * coming back" and "I make puzzles" - the public, recurring status that nudges
- * return visits and gives makers a badge. Best-effort: needs flair perms + a
- * subreddit, and a failure must never block a solve or a submit (the whole body
- * is guarded). Pass `streak` when the caller just computed it (a daily solve);
- * omit it to read the stored streak (a puzzle submit only changes the creator
- * half).
+ * creator output. This is best-effort and never blocks a solve or submission.
  */
 export const setPlayerFlair = async (username: string, streak?: number): Promise<void> => {
   try {
@@ -32,20 +288,16 @@ export const setPlayerFlair = async (username: string, streak?: number): Promise
 
     let days = streak;
     if (days === undefined) {
-      // Submit path: read the stored streak, but only count it as live if the
-      // last solve was today or yesterday. The stored count isn't decremented
-      // when a streak lapses (it's recomputed on the next solve), so otherwise
-      // the badge would overstate it. It self-corrects on the next daily solve.
-      const raw = await redis.get(keys.streak(username));
-      const rec: StreakRecord = raw ? JSON.parse(raw) : { count: 0, lastDate: '' };
+      const rec = parseStreak(await redis.get(keys.streak(username)));
       const today = todayUtc();
       const alive = rec.lastDate === today || rec.lastDate === previousDate(today);
       days = alive ? rec.count : 0;
     }
     const built = await redis.zCard(keys.ugcByCreator(username));
-
     const base = days >= 2 ? `\uD83D\uDD25 ${days}-day streak` : '\uD83D\uDC27 Ice Hopper';
-    const maker = built > 0 ? ` \u00B7 \uD83E\uDDE9 ${built} ${built === 1 ? 'puzzle' : 'puzzles'}` : '';
+    const maker = built > 0
+      ? ` \u00B7 \uD83E\uDDE9 ${built} ${built === 1 ? 'puzzle' : 'puzzles'}`
+      : '';
 
     await reddit.setUserFlair({
       subredditName,
@@ -59,78 +311,129 @@ export const setPlayerFlair = async (username: string, streak?: number): Promise
   }
 };
 
+/** Rebuild derived progression atomically from one baseline plus date evidence. */
+const repairDailyProgress = async (username: string): Promise<StreakRecord> => {
+  const progressKey = keys.dailyProgress(username);
+  const streakKey = keys.streak(username);
+  const allTimeKey = keys.allTimeLeaderboard();
+
+  for (let attempt = 0; attempt < TRANSACTION_ATTEMPTS; attempt++) {
+    const transaction = await redis.watch(progressKey);
+    const [baseline, rawDates] = await Promise.all([
+      getDailyProgressBaseline(username),
+      redis.hKeys(progressKey),
+    ]);
+    const dates = rawDates.filter(isDailyDate).sort();
+    let streak = baseline.streak;
+    for (const date of dates) {
+      if (streak.lastDate && date <= streak.lastDate) continue;
+      streak = {
+        count: streak.lastDate === previousDate(date) ? streak.count + 1 : 1,
+        lastDate: date,
+      };
+    }
+
+    await transaction.multi();
+    await transaction.set(streakKey, JSON.stringify(streak));
+    await transaction.zAdd(allTimeKey, {
+      member: username,
+      score: baseline.allTime + dates.length,
+    });
+    const result: unknown = await transaction.exec();
+    if (!transactionCommitted(result, 2)) continue;
+
+    await setPlayerFlair(username, streak.count);
+    return streak;
+  }
+  throw new Error('Daily progression was too busy to publish.');
+};
+
 /**
- * Records a solve: keeps the user's best (fewest moves, then fastest time),
- * updates the daily leaderboard, maintains a consecutive-day streak, bumps an
- * all-time "dailies solved" count on first solve, and returns rank + streak.
+ * Record one verified solve. Durable score-candidate evidence is written before
+ * the date claim, so a partial failure can never create progression without a
+ * recoverable recap/comment score. A retry recognizes new-schema candidates and
+ * repairs a missing date claim without double-counting legacy baseline solves.
  */
 export const recordSolve = async (
-  date: string,
+  ref: DailyPuzzleRef,
   username: string,
   par: number,
   moves: number,
   timeMs: number
 ): Promise<SolveOutcome> => {
-  const stars = computeStars(moves, par);
   const ranked = username !== 'anon';
+  await getDailyProgressBaseline(username);
+  const candidateKey = keys.dailyBestCandidates(ref, username);
+  const [hadSolveOnDate, hadClaimCandidateOnDate, existing, candidateCount] =
+    await Promise.all([
+      hasSolveOnDate(ref.date, username),
+      hasClaimCandidateOnDate(ref.date, username),
+      getBestDailySolve(ref, username),
+      redis.zCard(candidateKey),
+    ]);
+  const progress: CandidateProgress =
+    !hadSolveOnDate || hadClaimCandidateOnDate ? 'claim' : 'baseline';
 
-  let best: SolveRecord = { moves, timeMs, stars };
-  const existingRaw = await redis.get(keys.solve(date, username));
-  const firstSolveToday = !existingRaw;
-  if (existingRaw) {
-    const prev: SolveRecord = JSON.parse(existingRaw);
-    if (leaderboardScore(prev.moves, prev.timeMs) <= leaderboardScore(moves, timeMs)) {
-      best = prev; // keep the better existing solve
-    }
+  const candidate: SolveRecord = { moves, timeMs, stars: computeStars(moves, par) };
+  // Only seed a carry row when the best score exists solely in the legacy
+  // materialized key. Candidate-backed bests already remain in the source set.
+  if (existing && candidateCount === 0) {
+    await redis.zAdd(candidateKey, {
+      member: candidateJson(existing, 'carry', 'baseline'),
+      score: leaderboardScore(existing.moves, existing.timeMs),
+    });
   }
-  await redis.set(keys.solve(date, username), JSON.stringify(best));
+  await redis.zAdd(candidateKey, {
+    member: candidateJson(candidate, randomUUID(), progress),
+    score: leaderboardScore(candidate.moves, candidate.timeMs),
+  });
+
+  const progressAdded =
+    progress === 'claim'
+      ? Boolean(
+          await redis.hSetNX(
+            keys.dailyProgress(username),
+            ref.date,
+            dailyPuzzleId(ref)
+          )
+        )
+      : false;
+  const best = await compactDailyBest(ref, username, ranked);
 
   if (!ranked) {
-    return { stars: best.stars, bestMoves: best.moves, rank: 0, totalPlayers: 0, streak: 0 };
+    return {
+      stars: best.stars,
+      bestMoves: best.moves,
+      rank: 0,
+      totalPlayers: 0,
+      streak: 0,
+      firstSolve: progressAdded,
+    };
   }
 
-  // Streak: consecutive days with a solve (the "don't break your streak" hook).
-  let streak = 1;
-  const streakRaw = await redis.get(keys.streak(username));
-  const prevStreak: StreakRecord = streakRaw ? JSON.parse(streakRaw) : { count: 0, lastDate: '' };
-  if (firstSolveToday) {
-    if (prevStreak.lastDate === previousDate(date)) streak = prevStreak.count + 1;
-    else if (prevStreak.lastDate === date) streak = prevStreak.count; // desync safety
-    else streak = 1;
-    await redis.set(keys.streak(username), JSON.stringify({ count: streak, lastDate: date }));
-    await setPlayerFlair(username, streak);
-  } else {
-    streak = prevStreak.count > 0 ? prevStreak.count : 1;
-  }
-
-  const key = keys.dailyLeaderboard(date);
-  const score = leaderboardScore(best.moves, best.timeMs);
-  const current = await redis.zScore(key, username);
-  if (typeof current !== 'number' || score < current) {
-    await redis.zAdd(key, { member: username, score });
-  }
-  if (firstSolveToday) {
-    await redis.zIncrBy(keys.allTimeLeaderboard(), username, 1);
-  }
-
-  const rankAsc = await redis.zRank(key, username); // 0-based, best (lowest score) first
-  const totalPlayers = await redis.zCard(key);
+  const leaderboardKey = keys.dailyLeaderboard(ref);
+  const streak = await repairDailyProgress(username);
+  const [rankAsc, totalPlayers] = await Promise.all([
+    redis.zRank(leaderboardKey, username),
+    redis.zCard(leaderboardKey),
+  ]);
   return {
     stars: best.stars,
     bestMoves: best.moves,
     rank: typeof rankAsc === 'number' ? rankAsc + 1 : 0,
     totalPlayers,
-    streak,
+    streak: streak.count,
+    firstSolve: progressAdded,
   };
 };
 
 export const getDailyLeaderboard = async (
-  date: string,
+  ref: DailyPuzzleRef,
   topN: number
 ): Promise<LeaderboardEntry[]> => {
-  const rows = await redis.zRange(keys.dailyLeaderboard(date), 0, topN - 1, { by: 'rank' });
+  const rows = await redis.zRange(keys.dailyLeaderboard(ref), 0, topN - 1, { by: 'rank' });
   return rows.map((row) => {
-    const { moves, timeMs } = decodeScore(row.score);
-    return { username: row.member, moves, timeMs };
+    const decoded = decodeScore(row.score);
+    return { username: row.member, moves: decoded.moves, timeMs: decoded.timeMs };
   });
 };

@@ -52,7 +52,8 @@ export class CommunityScene extends Scene {
       const response = await fetch('/api/ugc/list');
       if (!response.ok) throw new Error(`list failed: ${response.status}`);
       const data: UgcListResponse = await response.json();
-      const subs = data.submissions;
+      const locallyPlayed: string[] = this.registry.get('ugc.played.local') ?? [];
+      const subs = data.submissions.filter((submission) => !locallyPlayed.includes(submission.id));
       if (subs.length === 0) {
         status.setText('No community puzzles yet.\nBe the first to build one!');
         this.showEmptyState();

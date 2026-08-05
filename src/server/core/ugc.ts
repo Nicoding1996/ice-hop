@@ -1,5 +1,6 @@
 import { reddit, redis } from '@devvit/web/server';
-import type { Board } from '../../shared/game/types';
+import type { CreatorSolveProof } from '../../shared/game/proof';
+import { verifyCreatorSolveProof } from '../../shared/game/proof';
 import type { SubmitPuzzleResponse, UgcSubmission, VoteResponse } from '../../shared/api';
 import { boardSignature } from '../../shared/game/board';
 import { orderCommunityStream } from '../../shared/community';
@@ -8,6 +9,7 @@ import { todayUtc } from '../../shared/date';
 import { createUgcPost } from './post';
 import { setPlayerFlair } from './leaderboard';
 import { keys } from './keys';
+import { trackTelemetry } from './telemetry';
 
 /** Max puzzles one user may submit per UTC day (anti-spam). */
 const DAILY_SUBMISSION_CAP = 5;
@@ -32,11 +34,17 @@ const sampleIdRange = (maxId: number, k: number): string[] => {
   return [...picked].map(String);
 };
 
-/** Validate (via the solver), rate-limit, de-duplicate, then store a puzzle. */
-export const submitPuzzle = async (board: Board): Promise<SubmitPuzzleResponse> => {
+/** Require an exact-board solve proof, then rate-limit, de-duplicate, and store. */
+export const submitPuzzle = async (
+  boardValue: unknown,
+  proof: CreatorSolveProof
+): Promise<SubmitPuzzleResponse> => {
   const username = (await reddit.getCurrentUsername()) ?? 'anon';
   if (username === 'anon') return { ok: false, reason: 'Sign in to submit a puzzle.' };
 
+  const solvedProof = verifyCreatorSolveProof(boardValue, proof);
+  if (!solvedProof.ok) return { ok: false, reason: solvedProof.reason };
+  const board = solvedProof.board;
   const validation = validateSubmission(board);
   if (!validation.ok) return { ok: false, reason: validation.reason };
 
@@ -87,6 +95,7 @@ export const submitPuzzle = async (board: Board): Promise<SubmitPuzzleResponse> 
   // Refresh the creator's flair so their "puzzles built" badge ticks up the
   // moment they publish (best-effort; setPlayerFlair swallows its own errors).
   await setPlayerFlair(username);
+  await trackTelemetry('creator:submitted');
 
   return { ok: true, id, par: validation.par };
 };
@@ -98,21 +107,6 @@ const getPlayedIds = async (username: string): Promise<Set<string>> => {
   if (count === 0) return new Set<string>();
   const rows = await redis.zRange(keys.ugcPlayed(username), 0, count - 1, { by: 'rank' });
   return new Set(rows.map((r) => r.member));
-};
-
-/** Record that a user solved a community puzzle, so it leaves their stream. The
- *  per-puzzle solve count ticks up only on a user's first solve (zAdd reports
- *  whether the member was new, so concurrent solves can't double-count) and
- *  never for a creator solving their own puzzle (mirrors the no-self-vote rule). */
-export const recordPlayed = async (username: string, id: string): Promise<void> => {
-  if (username === 'anon') return;
-  const raw = await redis.get(keys.ugcSubmission(id));
-  if (!raw) return;
-  const sub: UgcSubmission = JSON.parse(raw);
-  const added = await redis.zAdd(keys.ugcPlayed(username), { member: id, score: Date.now() });
-  if (added > 0 && sub.creator !== username) {
-    await redis.hIncrBy(keys.ugcSolves(), id, 1);
-  }
 };
 
 /** Live solve counts for a set of ids (hash id -> count); missing -> 0. */
@@ -212,8 +206,8 @@ export const listStreamForUser = async (
 
   const playedIds = await getPlayedIds(username);
   // Note: we intentionally do NOT exclude the player's own puzzles, so creators
-  // can see their submission go live (and a solo tester/judge isn't shown an
-  // empty stream). Solved puzzles are still filtered out via playedIds.
+  // in a small or newly launched community can see a submission go live instead
+  // of an empty stream. Solved puzzles are still filtered out via playedIds.
   return orderCommunityStream(subs, { playedIds, limit, discovery });
 };
 

@@ -1,113 +1,253 @@
 import { Hono } from 'hono';
 import { context, reddit, redis } from '@devvit/web/server';
+import { buildDailyBoardTeaser } from '../../shared/api';
 import type {
+  CommentScoreResponse,
+  EndlessHintRequest,
+  EndlessHintResponse,
   EndlessResponse,
+  EndlessReleaseRequest,
   EndlessSolvedResponse,
+  EndlessSolveRequest,
+  EndlessSolveResponse,
   EndlessTier,
   InitResponse,
   LeaderboardResponse,
+  PostPreviewResponse,
   SolveResultDTO,
   SolveSubmission,
   UgcSubmission,
-  CommentScoreRequest,
-  CommentScoreResponse,
 } from '../../shared/api';
-import { getOrCreateDailyPuzzle } from '../core/daily';
-import { generateEndlessFallback, getEndlessSolved, getEndlessStats, popPooledPuzzle, recordEndlessSolve } from '../core/endless';
-import { getDailyLeaderboard, recordSolve } from '../core/leaderboard';
-import { keys } from '../core/keys';
+import { buildAchievementSnapshot } from '../../shared/achievements';
+import {
+  dailyPuzzleId,
+  parseDailyPuzzleId,
+  parsePostDailyMapping,
+  sameDailyPuzzle,
+  type DailyPuzzleRef,
+} from '../../shared/daily';
+import { verifySolvedTranscript } from '../../shared/game/replay';
+import { validateBoardStructure } from '../../shared/game/validation';
 import { todayUtc } from '../../shared/date';
 import { buildScoreComment } from '../../shared/share';
 import { computeStars } from '../../shared/scoring';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
+import type { TelemetryEventRequest } from '../../shared/telemetry';
+import { isClientTelemetryEvent } from '../../shared/telemetry';
+import { syncAchievements } from '../core/achievements';
+import {
+  completeEndlessPuzzle,
+  finalizeEndlessIssue,
+  getBestCommunityCompletion,
+  getDailyElapsed,
+  getEndlessHint,
+  issueDailyPlay,
+  releaseEndlessIssue,
+  reserveEndlessIssue,
+} from '../core/completion';
+import { getCanonicalDailyRef, getDailyPuzzle } from '../core/daily';
+import {
+  generateEndlessFallback,
+  getEndlessSolved,
+  getEndlessStats,
+  popPooledPuzzle,
+} from '../core/endless';
+import { keys } from '../core/keys';
+import {
+  getBestDailySolve,
+  getDailyLeaderboard,
+  recordSolve,
+} from '../core/leaderboard';
+import {
+  trackClientTelemetry,
+  trackDailyActive,
+  trackEndlessIssued,
+  trackTelemetry,
+} from '../core/telemetry';
 import { ugc } from './ugc';
 
 type ErrorResponse = { status: 'error'; message: string };
 
 const ENDLESS_TIERS: ReadonlyArray<EndlessTier> = ['easy', 'medium', 'hard'];
 const asTier = (value: string | undefined): EndlessTier =>
-  ENDLESS_TIERS.find((t) => t === value) ?? 'easy';
+  ENDLESS_TIERS.find((tier) => tier === value) ?? 'easy';
 
-/** Narrow a stored id string to a Reddit comment id (`t1_`) without casting, so
- *  a score can reply to the pinned comment; anything else falls back to the
- *  post id (a top-level comment). */
 const isCommentId = (id: string): id is `t1_${string}` => id.startsWith('t1_');
 
-export const api = new Hono();
+const getPostDailyRef = async (postId: string): Promise<DailyPuzzleRef | null> => {
+  const raw = await redis.get(keys.postDate(postId));
+  if (!raw) return null;
+  const ref = parsePostDailyMapping(raw);
+  if (!ref) throw new Error('Post has an invalid daily puzzle mapping.');
+  return ref;
+};
 
-// User-generated puzzle routes: /api/ugc/{submit,list,vote}
+const isTrustedDailyRef = async (requestedRef: DailyPuzzleRef): Promise<boolean> => {
+  if (sameDailyPuzzle(requestedRef, await getCanonicalDailyRef(todayUtc()))) return true;
+  if (!context.postId) return false;
+  const hostRef = await getPostDailyRef(context.postId);
+  return hostRef !== null && sameDailyPuzzle(requestedRef, hostRef);
+};
+
+export const api = new Hono();
 api.route('/ugc', ugc);
 
-// Returns the puzzle for the current post plus the viewer's username and solve
-// state. A community-puzzle feed post resolves to its UGC puzzle; a daily post
-// (or `?daily=1`, which forces today's daily regardless of the current post)
-// resolves to the daily. `?daily=1` lets the hub reach the daily even from
-// inside a community post.
+/**
+ * Feed-safe post metadata. This route deliberately never calls issueDailyPlay,
+ * so scrolling past a Daily neither exposes its cells nor starts its timer.
+ */
+api.get('/post-preview', async (c) => {
+  try {
+    const { postId } = context;
+    let dailyRef: DailyPuzzleRef;
+
+    if (postId) {
+      const ugcId = await redis.get(keys.ugcPost(postId));
+      if (ugcId) {
+        const raw = await redis.get(keys.ugcSubmission(ugcId));
+        if (!raw) {
+          return c.json<ErrorResponse>(
+            { status: 'error', message: 'community puzzle is unavailable' },
+            404
+          );
+        }
+
+        const sub: UgcSubmission = JSON.parse(raw);
+        const structure = validateBoardStructure(sub.board);
+        if (!structure.ok) throw new Error('Community puzzle board is invalid.');
+
+        const username = await reddit.getCurrentUsername();
+        const [solvesRaw, playedScore] = await Promise.all([
+          redis.hGet(keys.ugcSolves(), ugcId),
+          username
+            ? redis.zScore(keys.ugcPlayed(username), ugcId)
+            : Promise.resolve(undefined),
+        ]);
+        const parsedSolves = solvesRaw ? Number.parseInt(solvesRaw, 10) : 0;
+        const solves =
+          Number.isSafeInteger(parsedSolves) && parsedSolves >= 0 ? parsedSolves : 0;
+
+        return c.json<PostPreviewResponse>({
+          type: 'post-preview',
+          kind: 'ugc',
+          board: structure.board,
+          difficulty: difficultyFromPar(sub.par),
+          creator: sub.creator,
+          solves,
+          solved: typeof playedScore === 'number',
+        });
+      }
+
+      const hostRef = await getPostDailyRef(postId);
+      if (!hostRef) {
+        return c.json<ErrorResponse>(
+          { status: 'error', message: 'post is not linked to a puzzle' },
+          404
+        );
+      }
+      dailyRef = hostRef;
+    } else {
+      dailyRef = await getCanonicalDailyRef(todayUtc());
+    }
+
+    const puzzle = await getDailyPuzzle(dailyRef);
+    return c.json<PostPreviewResponse>({
+      type: 'post-preview',
+      kind: 'daily',
+      date: puzzle.date,
+      difficulty: difficultyFromPar(puzzle.par),
+      teaser: buildDailyBoardTeaser(puzzle.board),
+    });
+  } catch (error) {
+    console.error(`/api/post-preview failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'post preview failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
 api.get('/init', async (c) => {
   try {
     const { postId } = context;
     const forceDaily = c.req.query('daily') === '1';
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
+    const signedIn = username !== 'anon';
+    await trackDailyActive(username);
 
-    // A community-puzzle feed post: hand back that puzzle (with live vote/solve
-    // counts) so the splash can preview it and the game can play it.
+    let dailyRef: DailyPuzzleRef;
     if (!forceDaily && postId) {
       const ugcId = await redis.get(keys.ugcPost(postId));
       if (ugcId) {
         const raw = await redis.get(keys.ugcSubmission(ugcId));
-        if (raw) {
-          const sub: UgcSubmission = JSON.parse(raw);
-          const [votesRaw, solvesRaw, playedScore] = await Promise.all([
-            redis.zScore(keys.ugcIndex(), ugcId),
-            redis.hGet(keys.ugcSolves(), ugcId),
-            username !== 'anon' ? redis.zScore(keys.ugcPlayed(username), ugcId) : Promise.resolve(undefined),
-          ]);
-          return c.json<InitResponse>({
-            type: 'init',
-            kind: 'ugc',
-            puzzle: {
-              id: sub.id,
-              board: sub.board,
-              par: sub.par,
-              difficulty: difficultyFromPar(sub.par),
-              creator: sub.creator,
-              votes: typeof votesRaw === 'number' ? votesRaw : 0,
-              solves: solvesRaw ? parseInt(solvesRaw, 10) : 0,
-            },
-            username,
-            solved: typeof playedScore === 'number',
-            subredditName: context.subredditName,
-          });
+        if (!raw) {
+          return c.json<ErrorResponse>(
+            { status: 'error', message: 'community puzzle is unavailable' },
+            404
+          );
         }
+
+        const sub: UgcSubmission = JSON.parse(raw);
+        const structure = validateBoardStructure(sub.board);
+        if (!structure.ok) throw new Error('Community puzzle board is invalid.');
+        const [votesRaw, solvesRaw, playedScore] = await Promise.all([
+          redis.zScore(keys.ugcIndex(), ugcId),
+          redis.hGet(keys.ugcSolves(), ugcId),
+          signedIn
+            ? redis.zScore(keys.ugcPlayed(username), ugcId)
+            : Promise.resolve(undefined),
+        ]);
+        return c.json<InitResponse>({
+          type: 'init',
+          kind: 'ugc',
+          puzzle: {
+            id: sub.id,
+            board: structure.board,
+            par: sub.par,
+            difficulty: difficultyFromPar(sub.par),
+            creator: sub.creator,
+            votes: typeof votesRaw === 'number' ? votesRaw : 0,
+            solves: solvesRaw ? Number.parseInt(solvesRaw, 10) : 0,
+          },
+          username,
+          solved: typeof playedScore === 'number',
+          subredditName: context.subredditName,
+        });
       }
+
+      const hostRef = await getPostDailyRef(postId);
+      if (!hostRef) {
+        return c.json<ErrorResponse>(
+          { status: 'error', message: 'post is not linked to a puzzle' },
+          404
+        );
+      }
+      dailyRef = hostRef;
+    } else {
+      dailyRef = await getCanonicalDailyRef(todayUtc());
     }
 
-    // Daily puzzle: the post's mapped date, or today when forced/unmapped.
-    let date = todayUtc();
-    if (!forceDaily && postId) {
-      const mapped = await redis.get(keys.postDate(postId));
-      if (mapped) date = mapped;
-    }
-
-    const puzzle = await getOrCreateDailyPuzzle(date);
-    const solveRecord = await redis.get(keys.solve(date, username));
-    let solvedResult: { moves: number; stars: number } | undefined;
-    if (solveRecord) {
-      const rec: { moves: number; timeMs: number; stars: number } = JSON.parse(solveRecord);
-      solvedResult = { moves: rec.moves, stars: rec.stars };
-    }
-    const subscribed = username !== 'anon' && Boolean(await redis.get(keys.subscribed(username)));
+    const puzzle = await getDailyPuzzle(dailyRef);
+    const [solveRecord, subscribed, playId] = await Promise.all([
+      signedIn ? getBestDailySolve(dailyRef, username) : Promise.resolve(null),
+      signedIn
+        ? redis.get(keys.subscribed(username)).then((value) => Boolean(value))
+        : Promise.resolve(false),
+      issueDailyPlay(username, dailyRef),
+    ]);
 
     return c.json<InitResponse>({
       type: 'init',
       kind: 'daily',
-      date,
+      puzzleId: puzzle.id,
+      date: puzzle.date,
+      playId,
       board: puzzle.board,
       par: puzzle.par,
       difficulty: difficultyFromPar(puzzle.par),
       username,
-      solved: Boolean(solveRecord),
-      solvedResult,
+      solved: solveRecord !== null,
+      ...(solveRecord
+        ? { solvedResult: { moves: solveRecord.moves, stars: solveRecord.stars } }
+        : {}),
       subscribed,
       subredditName: context.subredditName,
     });
@@ -118,31 +258,57 @@ api.get('/init', async (c) => {
   }
 });
 
-// Records a completed solve and returns stars + leaderboard rank + streak.
 api.post('/solve', async (c) => {
   try {
     const body = await c.req.json<SolveSubmission>();
     if (
-      typeof body.moves !== 'number' ||
-      !Number.isFinite(body.moves) ||
-      typeof body.timeMs !== 'number' ||
-      !Number.isFinite(body.timeMs) ||
-      !body.date
+      !body ||
+      typeof body.puzzleId !== 'string' ||
+      typeof body.playId !== 'string'
     ) {
       return c.json<ErrorResponse>({ status: 'error', message: 'invalid submission' }, 400);
     }
-    const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    const puzzle = await getOrCreateDailyPuzzle(body.date);
-    // A real solve can never use fewer moves than par (par is the solver's
-    // proven optimum), so reject impossible counts before they reach the
-    // leaderboard. Floor/clamp the rest so a garbled payload can't poison it.
-    const moves = Math.floor(body.moves);
-    const timeMs = Math.max(0, Math.floor(body.timeMs));
-    if (moves < puzzle.par) {
-      return c.json<ErrorResponse>({ status: 'error', message: 'invalid move count' }, 400);
-    }
-    const outcome = await recordSolve(body.date, username, puzzle.par, moves, timeMs);
 
+    const requestedRef = parseDailyPuzzleId(body.puzzleId);
+    if (!requestedRef) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
+    }
+
+    const username = await reddit.getCurrentUsername();
+    const timeMs = await getDailyElapsed(username ?? 'anon', body.playId, requestedRef);
+    if (timeMs === null && !(await isTrustedDailyRef(requestedRef))) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
+    }
+
+    const puzzle = await getDailyPuzzle(requestedRef);
+    const replay = verifySolvedTranscript(puzzle.board, body.moves);
+    if (!replay.ok || replay.moveCount < puzzle.par) {
+      return c.json<ErrorResponse>(
+        { status: 'error', message: replay.ok ? 'invalid move history' : replay.reason },
+        400
+      );
+    }
+
+    const moves = replay.moveCount;
+    if (!username) {
+      await trackTelemetry('daily:completed:guest');
+      return c.json<SolveResultDTO>({
+        accepted: true,
+        stars: computeStars(moves, puzzle.par),
+        par: puzzle.par,
+        moves,
+        bestMoves: moves,
+        rank: 0,
+        totalPlayers: 0,
+        streak: 0,
+      });
+    }
+
+    if (timeMs === null) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'daily play has expired' }, 400);
+    }
+    const outcome = await recordSolve(requestedRef, username, puzzle.par, moves, timeMs);
+    if (outcome.firstSolve) await trackTelemetry('daily:completed:signed');
     return c.json<SolveResultDTO>({
       accepted: true,
       stars: outcome.stars,
@@ -160,22 +326,12 @@ api.post('/solve', async (c) => {
   }
 });
 
-// Subscribe the viewer to the community on their behalf. Triggered only by an
-// explicit "Join" tap on the win screen (Reddit's user-actions policy: a
-// distinct, opt-in action that never gates play). There's no API to read live
-// subscription state, so we also record an app-side flag to stop re-prompting.
 api.post('/subscribe', async (c) => {
   try {
-    const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    if (username === 'anon') {
+    const username = await reddit.getCurrentUsername();
+    if (!username) {
       return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
     }
-    // The subscribe call rejects when the viewer is already a member, and we
-    // can't reliably tell that apart from a transient failure. Since this is a
-    // low-stakes, opt-in nudge (the flag only stops re-prompting; it never
-    // force-subscribes anyone), swallow that error and still record the flag.
-    // Otherwise an existing member is stuck re-tapping a "Join" button that can
-    // never succeed - the bug where it kept showing "Tap to try again".
     try {
       await reddit.subscribeToCurrentSubreddit();
     } catch (subscribeError) {
@@ -190,11 +346,6 @@ api.post('/subscribe', async (c) => {
   }
 });
 
-// Posts the player's score into the CURRENT post's comment thread, authored by
-// the player (runAs: 'USER', gated by the SUBMIT_COMMENT asUser scope). Only
-// fires on an explicit "Comment my score" tap. The text is composed server-side
-// from the player's move count + the puzzle's par, so it stays spoiler-free and
-// consistent; a community puzzle credits its maker.
 api.post('/comment-score', async (c) => {
   try {
     const { postId } = context;
@@ -206,14 +357,7 @@ api.post('/comment-score', async (c) => {
       return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
     }
 
-    const body = await c.req.json<CommentScoreRequest>();
-    const moves = Math.floor(Number(body.moves));
-    if (!Number.isFinite(moves) || moves <= 0) {
-      return c.json<ErrorResponse>({ status: 'error', message: 'invalid moves' }, 400);
-    }
-
-    // Resolve what this post shows -> par (+ creator for a community puzzle),
-    // mirroring /api/init so the comment matches the puzzle being played.
+    let moves: number;
     let par: number;
     let creator: string | undefined;
     const ugcId = await redis.get(keys.ugcPost(postId));
@@ -223,23 +367,61 @@ api.post('/comment-score', async (c) => {
         return c.json<ErrorResponse>({ status: 'error', message: 'puzzle not found' }, 404);
       }
       const sub: UgcSubmission = JSON.parse(raw);
+      const completion = await getBestCommunityCompletion(username, ugcId);
+      if (!completion || completion.par !== sub.par) {
+        return c.json<ErrorResponse>({ status: 'error', message: 'solve not verified' }, 403);
+      }
+      moves = completion.moves;
       par = sub.par;
       creator = sub.creator;
     } else {
-      const mapped = await redis.get(keys.postDate(postId));
-      const puzzle = await getOrCreateDailyPuzzle(mapped ?? todayUtc());
+      const ref = await getPostDailyRef(postId);
+      if (!ref) {
+        return c.json<ErrorResponse>({ status: 'error', message: 'post has no puzzle' }, 404);
+      }
+      const [puzzle, completion] = await Promise.all([
+        getDailyPuzzle(ref),
+        getBestDailySolve(ref, username),
+      ]);
+      if (!completion) {
+        return c.json<ErrorResponse>({ status: 'error', message: 'solve not verified' }, 403);
+      }
+      moves = completion.moves;
       par = puzzle.par;
     }
 
-    const text = buildScoreComment({ moves, par, stars: computeStars(moves, par), creator });
-    // Post the score as a reply under the post's pinned comment (Reddit's
-    // required pattern for score-only user comments); fall back to a top-level
-    // comment for older posts that predate the stored pinned-comment id.
+    // Prepare everything that cannot create a Reddit side effect before taking
+    // the at-most-once claim. Once submission begins, fail closed: deleting an
+    // ambiguous claim could duplicate a comment that Reddit accepted just before
+    // the request failed or the process stopped.
+    const text = buildScoreComment({
+      moves,
+      par,
+      stars: computeStars(moves, par),
+      creator,
+    });
     const pinnedCommentId = await redis.get(keys.pinnedComment(postId));
     const commentTarget =
       pinnedCommentId && isCommentId(pinnedCommentId) ? pinnedCommentId : postId;
+    const commentKey = keys.scoreComments(postId);
+    const claimed = await redis.hSetNX(commentKey, username, `claimed:${Date.now()}`);
+    if (!claimed) {
+      return c.json<CommentScoreResponse>({
+        type: 'commentScore',
+        ok: true,
+        alreadyPosted: true,
+      });
+    }
+
     await reddit.submitComment({ id: commentTarget, text, runAs: 'USER' });
-    return c.json<CommentScoreResponse>({ type: 'commentScore', ok: true });
+    await redis.hSet(commentKey, { [username]: 'posted' });
+    await trackTelemetry('comment:score_posted');
+
+    return c.json<CommentScoreResponse>({
+      type: 'commentScore',
+      ok: true,
+      alreadyPosted: false,
+    });
   } catch (error) {
     console.error(`/api/comment-score failed: ${error}`);
     const message = error instanceof Error ? error.message : 'comment failed';
@@ -247,12 +429,19 @@ api.post('/comment-score', async (c) => {
   }
 });
 
-// Top solvers for a given day (best first).
 api.get('/leaderboard', async (c) => {
   try {
-    const date = c.req.query('date') ?? todayUtc();
-    const entries = await getDailyLeaderboard(date, 10);
-    return c.json<LeaderboardResponse>({ date, entries });
+    const requestedId =
+      c.req.query('puzzleId') ?? dailyPuzzleId(await getCanonicalDailyRef(todayUtc()));
+    const ref = parseDailyPuzzleId(requestedId);
+    if (!ref) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
+    }
+    return c.json<LeaderboardResponse>({
+      puzzleId: dailyPuzzleId(ref),
+      date: ref.date,
+      entries: await getDailyLeaderboard(ref, 10),
+    });
   } catch (error) {
     console.error(`/api/leaderboard failed: ${error}`);
     const message = error instanceof Error ? error.message : 'leaderboard failed';
@@ -260,33 +449,47 @@ api.get('/leaderboard', async (c) => {
   }
 });
 
-// Endless mode: hand back a fresh, solver-verified puzzle for the requested
-// tier plus the viewer's lifetime solved count (the progression banner).
 api.get('/endless', async (c) => {
+  let username = 'anon';
+  let issueId = '';
   try {
     const tier = asTier(c.req.query('tier'));
-    const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    // Fast path: take a pre-generated puzzle from the pool. Only generate on the
-    // fly when the pool is momentarily empty - and then use the FAST, bounded
-    // generator so the request can never hang (the pool supplies nicer puzzles).
+    username = (await reddit.getCurrentUsername()) ?? 'anon';
+    // Reserve one bounded user slot before consuming a shared pool entry or
+    // spending fallback-generation work. Concurrent losers fail at this point.
+    issueId = await reserveEndlessIssue(username);
     const pooled = await popPooledPuzzle(tier);
     const { board, par } = pooled ?? generateEndlessFallback(tier);
+    await finalizeEndlessIssue(username, issueId, tier, board, par);
     const solved = await getEndlessSolved(username);
-    return c.json<EndlessResponse>({ tier, board, par, solved });
+    await trackEndlessIssued(tier);
+    return c.json<EndlessResponse>({ issueId, tier, board, par, solved });
   } catch (error) {
+    if (issueId) {
+      try {
+        await releaseEndlessIssue(username, issueId);
+      } catch (releaseError) {
+        console.error(`/api/endless reservation release failed: ${releaseError}`);
+      }
+    }
     console.error(`/api/endless failed: ${error}`);
     const message = error instanceof Error ? error.message : 'endless failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });
 
-// Lightweight lifetime count for the tier-select banner (no puzzle generation):
-// the total (the banner) plus the per-tier split (the Easy/Medium/Hard labels).
 api.get('/endless/stats', async (c) => {
   try {
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    const stats = await getEndlessStats(username);
-    return c.json<EndlessSolvedResponse>(stats);
+    const counts = await getEndlessStats(username);
+    if (username === 'anon') {
+      return c.json<EndlessSolvedResponse>({
+        ...counts,
+        achievements: buildAchievementSnapshot({ ...counts, hardAtPar: false }),
+      });
+    }
+    const achievements = await syncAchievements(username, counts);
+    return c.json<EndlessSolvedResponse>({ ...counts, achievements });
   } catch (error) {
     console.error(`/api/endless/stats failed: ${error}`);
     const message = error instanceof Error ? error.message : 'endless stats failed';
@@ -294,17 +497,82 @@ api.get('/endless/stats', async (c) => {
   }
 });
 
-// Records one endless solve (for the tier in the body) and returns the new
-// lifetime total plus the per-tier split.
+api.post('/endless/release', async (c) => {
+  try {
+    const body = await c.req.json<EndlessReleaseRequest>();
+    if (!body || typeof body.issueId !== 'string') {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid release' }, 400);
+    }
+    const username = await reddit.getCurrentUsername();
+    if (username) await releaseEndlessIssue(username, body.issueId);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error(`/api/endless/release failed: ${error}`);
+    return c.json<ErrorResponse>({ status: 'error', message: 'release failed' }, 500);
+  }
+});
+
+api.post('/endless/hint', async (c) => {
+  try {
+    const username = await reddit.getCurrentUsername();
+    if (!username) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
+    }
+    const body = await c.req.json<EndlessHintRequest>();
+    if (!body || typeof body.issueId !== 'string') {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid hint request' }, 400);
+    }
+    const hint = await getEndlessHint(username, body.issueId, body.moves);
+    if (!hint.ok) {
+      return c.json<ErrorResponse>({ status: 'error', message: hint.reason }, 400);
+    }
+    return c.json<EndlessHintResponse>({ move: hint.move });
+  } catch (error) {
+    console.error(`/api/endless/hint failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'endless hint failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
 api.post('/endless/solved', async (c) => {
   try {
-    const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    const body = await c.req.json<{ tier?: EndlessTier }>().catch(() => ({ tier: undefined }));
-    const stats = await recordEndlessSolve(username, asTier(body.tier));
-    return c.json<EndlessSolvedResponse>(stats);
+    const username = await reddit.getCurrentUsername();
+    if (!username) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
+    }
+    const body = await c.req.json<EndlessSolveRequest>();
+    if (!body || typeof body.issueId !== 'string') {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid completion' }, 400);
+    }
+    const completion = await completeEndlessPuzzle(username, body.issueId, body.moves);
+    if (!completion.ok) {
+      return c.json<ErrorResponse>({ status: 'error', message: completion.reason }, 400);
+    }
+    return c.json<EndlessSolveResponse>(completion.result);
   } catch (error) {
     console.error(`/api/endless/solved failed: ${error}`);
     const message = error instanceof Error ? error.message : 'endless solve failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// Fixed, allowlisted client counters. Unknown/free-form fields are rejected.
+api.post('/telemetry', async (c) => {
+  try {
+    const body = await c.req.json<TelemetryEventRequest>();
+    if (!body || !isClientTelemetryEvent(body.event)) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid telemetry event' }, 400);
+    }
+    const username = await reddit.getCurrentUsername();
+    const actor = username
+      ? `user:${username}`
+      : `post:${context.postId ?? 'guest-without-post'}`;
+    const accepted = await trackClientTelemetry(body.event, actor);
+    return accepted
+      ? c.json({ ok: true })
+      : c.json({ ok: false }, 429);
+  } catch (error) {
+    console.error(`/api/telemetry failed: ${error}`);
+    return c.json({ ok: false }, 500);
   }
 });

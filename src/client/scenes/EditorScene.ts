@@ -1,6 +1,9 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { Board, Piece } from '../../shared/game/types';
+import { validateBoardStructure } from '../../shared/game/validation';
+import type { CreatorSolveProof } from '../../shared/game/proof';
+import { verifyCreatorSolveProof } from '../../shared/game/proof';
 import type { SubmitPuzzleResponse } from '../../shared/api';
 import { validateSubmission } from '../../shared/solver/validate';
 import { generate } from '../../shared/solver/generator';
@@ -22,13 +25,18 @@ import {
   type PillSize,
 } from '../art/theme';
 import { context, showLoginPrompt } from '@devvit/web/client';
+import { trackClientEvent } from '../telemetry';
 
 /** Where a not-yet-submitted board is parked so it survives the page reload
  *  that showLoginPrompt() triggers (the Phaser registry does not survive a
  *  reload; localStorage does). Restored next time the editor opens. */
 const PENDING_DRAFT_KEY = 'icehop:editorPending';
 
-type EditorDraft = { pieces: Piece[]; holes: number[] };
+type EditorDraft = {
+  pieces: Piece[];
+  holes: number[];
+  proof?: CreatorSolveProof;
+};
 
 const savePendingDraft = (draft: EditorDraft): void => {
   try {
@@ -38,14 +46,43 @@ const savePendingDraft = (draft: EditorDraft): void => {
   }
 };
 
+const draftProperty = (value: object, key: string): unknown => Reflect.get(value, key);
+const isDraftObject = (value: unknown): value is object =>
+  typeof value === 'object' && value !== null;
+
 const loadPendingDraft = (): EditorDraft | undefined => {
   try {
     const raw = localStorage.getItem(PENDING_DRAFT_KEY);
     if (!raw) return undefined;
-    const parsed: EditorDraft = JSON.parse(raw);
-    return parsed;
+    const value: unknown = JSON.parse(raw);
+    if (!isDraftObject(value)) throw new Error('Editor draft is malformed.');
+    const structure = validateBoardStructure({
+      width: 5,
+      height: 5,
+      holes: draftProperty(value, 'holes'),
+      pieces: draftProperty(value, 'pieces'),
+    });
+    if (!structure.ok) throw new Error(structure.reason);
+
+    const proofResult = verifyCreatorSolveProof(
+      structure.board,
+      draftProperty(value, 'proof')
+    );
+    return {
+      pieces: structure.board.pieces.map((piece) => ({
+        ...piece,
+        cells: [...piece.cells],
+      })),
+      holes: [...structure.board.holes],
+      ...(proofResult.ok ? { proof: proofResult.proof } : {}),
+    };
   } catch (error) {
     console.error(error);
+    try {
+      localStorage.removeItem(PENDING_DRAFT_KEY);
+    } catch {
+      // localStorage is unavailable; there is nothing else to recover.
+    }
     return undefined;
   }
 };
@@ -97,7 +134,9 @@ export class EditorScene extends Scene {
   private currentTool: Tool = 'PENGUIN';
   private sealOrient: 'H' | 'V' = 'H';
   private history: string[] = [];
+  private canTest = false;
   private canSubmit = false;
+  private proof?: CreatorSolveProof;
   private submitting = false;
   private touched = false;
 
@@ -125,22 +164,27 @@ export class EditorScene extends Scene {
     this.pieces = [];
     this.history = [];
     this.sealOrient = 'H';
+    this.canTest = false;
     this.canSubmit = false;
+    this.proof = undefined;
     this.submitting = false;
     this.touched = false;
 
     // Restore an in-progress board: from the registry when returning from
     // "Test", or from localStorage when we've come back from a sign-in reload
     // (the registry doesn't survive a page reload; localStorage does).
-    const draft: { pieces: Piece[]; holes: number[] } | undefined =
-      this.registry.get('editor.draft') ?? loadPendingDraft();
+    const pendingDraft = loadPendingDraft();
+    const draft: EditorDraft | undefined = this.registry.get('editor.draft') ?? pendingDraft;
+    const registryProof: CreatorSolveProof | undefined = this.registry.get('editor.proof');
     if (draft) {
-      this.pieces = draft.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+      this.pieces = draft.pieces.map((piece) => ({ ...piece, cells: [...piece.cells] }));
       this.holes = new Set(draft.holes);
-      this.registry.remove('editor.draft');
-      clearPendingDraft();
+      this.proof = registryProof ?? draft.proof;
       this.touched = true;
     }
+    this.registry.remove('editor.draft');
+    this.registry.remove('editor.proof');
+    if (pendingDraft) clearPendingDraft();
 
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
@@ -315,6 +359,11 @@ export class EditorScene extends Scene {
     return JSON.stringify({ pieces: this.pieces, holes: [...this.holes].sort((a, b) => a - b) });
   }
 
+  private invalidateProof(): void {
+    this.proof = undefined;
+    this.registry.remove('editor.proof');
+  }
+
   private render(): void {
     this.boardLayer.removeAll(true);
     this.pieceLayer.removeAll(true);
@@ -389,6 +438,7 @@ export class EditorScene extends Scene {
     if (this.serialize() !== before) {
       this.history.push(before);
       if (this.history.length > 60) this.history.shift();
+      this.invalidateProof();
       this.touched = true;
     }
     this.render();
@@ -401,6 +451,7 @@ export class EditorScene extends Scene {
     const state: { pieces: Piece[]; holes: number[] } = JSON.parse(prev);
     this.pieces = state.pieces;
     this.holes = new Set(state.holes);
+    this.invalidateProof();
     this.render();
     this.revalidate();
   }
@@ -415,26 +466,42 @@ export class EditorScene extends Scene {
   }
 
   private revalidate(): void {
-    const result = validateSubmission(this.currentBoard());
-    if (result.ok) {
+    const board = this.currentBoard();
+    const result = validateSubmission(board);
+    this.canTest = result.ok;
+    const proofResult = this.proof
+      ? verifyCreatorSolveProof(board, this.proof)
+      : { ok: false, reason: 'not tested' };
+
+    if (result.ok && proofResult.ok) {
       this.canSubmit = true;
-      this.statusText.setText(`Solvable in ${result.par} moves \u2014 tap Submit!`);
+      this.statusText.setText(`Solved by you • Par ${result.par} — ready to Submit!`);
       this.statusText.setColor(UI.good);
+    } else if (result.ok) {
+      this.canSubmit = false;
+      this.statusText.setText(`Solvable in ${result.par} moves — Test and solve it to unlock Submit.`);
+      this.statusText.setColor(UI.warn);
     } else {
       this.canSubmit = false;
       this.statusText.setText(this.touched ? result.reason : 'Pick a tool, then tap the ice to build.');
       this.statusText.setColor(this.touched ? UI.warn : UI.text);
     }
     this.submitButton.setEnabled(this.canSubmit);
-    this.testButton.setEnabled(this.canSubmit);
+    this.testButton.setEnabled(this.canTest);
   }
 
   /** Save the current board and jump into GameScene to play-test it. */
   private testPuzzle(): void {
-    if (!this.canSubmit) return;
+    if (!this.canTest) return;
     const board = this.currentBoard();
     const validation = validateSubmission(board);
-    this.registry.set('editor.draft', { pieces: this.pieces, holes: [...this.holes].sort((a, b) => a - b) });
+    const draft: EditorDraft = {
+      pieces: this.pieces,
+      holes: [...this.holes].sort((a, b) => a - b),
+      ...(this.proof ? { proof: this.proof } : {}),
+    };
+    this.registry.set('editor.draft', draft);
+    trackClientEvent('creator_test_started');
     fadeToScene(this, 'GameScene', { test: { board, par: validation.ok ? validation.par : 0 } });
   }
 
@@ -481,6 +548,7 @@ export class EditorScene extends Scene {
     if (g) {
       this.history.push(this.serialize());
       if (this.history.length > 60) this.history.shift();
+      this.invalidateProof();
       this.touched = true;
       this.pieces = g.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
       this.holes = new Set(g.board.holes);
@@ -496,6 +564,7 @@ export class EditorScene extends Scene {
     if (this.pieces.length === 0 && this.holes.size === 0) return;
     this.history.push(this.serialize());
     if (this.history.length > 60) this.history.shift();
+    this.invalidateProof();
     this.pieces = [];
     this.holes = new Set<number>();
     this.render();
@@ -504,16 +573,36 @@ export class EditorScene extends Scene {
 
   private async submit(): Promise<void> {
     if (!this.canSubmit || this.submitting) return;
+    const board = this.currentBoard();
+    const proof = this.proof;
+    const proofResult = proof ? verifyCreatorSolveProof(board, proof) : null;
+    if (!proof || !proofResult?.ok) {
+      this.canSubmit = false;
+      this.submitButton.setEnabled(false);
+      this.statusText.setText('Test and solve this exact puzzle before submitting.');
+      this.statusText.setColor(UI.warn);
+      return;
+    }
+
     // Building and testing are open to everyone; publishing needs an account.
-    // Stash the board to localStorage first so the sign-in reload doesn't throw
-    // away what they built - it's restored when the editor reopens.
+    // Persist both the board and its exact proof through the sign-in reload.
     if (!context.username) {
-      savePendingDraft({ pieces: this.pieces, holes: [...this.holes].sort((a, b) => a - b) });
-      this.statusText.setText('Sign in to publish your puzzle\u2026');
+      savePendingDraft({
+        pieces: this.pieces,
+        holes: [...this.holes].sort((a, b) => a - b),
+        proof,
+      });
+      try {
+        localStorage.setItem('icehop.launch', 'build');
+      } catch {
+        /* The pending draft still survives when storage is partly unavailable. */
+      }
+      this.statusText.setText('Sign in to publish your puzzle…');
       this.statusText.setColor(UI.text);
       showLoginPrompt();
       return;
     }
+
     this.submitting = true;
     this.statusText.setText('Submitting...');
     this.statusText.setColor(UI.text);
@@ -521,12 +610,14 @@ export class EditorScene extends Scene {
       const response = await fetch('/api/ugc/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ board: this.currentBoard() }),
+        body: JSON.stringify({ board, proof }),
       });
       const data: SubmitPuzzleResponse = await response.json();
       if (data.ok) {
         this.statusText.setText(`Submitted! Par ${data.par}. The community can play it now.`);
         this.statusText.setColor(UI.good);
+        this.invalidateProof();
+        clearPendingDraft();
         this.canSubmit = false;
         this.submitButton.setEnabled(false);
       } else {
@@ -535,9 +626,10 @@ export class EditorScene extends Scene {
       }
     } catch (error) {
       console.error(error);
-      this.statusText.setText('Could not submit \u2014 try again.');
+      this.statusText.setText('Could not submit — try again.');
       this.statusText.setColor(UI.warn);
+    } finally {
+      this.submitting = false;
     }
-    this.submitting = false;
   }
 }

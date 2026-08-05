@@ -1,6 +1,6 @@
 import { reddit, redis } from '@devvit/web/server';
 import type { SplashPostData, UgcSubmission } from '../../shared/api';
-import { POST_DATA_SPLASH_KEY } from '../../shared/api';
+import { buildDailyBoardTeaser, POST_DATA_SPLASH_KEY } from '../../shared/api';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
 import type { Difficulty } from '../../shared/solver/difficulty';
 import { getOrCreateDailyPuzzle } from './daily';
@@ -47,7 +47,8 @@ const setDifficultyFlair = async (post: CreatedPost, band: Difficulty): Promise<
 
 /**
  * Ensures the day's puzzle exists, creates the custom post (splash entrypoint),
- * and records which date the new post shows so /api/init can look it up.
+ * and records the immutable puzzle id the new post shows so /api/init can
+ * keep historical posts bound to their original board and progression data.
  */
 export const createDailyPost = async (date: string) => {
   const puzzle = await getOrCreateDailyPuzzle(date);
@@ -56,16 +57,21 @@ export const createDailyPost = async (date: string) => {
   const post = await reddit.submitCustomPost({
     title: `Ice Hop - Daily Puzzle - ${date}`,
     entry: 'default',
-    // Bake the difficulty band into the post so the "Today: ..." badge shows on
-    // first paint (no board - the daily stays spoiler-free).
-    postData: splashData({ kind: 'daily', difficulty: band }),
+    // Bake a position-free board summary into the post. The splash can paint a
+    // puzzle-shaped teaser immediately without exposing cells before Play.
+    postData: splashData({
+      kind: 'daily',
+      date: puzzle.date,
+      difficulty: band,
+      teaser: buildDailyBoardTeaser(puzzle.board),
+    }),
     styles: {
       backgroundColor: '#0a2a43ff',
       backgroundColorDark: '#0a2a43ff',
     },
   });
 
-  await redis.set(keys.postDate(post.id), date);
+  await redis.set(keys.postDate(post.id), puzzle.id);
 
   // Tag the daily with its difficulty band (spoiler-free; the daily ramps
   // across the week, so this teases "today is Hard"). Best-effort.

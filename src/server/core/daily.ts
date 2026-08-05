@@ -1,97 +1,99 @@
 import { redis } from '@devvit/web/server';
+import {
+  CURRENT_DAILY_SCHEMA,
+  LEGACY_DAILY_SCHEMA,
+  currentDailyPuzzleRef,
+  dailyPuzzleId,
+  parseDailyPuzzleId,
+  type DailyPuzzleRef,
+} from '../../shared/daily';
 import type { Board } from '../../shared/game/types';
+import { validateBoardStructure } from '../../shared/game/validation';
 import { generate, type GenOptions } from '../../shared/solver/generator';
-import { solve } from '../../shared/solver/solver';
 import { seedFromDate } from '../../shared/date';
+import {
+  DAILY_FALLBACKS,
+  DAILY_LADDERS,
+  dailyTierForDate,
+  type DailyGenConfig,
+} from './dailyPolicy';
 import { keys } from './keys';
+import { trackTelemetry } from './telemetry';
 
 export type DailyPuzzle = {
+  readonly id: string;
+  readonly ref: DailyPuzzleRef;
   readonly date: string;
   readonly board: Board;
   readonly par: number;
 };
 
-// Real, solver-verified last-resort board (par 6), reached only if every
-// generation pass below somehow misses within its time budget - effectively
-// never. It is a proper puzzle, not a trivial one, so even the worst case is a
-// legitimate daily rather than something that reads as broken.
-const FALLBACK_BOARD: Board = {
-  width: 5,
-  height: 5,
-  holes: [13, 14],
-  pieces: [
-    { kind: 'SLIDER', cells: [7, 12], orient: 'V' },
-    { kind: 'BLOCKER', cells: [15] },
-    { kind: 'BLOCKER', cells: [16] },
-    { kind: 'HOPPER', cells: [1] },
-    { kind: 'HOPPER', cells: [8] },
-  ],
+type StoredDailyPuzzle = {
+  readonly date: string;
+  readonly board: Board;
+  readonly par: number;
 };
 
-type GenConfig = {
-  hoppers: number;
-  sliders: number;
-  blockers: number;
-  minPar: number;
-  maxPar: number;
-  /** Easy tiers keep every piece on the solution path (no decoys); harder tiers
-   *  leave this off so the generator can include tempting wrong moves. */
-  requireAllPiecesUsed?: boolean;
+type GeneratedDaily = {
+  readonly board: Board;
+  readonly par: number;
+  readonly pass: 'designed' | 'relaxed' | 'fast' | 'fallback';
 };
 
-// Difficulty ramps across the week like a daily crossword: Mon/Tue easy,
-// Wed-Fri medium, weekends hard. Higher tiers add more penguins and seals
-// (up to 3 penguins / 2 seals, like Jump In') and allow decoy pieces for
-// misdirection. Every accepted board is solvable, has a single optimal
-// solution, and contains no inert clutter (the solver guarantees all three).
-const LADDERS: ReadonlyArray<ReadonlyArray<GenConfig>> = [
-  [
-    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 6, requireAllPiecesUsed: true },
-    { hoppers: 2, sliders: 0, blockers: 2, minPar: 2, maxPar: 5, requireAllPiecesUsed: true },
-    { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 5, requireAllPiecesUsed: true },
-  ],
-  [
-    { hoppers: 3, sliders: 1, blockers: 1, minPar: 4, maxPar: 8 },
-    { hoppers: 2, sliders: 1, blockers: 2, minPar: 4, maxPar: 8 },
-    { hoppers: 2, sliders: 1, blockers: 1, minPar: 3, maxPar: 7 },
-  ],
-  [
-    { hoppers: 3, sliders: 2, blockers: 2, minPar: 5, maxPar: 10 },
-    { hoppers: 3, sliders: 1, blockers: 2, minPar: 5, maxPar: 9 },
-    { hoppers: 2, sliders: 2, blockers: 2, minPar: 4, maxPar: 9 },
-  ],
-];
+const property = (value: object, key: string): unknown => Reflect.get(value, key);
+const isObject = (value: unknown): value is object =>
+  typeof value === 'object' && value !== null;
 
-const tierForDate = (date: string): number => {
-  const day = new Date(`${date}T00:00:00.000Z`).getUTCDay(); // 0 Sun .. 6 Sat
-  if (day === 0 || day === 6) return 2; // weekend: hard
-  if (day === 1 || day === 2) return 0; // Mon/Tue: easy
-  return 1; // Wed-Fri: medium
+const parseStoredDaily = (raw: string, ref: DailyPuzzleRef): DailyPuzzle | null => {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isObject(value)) return null;
+    const date = property(value, 'date');
+    const par = property(value, 'par');
+    const structure = validateBoardStructure(property(value, 'board'));
+    if (
+      date !== ref.date ||
+      typeof par !== 'number' ||
+      !Number.isSafeInteger(par) ||
+      par < 1 ||
+      !structure.ok
+    ) {
+      return null;
+    }
+    return {
+      id: dailyPuzzleId(ref),
+      ref,
+      date,
+      board: structure.board,
+      par,
+    };
+  } catch {
+    return null;
+  }
 };
 
 /**
- * One pass over a list of configs that shares a SINGLE wall-clock budget across
- * them, so the pass can never exceed `totalMs` no matter how expensive an
- * individual attempt gets (proving uniqueness can be very costly on some
- * boards). Returns the first board found, or null if the budget elapses first.
+ * One pass over a list of configs that shares a single wall-clock budget across
+ * them. Expensive uniqueness checks therefore cannot make a cache-miss request
+ * exceed the whole pass budget.
  */
 const runPass = (
-  configs: ReadonlyArray<GenConfig>,
+  configs: readonly DailyGenConfig[],
   baseSeed: number,
   totalMs: number,
   common: Partial<GenOptions>
 ): { board: Board; par: number } | null => {
   const deadline = Date.now() + totalMs;
-  for (let i = 0; i < configs.length; i++) {
+  for (let index = 0; index < configs.length; index++) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
     const generated = generate({
       width: 5,
       height: 5,
-      seed: baseSeed + i,
+      seed: baseSeed + index,
       deadlineMs: remaining,
       ...common,
-      ...configs[i],
+      ...configs[index],
     });
     if (generated) return generated;
   }
@@ -99,25 +101,20 @@ const runPass = (
 };
 
 /**
- * Generate the day's puzzle as a bounded cascade so a cache-miss `/api/init` can
- * NEVER hang - the bug that failed app review as "puzzle would not load". The
- * old single pass ran up to ~15k uniqueness-gated attempts and measured 10-24s
- * on unlucky seeds, past the client's 12s fetch timeout (and likely the server
- * limit). Each pass here shares a hard wall-clock budget and degrades
- * gracefully:
- *   1. designed - single optimal solution + no clutter (the ideal daily);
- *   2. relaxed  - drop the costly uniqueness proof, keep the no-clutter gate;
- *   3. fast     - all gates off and the par floor dropped to 2, so a real
- *                 solvable in-tier board is found near-instantly.
- * Worst case (all three passes elapse) stays ~5s, comfortably inside the client
- * timeout, and the result is always a real, solver-verified board. Still
- * deterministic per date (each pass is seeded from the date).
+ * Generate a daily through a bounded quality cascade. Every pass uses only the
+ * selected weekday tier's shapes and par band:
+ *   1. designed: unique optimal line and no inert clutter;
+ *   2. relaxed: no inert clutter without the expensive uniqueness proof;
+ *   3. fast: quality gates off, but still inside the same par band;
+ *   4. fallback: a known solver-verified board in that exact band.
+ *
+ * This preserves the request-safe deadline without ever relabeling an Easy
+ * board as Medium/Hard or reducing the par floor below four.
  */
-const generateDaily = (date: string): { board: Board; par: number } => {
+const generateDaily = (date: string): GeneratedDaily => {
   const seed = seedFromDate(date);
-  const tier = tierForDate(date);
-  // The day's tier first, then the easy tier as extra shapes to try.
-  const configs = [...LADDERS[tier], ...LADDERS[0]];
+  const tier = dailyTierForDate(date);
+  const configs = DAILY_LADDERS[tier];
 
   const designed = runPass(configs, seed, 2500, {
     requireUnique: true,
@@ -125,43 +122,123 @@ const generateDaily = (date: string): { board: Board; par: number } => {
     attempts: 3000,
     maxStates: 30_000,
   });
-  if (designed) return designed;
+  if (designed) return { ...designed, pass: 'designed' };
 
   const relaxed = runPass(configs, seed + 10_000, 1500, {
     rejectInert: true,
     attempts: 1500,
     maxStates: 20_000,
   });
-  if (relaxed) return relaxed;
+  if (relaxed) return { ...relaxed, pass: 'relaxed' };
 
-  // Last resort: gates off and the par floor dropped to 2 so a solvable in-tier
-  // board is found almost immediately. Keeps the daily a real puzzle.
-  const fastConfigs = configs.map((c) => ({ ...c, minPar: 2, requireAllPiecesUsed: false }));
+  const fastConfigs = configs.map((config) => ({
+    ...config,
+    requireAllPiecesUsed: false,
+  }));
   const fast = runPass(fastConfigs, seed + 20_000, 1500, {
+    requireUnique: false,
+    rejectInert: false,
     attempts: 3000,
     maxStates: 15_000,
   });
-  if (fast) return fast;
+  if (fast) return { ...fast, pass: 'fast' };
 
-  return { board: FALLBACK_BOARD, par: solve(FALLBACK_BOARD).par };
+  const fallback = DAILY_FALLBACKS[tier];
+  return { ...fallback, pass: 'fallback' };
 };
 
 /**
- * Returns the day's puzzle, creating it on first access. The daily is always
- * freshly generated by the solver-backed generator, with difficulty tiered by
- * the day of week (see `tierForDate`). Community-submitted puzzles are a
- * separate, on-demand stream (see `ugc.ts`) and are not used as the daily.
+ * Resolve one canonical puzzle identity for a UTC date across schema rollouts.
+ * A materialized legacy board wins the first migration claim so an already
+ * published post and every in-app "today" entry point stay in one competition.
  */
-export const getOrCreateDailyPuzzle = async (date: string): Promise<DailyPuzzle> => {
-  const stored = await redis.get(keys.dailyPuzzle(date));
+export const getCanonicalDailyRef = async (date: string): Promise<DailyPuzzleRef> => {
+  const identityKey = keys.dailyPuzzleIdentities();
+  const existingRaw = await redis.hGet(identityKey, date);
+  if (existingRaw) {
+    const existing = parseDailyPuzzleId(existingRaw);
+    if (!existing || existing.date !== date) {
+      throw new Error(`Canonical daily identity for ${date} is invalid.`);
+    }
+    return existing;
+  }
+
+  const legacyRef: DailyPuzzleRef = { schema: LEGACY_DAILY_SCHEMA, date };
+  const legacyBoard = await redis.get(keys.dailyPuzzle(legacyRef));
+  const candidate = legacyBoard ? legacyRef : currentDailyPuzzleRef(date);
+  const candidateId = dailyPuzzleId(candidate);
+  const added = Boolean(await redis.hSetNX(identityKey, date, candidateId));
+  if (added) return candidate;
+
+  const winnerRaw = await redis.hGet(identityKey, date);
+  const winner = parseDailyPuzzleId(winnerRaw);
+  if (!winner || winner.date !== date) {
+    throw new Error(`Canonical daily identity for ${date} was not saved.`);
+  }
+  return winner;
+};
+
+/**
+ * Load an immutable daily puzzle. Schema 5 is read-only: if its historical
+ * cache is missing, failing closed is safer than showing an old post a newly
+ * generated board under old solve and leaderboard records.
+ */
+export const getDailyPuzzle = async (ref: DailyPuzzleRef): Promise<DailyPuzzle> => {
+  const storageKey = keys.dailyPuzzle(ref);
+  const stored = await redis.get(storageKey);
   if (stored) {
-    const parsed: DailyPuzzle = JSON.parse(stored);
+    const parsed = parseStoredDaily(stored, ref);
+    if (!parsed) throw new Error(`Stored daily puzzle ${dailyPuzzleId(ref)} is invalid.`);
     return parsed;
   }
 
-  const generated = generateDaily(date);
-  const puzzle: DailyPuzzle = { date, board: generated.board, par: generated.par };
+  if (ref.schema !== CURRENT_DAILY_SCHEMA) {
+    throw new Error('This archived daily puzzle is no longer available.');
+  }
 
-  await redis.set(keys.dailyPuzzle(date), JSON.stringify(puzzle));
-  return puzzle;
+  // The creation hash is the atomic winner when concurrent cold requests both
+  // generate a candidate. It also repairs the materialized daily:<schema>:<date>
+  // key if a prior request failed between the claim and the SET.
+  const creationKey = keys.dailyPuzzleCreations();
+  const field = dailyPuzzleId(ref);
+  const claimedRaw = await redis.hGet(creationKey, field);
+  if (claimedRaw) {
+    const claimedPuzzle = parseStoredDaily(claimedRaw, ref);
+    if (!claimedPuzzle) throw new Error(`Daily creation record ${field} is invalid.`);
+    await redis.set(storageKey, claimedRaw);
+    return claimedPuzzle;
+  }
+
+  const generated = generateDaily(ref.date);
+  const storedPuzzle: StoredDailyPuzzle = {
+    date: ref.date,
+    board: generated.board,
+    par: generated.par,
+  };
+  const candidateRaw = JSON.stringify(storedPuzzle);
+  const wonCreation = Boolean(
+    await redis.hSetNX(creationKey, field, candidateRaw)
+  );
+  const winnerRaw = wonCreation
+    ? candidateRaw
+    : await redis.hGet(creationKey, field);
+  if (!winnerRaw) throw new Error(`Daily creation record ${field} was not saved.`);
+
+  const winner = parseStoredDaily(winnerRaw, ref);
+  if (!winner) throw new Error(`Daily creation record ${field} is invalid.`);
+  await redis.set(storageKey, winnerRaw);
+
+  if (wonCreation) {
+    const tier = dailyTierForDate(ref.date);
+    await Promise.all([
+      trackTelemetry(`daily:generated:tier:${tier}`),
+      trackTelemetry(`daily:generated:pass:${generated.pass}`),
+      trackTelemetry(`daily:generated:par:${generated.par}`),
+    ]);
+  }
+  return winner;
 };
+
+/** Return the canonical published puzzle for a calendar date, creating it if needed. */
+export const getOrCreateDailyPuzzle = async (date: string): Promise<DailyPuzzle> =>
+  getDailyPuzzle(await getCanonicalDailyRef(date));

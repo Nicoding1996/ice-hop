@@ -73,13 +73,44 @@ const ensureFonts = async (): Promise<void> => {
   }
 };
 
+const dismissLaunchCoverAfterFirstRender = (game: Game): void => {
+  const cover = document.getElementById('launch-cover');
+  if (!cover) return;
+
+  let fallbackTimer: number | undefined;
+  const dismiss = (): void => {
+    if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+    fallbackTimer = undefined;
+    cover.remove();
+  };
+
+  // POST_RENDER fires only after every active Scene has been drawn to the
+  // canvas, so the normal path cannot reveal a blank game surface. The timeout
+  // prevents an initialization failure from leaving an opaque cover forever.
+  game.events.once(Phaser.Core.Events.POST_RENDER, dismiss);
+  fallbackTimer = window.setTimeout(dismiss, 8000);
+};
+
+const showLaunchFailure = (error: unknown): void => {
+  console.error(error);
+  const cover = document.getElementById('launch-cover');
+  const message = cover?.querySelector('p');
+  if (message) message.textContent = 'Ice Hop could not start. Close and try again.';
+  cover?.classList.add('launch-failed');
+};
+
 document.addEventListener('DOMContentLoaded', () => {
   // Load audio prefs and arm the music lifecycle before the first frame, so a
   // returning player who enabled music has it resume on their first tap.
   initAudioPrefs();
   installAudioLifecycle();
   void ensureFonts().finally(() => {
-    const game = startGame('game-container');
-    keepAwake(game);
+    try {
+      const game = startGame('game-container');
+      keepAwake(game);
+      dismissLaunchCoverAfterFirstRender(game);
+    } catch (error) {
+      showLaunchFailure(error);
+    }
   });
 });

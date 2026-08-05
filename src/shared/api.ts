@@ -1,15 +1,56 @@
 // DTOs shared between client and server. Keep in sync with the server routes.
-import type { Board } from './game/types';
+import type { Board, Move } from './game/types';
+import type { AchievementSnapshot } from './achievements';
+import type { CreatorSolveProof } from './game/proof';
 import type { Difficulty } from './solver/difficulty';
+
+/**
+ * Lossy Daily-board summary used by the feed teaser. It deliberately contains
+ * counts but no cell positions, so a player cannot inspect the card payload to
+ * study the Daily before its authoritative play clock starts.
+ */
+export type DailyBoardTeaser = {
+  readonly width: number;
+  readonly height: number;
+  readonly hoppers: number;
+  readonly sliders: number;
+  readonly blockers: number;
+  readonly holes: number;
+};
+
+export const buildDailyBoardTeaser = (board: Board): DailyBoardTeaser => {
+  let hoppers = 0;
+  let sliders = 0;
+  let blockers = 0;
+  for (const piece of board.pieces) {
+    if (piece.kind === 'HOPPER') hoppers++;
+    else if (piece.kind === 'SLIDER') sliders++;
+    else blockers++;
+  }
+  return {
+    width: board.width,
+    height: board.height,
+    hoppers,
+    sliders,
+    blockers,
+    holes: board.holes.length,
+  };
+};
 
 /**
  * Static splash payload baked into a post's `postData` (JSON-stringified under
  * the `splash` key) at creation, so the feed card renders on first paint with
- * NO server round-trip. Kept tiny (well under the 2KB postData limit) and
- * spoiler-aware: a daily carries only its difficulty band, never its board.
+ * NO server round-trip. Kept well under the 2KB postData limit. Community posts
+ * carry their exact board; Daily posts carry only a position-free teaser.
  */
 export type SplashPostData =
-  | { readonly kind: 'daily'; readonly difficulty: Difficulty }
+  | {
+      readonly kind: 'daily';
+      readonly difficulty: Difficulty;
+      /** Optional so posts created before dated board teasers remain readable. */
+      readonly date?: string;
+      readonly teaser?: DailyBoardTeaser;
+    }
   | {
       readonly kind: 'ugc';
       readonly board: Board;
@@ -19,6 +60,25 @@ export type SplashPostData =
 
 /** The `postData` object shape: the splash payload as a JSON string. */
 export const POST_DATA_SPLASH_KEY = 'splash';
+
+/** Read-only feed metadata. Unlike `/api/init`, this never begins a play. */
+export type PostPreviewResponse =
+  | {
+      readonly type: 'post-preview';
+      readonly kind: 'daily';
+      readonly date: string;
+      readonly difficulty: Difficulty;
+      readonly teaser: DailyBoardTeaser;
+    }
+  | {
+      readonly type: 'post-preview';
+      readonly kind: 'ugc';
+      readonly board: Board;
+      readonly difficulty: Difficulty;
+      readonly creator: string;
+      readonly solves: number;
+      readonly solved: boolean;
+    };
 
 /** A community (UGC) puzzle, shaped for the client to render + play. */
 export type InitUgcPuzzle = {
@@ -32,33 +92,23 @@ export type InitUgcPuzzle = {
   readonly solves: number;
 };
 
-/**
- * Response from GET /api/init: what to render for the *current* post. A daily
- * post returns `kind: 'daily'`; a community-puzzle feed post returns
- * `kind: 'ugc'` with the puzzle and its creator. Calling `/api/init?daily=1`
- * always forces today's daily, so the hub can reach it even from inside a
- * community post (where the post itself maps to a UGC puzzle).
- */
+/** Response from GET /api/init for the current post or forced daily. */
 export type InitResponse =
   | {
       readonly type: 'init';
       readonly kind: 'daily';
+      /** Immutable schema + date identity, e.g. v6:2026-08-05. */
+      readonly puzzleId: string;
       readonly date: string;
+      /** Non-resettable server clock bound before the board is disclosed. */
+      readonly playId: string;
       readonly board: Board;
       readonly par: number;
-      /** Solver-derived band (from par) for a spoiler-free splash badge. */
       readonly difficulty: Difficulty;
       readonly username: string;
       readonly solved: boolean;
-      /** The viewer's prior result for this daily, when they've already solved
-       *  it (drives the "solved today" recap). Absent for a first visit. */
       readonly solvedResult?: { readonly moves: number; readonly stars: number };
-      /** Whether we've recorded this viewer as subscribed to the community via
-       *  the in-app Join button. Reddit exposes no API to read live subscription
-       *  state, so this reflects only app-driven joins - enough to stop
-       *  re-prompting. */
       readonly subscribed: boolean;
-      /** Current subreddit name, for the "Join r/{name}" win-screen CTA label. */
       readonly subredditName?: string;
     }
   | {
@@ -66,28 +116,27 @@ export type InitResponse =
       readonly kind: 'ugc';
       readonly puzzle: InitUgcPuzzle;
       readonly username: string;
-      /** Whether this viewer has already solved this community puzzle. */
       readonly solved: boolean;
       readonly subredditName?: string;
     };
 
-/** Client -> server (POST /api/solve) when a player completes a puzzle. */
+/** Client -> server after completing the exact issued daily. */
 export type SolveSubmission = {
-  readonly date: string;
-  readonly moves: number;
-  readonly timeMs: number;
+  readonly puzzleId: string;
+  readonly playId: string;
+  readonly moves: readonly Move[];
 };
 
-/** Server -> client after recording a solve. */
+/** Server -> client after verifying and recording a daily solve. */
 export type SolveResultDTO = {
   readonly accepted: boolean;
-  readonly stars: number; // 0-3
+  readonly stars: number;
   readonly par: number;
   readonly moves: number;
   readonly bestMoves: number;
-  readonly rank: number; // 1-based; 0 when unranked (e.g. logged out)
+  readonly rank: number;
   readonly totalPlayers: number;
-  readonly streak: number; // consecutive days solved
+  readonly streak: number;
 };
 
 export type LeaderboardEntry = {
@@ -96,8 +145,8 @@ export type LeaderboardEntry = {
   readonly timeMs: number;
 };
 
-/** Response from GET /api/leaderboard?date=YYYY-MM-DD (best first). */
 export type LeaderboardResponse = {
+  readonly puzzleId: string;
   readonly date: string;
   readonly entries: readonly LeaderboardEntry[];
 };
@@ -110,15 +159,15 @@ export type UgcSubmission = {
   readonly board: Board;
   readonly par: number;
   readonly votes: number;
-  /** How many players have solved this puzzle (the creator feedback signal). */
   readonly solves: number;
   readonly createdAt: number;
-  /** The feed post this puzzle was published to (set after the post is created;
-   *  best-effort, so it may be absent if posting failed). */
   readonly postId?: string;
 };
 
-export type SubmitPuzzleRequest = { readonly board: Board };
+export type SubmitPuzzleRequest = {
+  readonly board: Board;
+  readonly proof: CreatorSolveProof;
+};
 
 export type SubmitPuzzleResponse =
   | { readonly ok: true; readonly id: string; readonly par: number }
@@ -126,8 +175,6 @@ export type SubmitPuzzleResponse =
 
 export type UgcListResponse = { readonly submissions: readonly UgcSubmission[] };
 
-/** Response from GET /api/ugc/mine: the player's own puzzles plus totals, for
- *  the "My puzzles" creator-feedback view. */
 export type MyPuzzlesResponse = {
   readonly submissions: readonly UgcSubmission[];
   readonly totals: { readonly puzzles: number; readonly solves: number; readonly votes: number };
@@ -137,46 +184,70 @@ export type VoteRequest = { readonly id: string };
 
 export type VoteResponse = { readonly ok: boolean; readonly votes: number; readonly reason?: string };
 
-/** Client -> server (POST /api/ugc/played) to mark a community puzzle solved. */
-export type MarkPlayedRequest = { readonly id: string };
+/** Client -> server after solving a fixed community puzzle. */
+export type MarkPlayedRequest = {
+  readonly id: string;
+  readonly moves: readonly Move[];
+};
+
+export type MarkPlayedResponse =
+  | { readonly ok: true; readonly saved: boolean; readonly firstSolve: boolean }
+  | { readonly ok: false; readonly saved: false; readonly reason: string };
 
 // --- Endless mode ---
 
-/** The three solver-graded difficulty buckets for endless play. */
 export type EndlessTier = 'easy' | 'medium' | 'hard';
 
-/** Response from GET /api/endless?tier=: a fresh graded puzzle + lifetime count. */
+/** A fresh graded puzzle. issueId binds signed-in completion to this exact board. */
 export type EndlessResponse = {
+  readonly issueId: string;
   readonly tier: EndlessTier;
   readonly board: Board;
   readonly par: number;
-  /** Total endless puzzles this player has solved (the progression banner). */
   readonly solved: number;
 };
 
-/** Lifetime endless solves split by difficulty tier (for the tier-select labels). */
 export type EndlessTierCounts = {
   readonly easy: number;
   readonly medium: number;
   readonly hard: number;
 };
 
-/** Server -> client after recording an endless solve, and from GET
- *  /api/endless/stats. `solved` is the lifetime total (the progression banner);
- *  `byTier` is the per-tier split shown on the Easy/Medium/Hard buttons. */
 export type EndlessSolvedResponse = {
   readonly solved: number;
   readonly byTier: EndlessTierCounts;
+  readonly achievements: AchievementSnapshot;
 };
 
-/** POST /api/comment-score body: the player's final move count for the puzzle
- *  shown in the current post. The server composes the comment text from this +
- *  the puzzle's par, so the posted text stays spoiler-free and consistent. */
-export type CommentScoreRequest = {
-  readonly moves: number;
+export type EndlessHintRequest = {
+  readonly issueId: string;
+  /** Legal moves already committed on this exact issued board. */
+  readonly moves: readonly Move[];
 };
+
+export type EndlessHintResponse = {
+  readonly move: Move;
+};
+
+export type EndlessSolveRequest = {
+  readonly issueId: string;
+  readonly moves: readonly Move[];
+};
+
+export type EndlessReleaseRequest = {
+  readonly issueId: string;
+};
+
+export type EndlessSolveResponse = EndlessSolvedResponse & {
+  /** False on an idempotent retry of an issue that was already counted. */
+  readonly counted: boolean;
+};
+
+/** Score comments contain no client score claim; the server loads verified progress. */
+export type CommentScoreRequest = Record<string, never>;
 
 export type CommentScoreResponse = {
   readonly type: 'commentScore';
   readonly ok: boolean;
+  readonly alreadyPosted: boolean;
 };

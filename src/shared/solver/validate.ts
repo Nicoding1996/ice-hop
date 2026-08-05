@@ -1,20 +1,24 @@
-import type { Board } from '../game/types';
+import { validateBoardStructure } from '../game/validation';
 import { solve } from './solver';
 
 export type ValidationResult = { ok: true; par: number } | { ok: false; reason: string };
 
 /**
- * Validates a user-submitted puzzle by actually solving it. This is what makes
- * UGC safe: nothing reaches the community queue unless the solver proves it is
- * solvable, and we record its true par at the same time.
+ * Validates a user-submitted puzzle by checking its geometry and actually
+ * solving it. Nothing reaches the community queue unless the solver proves it
+ * is solvable, and we record its true par at the same time.
  */
-export const validateSubmission = (board: Board): ValidationResult => {
+export const validateSubmission = (value: unknown): ValidationResult => {
+  const structure = validateBoardStructure(value);
+  if (!structure.ok) return structure;
+
+  const board = structure.board;
   const { width, height } = board;
   if (width < 4 || width > 6 || height < 4 || height > 6) {
     return { ok: false, reason: 'Board must be between 4x4 and 6x6.' };
   }
 
-  const hoppers = board.pieces.filter((p) => p.kind === 'HOPPER').length;
+  const hoppers = board.pieces.filter((piece) => piece.kind === 'HOPPER').length;
   if (hoppers < 1) return { ok: false, reason: 'Add at least one penguin.' };
   if (hoppers > 4) return { ok: false, reason: 'Use at most four penguins.' };
   if (board.holes.length !== hoppers) {

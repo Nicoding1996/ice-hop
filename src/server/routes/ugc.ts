@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { reddit } from '@devvit/web/server';
 import type {
   MarkPlayedRequest,
+  MarkPlayedResponse,
   MyPuzzlesResponse,
   SubmitPuzzleRequest,
   SubmitPuzzleResponse,
@@ -9,25 +10,23 @@ import type {
   VoteRequest,
   VoteResponse,
 } from '../../shared/api';
-import { listMine, listStreamForUser, recordPlayed, submitPuzzle, votePuzzle } from '../core/ugc';
 import { creatorTotals } from '../../shared/community';
+import { completeCommunityPuzzle } from '../core/completion';
+import { listMine, listStreamForUser, submitPuzzle, votePuzzle } from '../core/ugc';
 
 // Mounted at /api/ugc by the api router.
 export const ugc = new Hono();
 
-// Every handler is wrapped so a malformed body or a transient Redis failure
-// returns a well-formed JSON error (mirroring the /api and /internal routes)
-// instead of an unhandled throw. The shapes match each route's success type so
-// the client's existing parsing/`response.ok` handling degrades gracefully.
-
 ugc.post('/submit', async (c) => {
   try {
     const body = await c.req.json<SubmitPuzzleRequest>();
-    if (!body || !body.board) {
-      return c.json<SubmitPuzzleResponse>({ ok: false, reason: 'No puzzle to submit.' }, 400);
+    if (!body || !body.board || !body.proof) {
+      return c.json<SubmitPuzzleResponse>(
+        { ok: false, reason: 'Test and solve this exact puzzle before submitting.' },
+        400
+      );
     }
-    const result = await submitPuzzle(body.board);
-    return c.json<SubmitPuzzleResponse>(result);
+    return c.json<SubmitPuzzleResponse>(await submitPuzzle(body.board, body.proof));
   } catch (error) {
     console.error(`/api/ugc/submit failed: ${error}`);
     return c.json<SubmitPuzzleResponse>(
@@ -40,8 +39,7 @@ ugc.post('/submit', async (c) => {
 ugc.get('/list', async (c) => {
   try {
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    const submissions = await listStreamForUser(username, 20);
-    return c.json<UgcListResponse>({ submissions });
+    return c.json<UgcListResponse>({ submissions: await listStreamForUser(username, 20) });
   } catch (error) {
     console.error(`/api/ugc/list failed: ${error}`);
     return c.json<UgcListResponse>({ submissions: [] }, 500);
@@ -68,8 +66,7 @@ ugc.post('/vote', async (c) => {
     if (!body || !body.id) {
       return c.json<VoteResponse>({ ok: false, votes: 0, reason: 'Missing puzzle id.' }, 400);
     }
-    const result = await votePuzzle(body.id);
-    return c.json<VoteResponse>(result);
+    return c.json<VoteResponse>(await votePuzzle(body.id));
   } catch (error) {
     console.error(`/api/ugc/vote failed: ${error}`);
     return c.json<VoteResponse>({ ok: false, votes: 0, reason: 'Could not upvote right now.' }, 500);
@@ -79,11 +76,22 @@ ugc.post('/vote', async (c) => {
 ugc.post('/played', async (c) => {
   try {
     const body = await c.req.json<MarkPlayedRequest>();
+    if (!body || typeof body.id !== 'string') {
+      return c.json<MarkPlayedResponse>(
+        { ok: false, saved: false, reason: 'Missing puzzle completion.' },
+        400
+      );
+    }
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
-    if (body && body.id) await recordPlayed(username, body.id);
-    return c.json<{ ok: boolean }>({ ok: true });
+    const result = await completeCommunityPuzzle(username, body.id, body.moves);
+    return result.ok
+      ? c.json<MarkPlayedResponse>(result)
+      : c.json<MarkPlayedResponse>(result, 400);
   } catch (error) {
     console.error(`/api/ugc/played failed: ${error}`);
-    return c.json<{ ok: boolean }>({ ok: false }, 500);
+    return c.json<MarkPlayedResponse>(
+      { ok: false, saved: false, reason: 'Could not verify this solve.' },
+      500
+    );
   }
 });

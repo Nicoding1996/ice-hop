@@ -178,6 +178,14 @@ body {
   box-shadow: 0 6px 16px rgba(255, 112, 67, 0.35);
 }
 
+.start:disabled,
+.build:disabled,
+.explore:disabled {
+  cursor: wait;
+  pointer-events: none;
+  opacity: 0.72;
+}
+
 .actions {
   display: flex;
   flex-direction: column;
@@ -206,6 +214,39 @@ body {
 
 .build:active {
   transform: translateY(1px);
+}
+
+/* Tertiary hub access: visually quiet, but still a full-size touch target. */
+.explore {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: clamp(13px, 3.8vw, 15px);
+  font-weight: 700;
+  color: #bfe3f2;
+  background: transparent;
+  cursor: pointer;
+}
+
+.explore:hover {
+  color: #eaf6fb;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+}
+
+.explore:active {
+  color: #7fe0ff;
+}
+
+.explore:focus-visible {
+  border-radius: 999px;
+  outline: 2px solid #7fe0ff;
+  outline-offset: 2px;
 }
 
 /* Difficulty badge + creator credit on a community-puzzle post, sharing one row
@@ -251,39 +292,112 @@ body {
   opacity: 0.9;
 }
 
-/* The board preview swapped into the hero for a community-puzzle post. Sized by
-   height (vh-capped) so the card never needs to scroll, whatever its height. */
+/* A puzzle board becomes the feed hero without loading Phaser. Sized by height
+   so the card stays inside Reddit's inline viewport on mobile. */
 .preview-art {
+  display: block;
   height: clamp(150px, 42vh, 300px);
   width: auto;
   max-width: 86vw;
   filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
+  transition: transform 180ms ease, filter 180ms ease;
 }
 
-/* ---- Community-puzzle layout: the board is the hero ----------------------- */
-/* On a community post the puzzle itself sells the click, so the board is the
-   biggest element, the wordmark shrinks to a brand mark, and the tagline gives
-   way to the credit row. */
-body.ugc .title {
+/* ---- Puzzle-post layout: the board is the hero --------------------------- */
+body.puzzle-preview .title {
   font-size: clamp(22px, 7vw, 32px);
   letter-spacing: 2px;
   margin-top: 0;
 }
 
+body.puzzle-preview .hero {
+  margin-bottom: 0;
+}
+
+body.puzzle-preview .wrap {
+  gap: clamp(4px, 1.1vh, 7px);
+}
+
+body.puzzle-preview .how {
+  margin-top: 2px;
+}
+
+/* The exact Community layout is safe to show, so it remains crisp and takes
+   the most room. Its creator credit replaces the generic tagline. */
 body.ugc .tag {
   display: none;
 }
 
-body.ugc .hero {
-  margin-bottom: 0;
+/* Daily shows the real board shape/counts at synthetic positions under frost.
+   The exact cells are absent from the payload until Play starts the timer. */
+.daily-preview-shell {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  border-radius: 18px;
+  overflow: hidden;
 }
 
-body.ugc .wrap {
-  gap: clamp(4px, 1.1vh, 7px);
+body.daily-preview .preview-art {
+  height: clamp(142px, 36vh, 270px);
+  opacity: 0.9;
+  filter: saturate(0.82) drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
 }
 
-body.ugc .how {
-  margin-top: 2px;
+.daily-frost {
+  position: absolute;
+  inset: 2%;
+  pointer-events: none;
+  border-radius: 16px;
+  background:
+    linear-gradient(128deg, rgba(232, 247, 255, 0.08), rgba(127, 224, 255, 0.18) 48%, rgba(232, 247, 255, 0.08)),
+    repeating-linear-gradient(145deg, rgba(255, 255, 255, 0.07) 0 2px, transparent 2px 22px);
+  border: 1px solid rgba(232, 247, 255, 0.32);
+  box-shadow: inset 0 0 28px rgba(232, 247, 255, 0.2);
+  backdrop-filter: blur(1.1px);
+  -webkit-backdrop-filter: blur(1.1px);
+  transition: opacity 180ms ease;
+}
+
+.daily-frost::after {
+  content: '';
+  position: absolute;
+  inset: 8% 10%;
+  border-radius: 40% 55% 45% 60%;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(232, 247, 255, 0.12));
+}
+
+.daily-reveal {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  z-index: 2;
+  white-space: nowrap;
+  line-height: 1;
+  padding: 7px 12px;
+  border: 1px solid rgba(127, 224, 255, 0.48);
+  border-radius: 999px;
+  color: #eaf6fb;
+  background: rgba(6, 32, 51, 0.84);
+  box-shadow: 0 4px 12px rgba(6, 18, 31, 0.28);
+  font-size: clamp(10px, 3vw, 12px);
+  font-weight: 800;
+  letter-spacing: 0.25px;
+}
+
+body.opening .preview-art {
+  transform: scale(1.035);
+  filter: drop-shadow(0 14px 24px rgba(0, 0, 0, 0.42));
+}
+
+body.opening .daily-frost {
+  opacity: 0.35;
+}
+
+body.opening .start {
+  transform: translateY(1px);
+  box-shadow: 0 6px 16px rgba(255, 112, 67, 0.35);
 }
 
 .meta {
@@ -301,11 +415,43 @@ body.ugc .how {
   opacity: 0.7;
 }
 
+/* Compact host heights and large text should keep both actions reachable. */
+@media (max-height: 560px) {
+  .wrap,
+  body.puzzle-preview .wrap {
+    padding: 8px 12px;
+    gap: 2px;
+  }
+
+  .preview-art,
+  body.daily-preview .preview-art {
+    height: 27vh;
+    min-height: 108px;
+  }
+
+  .start,
+  .build {
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+
+  .how {
+    display: none;
+  }
+}
+
 /* Respect users who prefer reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   .bob,
   .aurora,
   .stars {
     animation: none;
+  }
+
+  .preview-art,
+  .daily-frost,
+  .start,
+  .build {
+    transition: none;
   }
 }

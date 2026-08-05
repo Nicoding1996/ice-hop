@@ -4,7 +4,7 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 
 ## Versions / runtime
 
-- Node >= 22.2.0, ES modules (`"type": "module"`).
+- Node >= 22.12.0, ES modules (`"type": "module"`).
 - `devvit`, `@devvit/web`, `@devvit/start`: 0.12.24
 - `hono` 4.x + `@hono/node-server`; `phaser` 4.1.0
 - Build: Vite with the `@devvit/start/vite` plugin. TypeScript project references.
