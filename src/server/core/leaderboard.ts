@@ -458,34 +458,59 @@ export const getDailyLeaderboard = async (
 ): Promise<DailyLeaderboardSnapshot> => {
   const leaderboardKey = keys.dailyLeaderboard(ref);
   const boundedTopN = Number.isSafeInteger(topN) ? Math.max(0, Math.min(topN, 10)) : 0;
-  const [topRows, totalPlayers, viewerIndex] = await Promise.all([
-    boundedTopN > 0
-      ? redis.zRange(leaderboardKey, 0, boundedTopN - 1, { by: 'rank' })
-      : Promise.resolve([]),
-    redis.zCard(leaderboardKey),
-    viewer ? redis.zRank(leaderboardKey, viewer) : Promise.resolve(undefined),
-  ]);
 
-  const rankedViewerIndex = typeof viewerIndex === 'number' ? viewerIndex : undefined;
-  const viewerRank = rankedViewerIndex === undefined ? 0 : rankedViewerIndex + 1;
-  let nearbyEntries: LeaderboardEntry[] = [];
-  if (rankedViewerIndex !== undefined) {
-    const windowSize = 5;
-    const maxStart = Math.max(0, totalPlayers - windowSize);
-    const nearbyStart = Math.min(Math.max(0, rankedViewerIndex - 2), maxStart);
-    const nearbyRows = await redis.zRange(
-      leaderboardKey,
-      nearbyStart,
-      Math.min(totalPlayers - 1, nearbyStart + windowSize - 1),
-      { by: 'rank' }
-    );
-    nearbyEntries = leaderboardEntries(nearbyRows, nearbyStart);
+  for (let attempt = 0; attempt < TRANSACTION_ATTEMPTS; attempt++) {
+    // WATCH turns the otherwise separate bounded reads into an optimistic
+    // snapshot: if any solve changes the set before validation, EXEC aborts and
+    // the whole read is retried from the new ordering.
+    const transaction = await redis.watch(leaderboardKey);
+    const [topRows, totalPlayers, viewerIndex] = await Promise.all([
+      boundedTopN > 0
+        ? redis.zRange(leaderboardKey, 0, boundedTopN - 1, { by: 'rank' })
+        : Promise.resolve([]),
+      redis.zCard(leaderboardKey),
+      viewer ? redis.zRank(leaderboardKey, viewer) : Promise.resolve(undefined),
+    ]);
+
+    const rankedViewerIndex = typeof viewerIndex === 'number' ? viewerIndex : undefined;
+    const viewerRank = rankedViewerIndex === undefined ? 0 : rankedViewerIndex + 1;
+    let nearbyEntries: LeaderboardEntry[] = [];
+    // Validate the dependent range before reading it. Besides rejecting a
+    // racing rank/card pair, this guarantees the stop can never become -1
+    // (which Redis would interpret as "through the final member").
+    if (
+      rankedViewerIndex !== undefined &&
+      totalPlayers > 0 &&
+      rankedViewerIndex < totalPlayers
+    ) {
+      const windowSize = 5;
+      const maxStart = Math.max(0, totalPlayers - windowSize);
+      const nearbyStart = Math.min(Math.max(0, rankedViewerIndex - 2), maxStart);
+      const nearbyRows = await redis.zRange(
+        leaderboardKey,
+        nearbyStart,
+        Math.min(totalPlayers - 1, nearbyStart + windowSize - 1),
+        { by: 'rank' }
+      );
+      nearbyEntries = leaderboardEntries(nearbyRows, nearbyStart);
+    }
+
+    await transaction.multi();
+    await transaction.zCard(leaderboardKey);
+    const validation: unknown = await transaction.exec();
+    const snapshotIsStable =
+      Array.isArray(validation) &&
+      validation.length === 1 &&
+      validation[0] === totalPlayers;
+    if (!snapshotIsStable) continue;
+
+    return {
+      totalPlayers,
+      viewerRank,
+      entries: leaderboardEntries(topRows, 0),
+      nearbyEntries,
+    };
   }
 
-  return {
-    totalPlayers,
-    viewerRank,
-    entries: leaderboardEntries(topRows, 0),
-    nearbyEntries,
-  };
+  throw new Error('Daily leaderboard was too busy to read.');
 };

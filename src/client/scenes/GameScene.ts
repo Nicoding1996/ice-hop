@@ -8,6 +8,7 @@ import type {
   EndlessSolveResponse,
   EndlessTier,
   InitResponse,
+  LeaderboardEntry,
   LeaderboardResponse,
   MarkPlayedResponse,
   SolveResultDTO,
@@ -22,6 +23,7 @@ import {
   type AchievementSnapshot,
 } from '../../shared/achievements';
 import { boardSignature } from '../../shared/game/board';
+import { parseDailyPuzzleId } from '../../shared/daily';
 import { legalMoves } from '../../shared/game/moves';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
@@ -70,6 +72,170 @@ type DragState = {
   min: number;
   max: number;
   targets: { coord: number; move: Move }[];
+};
+
+const responseProperty = (value: object, key: string): unknown => Reflect.get(value, key);
+const isResponseObject = (value: unknown): value is object =>
+  typeof value === 'object' && value !== null;
+
+const parseLeaderboardEntry = (
+  value: unknown,
+  totalPlayers: number
+): LeaderboardEntry | null => {
+  if (!isResponseObject(value)) return null;
+  const rank = responseProperty(value, 'rank');
+  const username = responseProperty(value, 'username');
+  const moves = responseProperty(value, 'moves');
+  const timeMs = responseProperty(value, 'timeMs');
+  if (
+    typeof rank !== 'number' ||
+    !Number.isSafeInteger(rank) ||
+    rank < 1 ||
+    rank > totalPlayers ||
+    typeof username !== 'string' ||
+    username.length === 0 ||
+    typeof moves !== 'number' ||
+    !Number.isSafeInteger(moves) ||
+    moves < 1 ||
+    typeof timeMs !== 'number' ||
+    !Number.isSafeInteger(timeMs) ||
+    timeMs < 0
+  ) {
+    return null;
+  }
+  return { rank, username, moves, timeMs };
+};
+
+const parseLeaderboardEntries = (
+  value: unknown,
+  totalPlayers: number,
+  maxEntries: number
+): LeaderboardEntry[] | null => {
+  if (!Array.isArray(value) || value.length > maxEntries || value.length > totalPlayers) {
+    return null;
+  }
+  const entries: LeaderboardEntry[] = [];
+  for (const candidate of value) {
+    const entry = parseLeaderboardEntry(candidate, totalPlayers);
+    const previous = entries.at(-1);
+    if (!entry || (previous && entry.rank !== previous.rank + 1)) return null;
+    entries.push(entry);
+  }
+  return entries;
+};
+
+const entriesAreScoreOrdered = (entries: readonly LeaderboardEntry[]): boolean => {
+  for (let index = 1; index < entries.length; index++) {
+    const previous = entries[index - 1];
+    const current = entries[index];
+    if (
+      previous.moves > current.moves ||
+      (previous.moves === current.moves && previous.timeMs > current.timeMs)
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const sameLeaderboardEntry = (
+  left: LeaderboardEntry,
+  right: LeaderboardEntry
+): boolean =>
+  left.rank === right.rank &&
+  left.username === right.username &&
+  left.moves === right.moves &&
+  left.timeMs === right.timeMs;
+
+const leaderboardSlicesAgree = (
+  entries: readonly LeaderboardEntry[],
+  nearbyEntries: readonly LeaderboardEntry[],
+  viewerRank: number
+): boolean => {
+  const byRank = new Map<number, LeaderboardEntry>();
+  const byUsername = new Map<string, number>();
+  for (const entry of [...entries, ...nearbyEntries]) {
+    const rankedEntry = byRank.get(entry.rank);
+    const usernameRank = byUsername.get(entry.username);
+    if (
+      (rankedEntry && !sameLeaderboardEntry(rankedEntry, entry)) ||
+      (usernameRank !== undefined && usernameRank !== entry.rank)
+    ) {
+      return false;
+    }
+    byRank.set(entry.rank, entry);
+    byUsername.set(entry.username, entry.rank);
+  }
+
+  const knownEntries = [...byRank.values()].sort((left, right) => left.rank - right.rank);
+  if (!entriesAreScoreOrdered(knownEntries)) return false;
+
+  if (!context.username) return viewerRank === 0;
+  const currentRank = byUsername.get(context.username);
+  return viewerRank === 0
+    ? currentRank === undefined
+    : currentRank === viewerRank && byRank.get(viewerRank)?.username === context.username;
+};
+
+const parseLeaderboardResponse = (
+  value: unknown,
+  expectedPuzzleId: string
+): LeaderboardResponse | undefined => {
+  if (!isResponseObject(value)) return undefined;
+  const expectedRef = parseDailyPuzzleId(expectedPuzzleId);
+  if (!expectedRef) return undefined;
+  const puzzleId = responseProperty(value, 'puzzleId');
+  const date = responseProperty(value, 'date');
+  const totalPlayers = responseProperty(value, 'totalPlayers');
+  const viewerRank = responseProperty(value, 'viewerRank');
+  if (
+    puzzleId !== expectedPuzzleId ||
+    date !== expectedRef.date ||
+    typeof totalPlayers !== 'number' ||
+    !Number.isSafeInteger(totalPlayers) ||
+    totalPlayers < 0 ||
+    typeof viewerRank !== 'number' ||
+    !Number.isSafeInteger(viewerRank) ||
+    viewerRank < 0 ||
+    viewerRank > totalPlayers
+  ) {
+    return undefined;
+  }
+
+  const entries = parseLeaderboardEntries(
+    responseProperty(value, 'entries'),
+    totalPlayers,
+    10
+  );
+  const nearbyEntries = parseLeaderboardEntries(
+    responseProperty(value, 'nearbyEntries'),
+    totalPlayers,
+    5
+  );
+  if (
+    !entries ||
+    !nearbyEntries ||
+    !entriesAreScoreOrdered(entries) ||
+    !entriesAreScoreOrdered(nearbyEntries) ||
+    !leaderboardSlicesAgree(entries, nearbyEntries, viewerRank) ||
+    entries.length !== Math.min(10, totalPlayers) ||
+    entries.some((entry, index) => entry.rank !== index + 1) ||
+    (viewerRank === 0
+      ? nearbyEntries.length !== 0
+      : nearbyEntries.length !== Math.min(5, totalPlayers) ||
+        !nearbyEntries.some((entry) => entry.rank === viewerRank))
+  ) {
+    return undefined;
+  }
+
+  return {
+    puzzleId: expectedPuzzleId,
+    date: expectedRef.date,
+    totalPlayers,
+    viewerRank,
+    entries,
+    nearbyEntries,
+  };
 };
 
 export class GameScene extends Scene {
@@ -2450,7 +2616,9 @@ export class GameScene extends Scene {
       // The verified completion promise must resolve here so an optional,
       // potentially slow leaderboard request can never block score comments.
       // Leaderboard enrichment continues independently behind generation guards.
-      void this.loadDailyLeaderboard(status, lines, generation, onLeaderboardLoaded);
+      void this.loadDailyLeaderboard(status, lines, generation, onLeaderboardLoaded).catch(
+        (error) => console.error(error)
+      );
     } catch (error) {
       console.error(error);
       if (!this.isCurrentPlay(generation) || !status.scene) return;
@@ -2529,10 +2697,32 @@ export class GameScene extends Scene {
       }
     };
 
-    // When the viewer is outside the first screenful, make their local context
-    // the first page. The global top ten remains available on following pages.
+    // When the viewer is outside the first screenful, make one page-sized
+    // local window the first page. Re-centre the server's five-row window for
+    // short viewports so the page labelled "Around you" always contains You.
     if (data.viewerRank > rowsPerPage && data.nearbyEntries.length > 0) {
-      addPages('Around you', data.nearbyEntries);
+      const viewerIndex = data.nearbyEntries.findIndex(
+        (entry) => entry.rank === data.viewerRank
+      );
+      if (viewerIndex >= 0) {
+        const maxStart = Math.max(0, data.nearbyEntries.length - rowsPerPage);
+        const aroundStart = Math.min(
+          Math.max(0, viewerIndex - Math.floor(rowsPerPage / 2)),
+          maxStart
+        );
+        const aroundEntries = data.nearbyEntries.slice(
+          aroundStart,
+          aroundStart + rowsPerPage
+        );
+        const first = aroundEntries[0];
+        const last = aroundEntries.at(-1);
+        if (first && last) {
+          pages.push({
+            label: `Around you \u00B7 #${first.rank}${last.rank === first.rank ? '' : `\u2013#${last.rank}`}`,
+            entries: aroundEntries,
+          });
+        }
+      }
     }
     addPages('Top solvers', data.entries);
     if (pages.length === 0) return;
@@ -2715,8 +2905,8 @@ export class GameScene extends Scene {
         `/api/leaderboard?puzzleId=${encodeURIComponent(this.dailyPuzzleId)}`
       );
       if (!response.ok) return undefined;
-      const data: LeaderboardResponse = await response.json();
-      return data.puzzleId === this.dailyPuzzleId ? data : undefined;
+      const value: unknown = await response.json();
+      return parseLeaderboardResponse(value, this.dailyPuzzleId);
     } catch {
       return undefined;
     }
