@@ -156,6 +156,14 @@ type VerifiedSolve = DailyVerifiedSolve | CommunityVerifiedSolve;
 
 type Point = { readonly x: number; readonly y: number };
 
+type SliderDirection = 'left' | 'right' | 'up' | 'down';
+
+type SliderMoveVisual = {
+  readonly direction: SliderDirection;
+  readonly leadingCell: number;
+  readonly distance: number;
+};
+
 type DragTarget = {
   readonly move: Move;
   readonly delta: number;
@@ -165,15 +173,21 @@ type SealDrag = {
   readonly pointerId: number;
   readonly pieceIndex: number;
   readonly orient: 'H' | 'V';
+  readonly owner: HTMLElement;
   readonly control: HTMLButtonElement;
   readonly art: Element | null;
   readonly targets: readonly DragTarget[];
   readonly min: number;
   readonly max: number;
   readonly viewUnitsPerCssPixel: number;
+  readonly startCoordinate: number;
+  readonly clearSelection: () => void;
   current: number;
-  lastCoordinate: number;
   moved: boolean;
+};
+
+const ACTIVE_POINTER_LISTENER_OPTIONS: AddEventListenerOptions = {
+  passive: false,
 };
 
 const property = (value: object, key: string): unknown => Reflect.get(value, key);
@@ -552,6 +566,35 @@ const centerOfCells = (board: Board, cells: readonly number[]): Point => {
   return { x: x / cells.length, y: y / cells.length };
 };
 
+const sliderMoveVisual = (
+  board: Board,
+  piece: Piece,
+  move: Move
+): SliderMoveVisual | null => {
+  if (piece.kind !== 'SLIDER' || move.kind !== 'SLIDER') return null;
+  const origin = centerOfCells(board, piece.cells);
+  const destination = centerOfCells(board, move.to);
+  const orient = piece.orient ?? 'H';
+  const delta = orient === 'H' ? destination.x - origin.x : destination.y - origin.y;
+  if (delta === 0) return null;
+  const movesForward = delta > 0;
+  const leadingCell = movesForward ? move.to[move.to.length - 1] : move.to[0];
+  if (leadingCell === undefined) return null;
+  const direction: SliderDirection =
+    orient === 'H'
+      ? movesForward
+        ? 'right'
+        : 'left'
+      : movesForward
+        ? 'down'
+        : 'up';
+  return {
+    direction,
+    leadingCell,
+    distance: Math.round(Math.abs(delta) / CELL),
+  };
+};
+
 const viewSize = (board: Board): Point => ({
   x: board.width * CELL + PAD * 2,
   y: board.height * CELL + PAD * 2,
@@ -648,6 +691,34 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
   private drag: SealDrag | null = null;
   private suppressedClickPiece: number | null = null;
   private suppressedClickUntil = 0;
+  private readonly handleActiveSealPointerMove = (event: PointerEvent): void => {
+    this.moveSealPointerDrag(event);
+  };
+  private readonly handleActiveSealPointerUp = (event: PointerEvent): void => {
+    this.endSealPointerDrag(event);
+  };
+  private readonly handleActiveSealPointerCancel = (event: PointerEvent): void => {
+    this.cancelSealPointerDrag(event);
+  };
+  private readonly handleActiveSealPointerOut = (event: PointerEvent): void => {
+    const drag = this.drag;
+    if (
+      !drag ||
+      event.pointerId !== drag.pointerId ||
+      event.relatedTarget !== null
+    ) {
+      return;
+    }
+    this.abortActiveSealDrag(true);
+  };
+  private readonly handleActiveSealWindowExit = (): void => {
+    this.abortActiveSealDrag(false);
+  };
+  private readonly handleSealPointerCaptureLost = (event: PointerEvent): void => {
+    const drag = this.drag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    this.abortActiveSealDrag(true);
+  };
   private loadErrorMessage: string;
   private expansionPending = false;
   private scorePosted = false;
@@ -861,6 +932,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
   }
 
   private beginGeneration(): number {
+    this.abortActiveSealDrag(false);
     this.generation += 1;
     this.transitionSequence += 1;
     this.announcementSequence += 1;
@@ -870,7 +942,6 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     this.hydrationKeyboardFocus = false;
     this.completionKeyboardFocus = false;
     this.verificationExpired = false;
-    this.drag = null;
     this.suppressedClickPiece = null;
     this.suppressedClickUntil = 0;
     return this.generation;
@@ -1032,6 +1103,8 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
   }
 
   private render(): void {
+    // Any stage replacement is terminal for the active pointer surface.
+    this.abortActiveSealDrag(false);
     this.options.root.dataset.state = this.state;
     const busy =
       this.state === 'loading' ||
@@ -1380,6 +1453,28 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     return play;
   }
 
+  private firstMoveInstruction(): string {
+    const puzzle = this.currentPuzzle();
+    const selectedPiece = this.selected === null ? undefined : this.pieces[this.selected];
+    const selectedSealHasMoves =
+      puzzle !== null &&
+      selectedPiece?.kind === 'SLIDER' &&
+      legalMoves(puzzle.board, this.pieces).some(
+        (move) => move.pieceIndex === this.selected
+      );
+    return selectedSealHasMoves
+      ? 'Tap the ice lane where the seal should stop.'
+      : 'Tap an animal, then tap a move marker.';
+  }
+
+  private populateFirstMoveInstructions(instructions: HTMLElement): void {
+    instructions.replaceChildren(
+      document.createTextNode(this.firstMoveInstruction()),
+      document.createElement('br'),
+      document.createTextNode('Get every penguin into the water.')
+    );
+  }
+
   private buildPlayingFooter(): HTMLElement {
     const footer = document.createElement('div');
     footer.className = 'inline-play-footer';
@@ -1419,14 +1514,8 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       );
       footer.append(restart);
     } else {
-      const instructions = makeParagraph(
-        'inline-instructions',
-        'Tap a penguin to hop, drag a seal to slide.'
-      );
-      instructions.append(
-        document.createElement('br'),
-        document.createTextNode('Get every penguin into the water.')
-      );
+      const instructions = makeParagraph('inline-instructions', '');
+      this.populateFirstMoveInstructions(instructions);
       footer.append(instructions);
     }
     return footer;
@@ -1470,7 +1559,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       }
     }
     const selectedPiece = this.selected === null ? undefined : this.pieces[this.selected];
-    if (selectedPiece?.kind === 'HOPPER') {
+    if (selectedPiece && selectedPiece.kind !== 'BLOCKER') {
       visual
         .querySelector(`[data-inline-piece-inner="${this.selected}"]`)
         ?.classList.add('is-selected');
@@ -1504,6 +1593,10 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       for (const art of Array.from(visual.querySelectorAll('[data-inline-piece-inner]'))) {
         art.classList.remove('is-selected');
       }
+      const instructions = this.stage.querySelector('.inline-instructions');
+      if (instructions instanceof HTMLElement) {
+        this.populateFirstMoveInstructions(instructions);
+      }
     };
 
     this.pieces.forEach((piece, pieceIndex) => {
@@ -1521,37 +1614,34 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
         'aria-label',
         `${piece.kind === 'HOPPER' ? 'Penguin' : 'Seal'} at row ${row}, column ${column}`
       );
-      this.positionControl(
-        control,
-        center,
-        piece.kind === 'SLIDER' && piece.orient === 'H' ? CELL * 1.8 : CELL * 0.82,
-        piece.kind === 'SLIDER' && piece.orient === 'V' ? CELL * 1.8 : CELL * 0.82,
-        size
-      );
+      const controlWidth =
+        piece.kind === 'SLIDER'
+          ? (piece.orient ?? 'H') === 'H'
+            ? CELL * 2
+            : CELL
+          : CELL * 0.82;
+      const controlHeight =
+        piece.kind === 'SLIDER'
+          ? (piece.orient ?? 'H') === 'V'
+            ? CELL * 2
+            : CELL
+          : CELL * 0.82;
+      this.positionControl(control, center, controlWidth, controlHeight, size);
       if (this.selected === pieceIndex) control.classList.add('is-selected');
       control.addEventListener('click', (event) => {
         if (this.clickIsSuppressed(pieceIndex)) return;
-        if (piece.kind === 'SLIDER' && event.detail !== 0) {
-          control.blur();
-          this.announce('Drag the seal along the ice.');
-          return;
-        }
         this.selectPiece(pieceIndex, event.detail === 0);
       });
       if (piece.kind === 'SLIDER') {
+        // Touch uses native tap selection because Reddit owns feed-pan gestures.
+        // Mouse and pen keep direct drag as an optional desktop enhancement.
         control.addEventListener('pointerdown', (event) =>
-          this.beginSealDrag(
+          this.beginSealPointerDrag(
             event,
             control,
             pieceIndex,
             clearSelectionInPlace
           )
-        );
-        control.addEventListener('pointermove', (event) => this.moveSealDrag(event));
-        control.addEventListener('pointerup', (event) => this.endSealDrag(event));
-        control.addEventListener('pointercancel', (event) => this.cancelSealDrag(event));
-        control.addEventListener('lostpointercapture', (event) =>
-          this.loseSealPointerCapture(event)
         );
       }
       controls.append(control);
@@ -1562,44 +1652,53 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       if (selectedPiece) {
         const destinations = allMoves.filter((move) => move.pieceIndex === this.selected);
         for (const move of destinations) {
-          // Seal destinations stay invisible to pointer users because seals are
-          // drag-only. They remain labelled, focusable keyboard targets and the
-          // focused target receives the standard visible focus outline.
-          let targetCells: readonly number[] = move.to;
-          if (selectedPiece.kind === 'SLIDER') {
-            const origin = centerOfCells(board, selectedPiece.cells);
-            const destination = centerOfCells(board, move.to);
-            const movesForward =
-              selectedPiece.orient === 'V'
-                ? destination.y > origin.y
-                : destination.x > origin.x;
-            const leadingCell = movesForward
-              ? move.to[move.to.length - 1]
-              : move.to[0];
-            if (leadingCell !== undefined) targetCells = [leadingCell];
-          }
+          // Every legal seal offset maps to a distinct leading-cell button.
+          // Shared visual metadata keeps the lane, hit target, and spoken
+          // direction aligned without overlapping full-footprint controls.
+          const sliderVisual =
+            selectedPiece.kind === 'SLIDER'
+              ? sliderMoveVisual(board, selectedPiece, move)
+              : null;
+          const targetCells: readonly number[] = sliderVisual
+            ? [sliderVisual.leadingCell]
+            : move.to;
           const center = centerOfCells(board, targetCells);
           const target = document.createElement('button');
           target.type = 'button';
           target.className = `inline-target inline-target--${selectedPiece.kind === 'HOPPER' ? 'hop' : 'slide'}`;
+          if (sliderVisual) {
+            target.classList.add(`inline-target--slide-${sliderVisual.direction}`);
+          }
           const firstCell = targetCells[0] ?? move.to[0] ?? 0;
           const row = Math.floor(firstCell / board.width) + 1;
           const column = (firstCell % board.width) + 1;
           const landsInWater =
             selectedPiece.kind === 'HOPPER' && board.holes.includes(firstCell);
+          const sliderLabel = sliderVisual
+            ? `Slide seal ${sliderVisual.direction} ${sliderVisual.distance} ${sliderVisual.distance === 1 ? 'cell' : 'cells'}`
+            : null;
           target.setAttribute(
             'aria-label',
-            landsInWater
-              ? `Hop penguin into water at row ${row}, column ${column}`
-              : `${selectedPiece.kind === 'HOPPER' ? 'Hop penguin' : 'Slide seal'} to row ${row}, column ${column}`
+            sliderLabel ??
+              (landsInWater
+                ? `Hop penguin into water at row ${row}, column ${column}`
+                : `Hop penguin to row ${row}, column ${column}`)
           );
-          this.positionControl(
-            target,
-            center,
-            CELL * 0.96,
-            CELL * 0.96,
-            size
-          );
+          const targetSize = sliderVisual ? CELL : CELL * 0.96;
+          this.positionControl(target, center, targetSize, targetSize, size);
+          if (sliderVisual) {
+            const clearPreview = (): void => {
+              target.classList.remove('is-previewing');
+            };
+            target.addEventListener('pointerdown', (event) => {
+              if (event.pointerType === 'mouse' && event.button !== 0) return;
+              target.classList.add('is-previewing');
+            });
+            target.addEventListener('pointerup', clearPreview);
+            target.addEventListener('pointercancel', clearPreview);
+            target.addEventListener('pointerleave', clearPreview);
+            target.addEventListener('blur', clearPreview);
+          }
           target.addEventListener('click', (event) =>
             this.attemptMove(move, event.detail === 0)
           );
@@ -1636,9 +1735,69 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
 
     if (this.selected === null) return effects;
     const selectedPiece = this.pieces[this.selected];
-    if (!selectedPiece || selectedPiece.kind !== 'HOPPER') return effects;
+    if (!selectedPiece) return effects;
     const center = centerOfCells(board, selectedPiece.cells);
     const destinations = allMoves.filter((move) => move.pieceIndex === this.selected);
+
+    if (selectedPiece.kind === 'SLIDER') {
+      const orient = selectedPiece.orient ?? 'H';
+      const destinationCenters = destinations.map((move) => centerOfCells(board, move.to));
+      const axisValues = [
+        orient === 'H' ? center.x : center.y,
+        ...destinationCenters.map((destination) =>
+          orient === 'H' ? destination.x : destination.y
+        ),
+      ];
+      const axisMin = Math.min(...axisValues);
+      const axisMax = Math.max(...axisValues);
+      const lane = document.createElementNS(namespace, 'rect');
+      const laneX = orient === 'H' ? axisMin - CELL : center.x - CELL * 0.42;
+      const laneY = orient === 'V' ? axisMin - CELL : center.y - CELL * 0.42;
+      const laneWidth =
+        orient === 'H' ? axisMax - axisMin + CELL * 2 : CELL * 0.84;
+      const laneHeight =
+        orient === 'V' ? axisMax - axisMin + CELL * 2 : CELL * 0.84;
+      lane.classList.add('inline-seal-lane');
+      lane.setAttribute('x', laneX.toString());
+      lane.setAttribute('y', laneY.toString());
+      lane.setAttribute('width', laneWidth.toString());
+      lane.setAttribute('height', laneHeight.toString());
+      lane.setAttribute('rx', (CELL * 0.28).toString());
+      lane.setAttribute('fill', 'none');
+      lane.setAttribute('stroke', '#e8f7ff');
+      lane.setAttribute('stroke-opacity', '0.82');
+      lane.setAttribute('stroke-width', '3');
+      lane.setAttribute('vector-effect', 'non-scaling-stroke');
+      effects.append(lane);
+
+      for (const move of destinations) {
+        const visual = sliderMoveVisual(board, selectedPiece, move);
+        if (!visual) continue;
+        const stopCenter = centerOfCells(board, [visual.leadingCell]);
+        const notch = document.createElementNS(namespace, 'line');
+        notch.classList.add('inline-seal-stop');
+        if (orient === 'H') {
+          notch.setAttribute('x1', stopCenter.x.toString());
+          notch.setAttribute('x2', stopCenter.x.toString());
+          notch.setAttribute('y1', (stopCenter.y - CELL * 0.2).toString());
+          notch.setAttribute('y2', (stopCenter.y + CELL * 0.2).toString());
+        } else {
+          notch.setAttribute('x1', (stopCenter.x - CELL * 0.2).toString());
+          notch.setAttribute('x2', (stopCenter.x + CELL * 0.2).toString());
+          notch.setAttribute('y1', stopCenter.y.toString());
+          notch.setAttribute('y2', stopCenter.y.toString());
+        }
+        notch.setAttribute('stroke', '#e8f7ff');
+        notch.setAttribute('stroke-opacity', '0.9');
+        notch.setAttribute('stroke-width', '4');
+        notch.setAttribute('stroke-linecap', 'round');
+        notch.setAttribute('vector-effect', 'non-scaling-stroke');
+        effects.append(notch);
+      }
+      return effects;
+    }
+
+    if (selectedPiece.kind !== 'HOPPER') return effects;
 
     const ring = document.createElementNS(namespace, 'circle');
     ring.setAttribute('cx', center.x.toString());
@@ -2424,25 +2583,58 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     }
   }
 
-  private beginSealDrag(
+  private beginSealPointerDrag(
     event: PointerEvent,
     control: HTMLButtonElement,
     pieceIndex: number,
     clearSelection: () => void
   ): void {
-    event.preventDefault();
-    if (this.expansionPending || this.drag) return;
+    // A touch swipe belongs to Reddit's feed. Touch taps continue to the
+    // button's native click handler, which opens the destination controls.
+    if (event.pointerType === 'touch' || event.button !== 0) return;
+    const drag = this.startSealDrag(
+      control,
+      pieceIndex,
+      clearSelection,
+      event.pointerId,
+      event.clientX,
+      event.clientY
+    );
+    if (!drag) return;
+    if (event.cancelable) event.preventDefault();
+    drag.owner.addEventListener(
+      'lostpointercapture',
+      this.handleSealPointerCaptureLost
+    );
+    this.startSealPointerTracking();
+    if (typeof drag.owner.setPointerCapture === 'function') {
+      try {
+        drag.owner.setPointerCapture(event.pointerId);
+      } catch {
+        // Active window listeners still track this pointer inside the iframe.
+      }
+    }
+  }
+
+  private startSealDrag(
+    control: HTMLButtonElement,
+    pieceIndex: number,
+    clearSelection: () => void,
+    pointerId: number,
+    clientX: number,
+    clientY: number
+  ): SealDrag | null {
+    if (this.expansionPending || this.drag) return null;
     const puzzle = this.currentPuzzle();
-    if (this.state !== 'playing' || !puzzle || event.button !== 0) return;
+    if (this.state !== 'playing' || !puzzle) return null;
     if (!this.session && !this.hydrationPending) this.hydrateSession();
     const piece = this.pieces[pieceIndex];
-    if (!piece || piece.kind !== 'SLIDER') return;
-    clearSelection();
+    if (!piece || piece.kind !== 'SLIDER') return null;
     control.blur();
     const boardElement = control.closest('.inline-board');
-    if (!(boardElement instanceof HTMLElement)) return;
+    if (!(boardElement instanceof HTMLElement)) return null;
     const rect = boardElement.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+    if (rect.width <= 0 || rect.height <= 0) return null;
     const size = viewSize(puzzle.board);
     const origin = centerOfCells(puzzle.board, piece.cells);
     const orient = piece.orient ?? 'H';
@@ -2460,45 +2652,70 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       });
     const values = [0, ...targets.map((target) => target.delta)];
     const art = this.stage.querySelector(`[data-inline-piece-art="${pieceIndex}"]`);
-    this.drag = {
-      pointerId: event.pointerId,
+    const startCoordinate = orient === 'H' ? clientX : clientY;
+    const drag: SealDrag = {
+      pointerId,
       pieceIndex,
       orient,
+      owner: boardElement,
       control,
       art,
       targets,
       min: Math.min(...values),
       max: Math.max(...values),
       viewUnitsPerCssPixel,
+      startCoordinate,
+      clearSelection,
       current: 0,
-      lastCoordinate: orient === 'H' ? event.clientX : event.clientY,
       moved: false,
     };
-    control.setPointerCapture(event.pointerId);
+    this.drag = drag;
     control.classList.add('is-dragging');
     if (art) art.classList.add('is-dragging');
+    return drag;
   }
 
-  private moveSealDrag(event: PointerEvent): void {
+  private moveSealPointerDrag(event: PointerEvent): void {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
-    event.preventDefault();
-    const coordinate = drag.orient === 'H' ? event.clientX : event.clientY;
-    const movement = coordinate - drag.lastCoordinate;
-    drag.lastCoordinate = coordinate;
-    drag.current = Math.max(drag.min, Math.min(drag.max, drag.current + movement));
-    if (!drag.moved && Math.abs(drag.current) > SEAL_TAP_SLOP_PX) {
+    if (event.cancelable) event.preventDefault();
+    this.updateSealDragPosition(drag, event.clientX, event.clientY);
+  }
+
+  private updateSealDragPosition(
+    drag: SealDrag,
+    clientX: number,
+    clientY: number
+  ): void {
+    const coordinate = drag.orient === 'H' ? clientX : clientY;
+    const displacement = coordinate - drag.startCoordinate;
+    drag.current = Math.max(drag.min, Math.min(drag.max, displacement));
+    if (!drag.moved && Math.abs(displacement) > SEAL_TAP_SLOP_PX) {
       drag.moved = true;
+      drag.clearSelection();
     }
     this.paintDrag(drag, drag.current);
   }
 
-  private endSealDrag(event: PointerEvent): void {
+  private endSealPointerDrag(event: PointerEvent): void {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
-    event.preventDefault();
+    if (event.cancelable) event.preventDefault();
+    this.finishSealDrag(drag, event.clientX, event.clientY);
+  }
+
+  private finishSealDrag(
+    drag: SealDrag,
+    clientX: number,
+    clientY: number
+  ): void {
+    if (this.drag !== drag) return;
+    // Pointer implementations can coalesce the final movement into pointerup.
+    // Sampling its coordinate keeps a real mouse/pen drag from becoming a tap.
+    this.updateSealDragPosition(drag, clientX, clientY);
     this.drag = null;
-    this.releasePointer(drag);
+    this.stopSealInputTracking();
+    this.releaseSealInput(drag);
     let best: DragTarget | null = null;
     let bestDistance = Math.abs(drag.current);
     for (const target of drag.targets) {
@@ -2509,13 +2726,12 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       }
     }
     const tapLike = !drag.moved;
+    this.suppressNextClick(drag.pieceIndex);
     if (tapLike) {
-      this.suppressNextClick(drag.pieceIndex);
       this.snapDragBack(drag);
-      this.announce('Drag the seal along the ice.');
+      this.selectPiece(drag.pieceIndex);
       return;
     }
-    this.suppressNextClick(drag.pieceIndex);
     if (best) {
       this.attemptMove(best.move);
     } else {
@@ -2523,31 +2739,27 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     }
   }
 
-  private cancelSealDrag(event: PointerEvent): void {
+  private cancelSealPointerDrag(event: PointerEvent): void {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
-    event.preventDefault();
-    this.drag = null;
-    this.releasePointer(drag);
-    this.suppressNextClick(drag.pieceIndex);
-    this.snapDragBack(drag);
-    this.announce('Seal returned to its starting place.');
+    if (event.cancelable) event.preventDefault();
+    this.abortActiveSealDrag(true);
   }
 
-  private loseSealPointerCapture(event: PointerEvent): void {
+  private abortActiveSealDrag(announce: boolean): void {
     const drag = this.drag;
-    if (!drag || event.pointerId !== drag.pointerId) return;
     this.drag = null;
+    this.stopSealInputTracking();
+    if (!drag) return;
+    this.releaseSealInput(drag);
     this.suppressNextClick(drag.pieceIndex);
     this.snapDragBack(drag);
-    this.announce('Seal drag ended before a move was chosen.');
+    if (announce) this.announce('Seal returned to its starting place.');
   }
 
   private paintDrag(drag: SealDrag, value: number): void {
     const cssX = drag.orient === 'H' ? value : 0;
     const cssY = drag.orient === 'V' ? value : 0;
-    drag.control.style.setProperty('--drag-x', `${cssX}px`);
-    drag.control.style.setProperty('--drag-y', `${cssY}px`);
     if (drag.art instanceof SVGElement) {
       const viewValue = value * drag.viewUnitsPerCssPixel;
       const viewX = drag.orient === 'H' ? viewValue : 0;
@@ -2572,11 +2784,55 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     }, 150);
   }
 
-  private releasePointer(drag: SealDrag): void {
+  private startSealPointerTracking(): void {
+    this.stopSealInputTracking();
+    window.addEventListener(
+      'pointermove',
+      this.handleActiveSealPointerMove,
+      ACTIVE_POINTER_LISTENER_OPTIONS
+    );
+    window.addEventListener(
+      'pointerup',
+      this.handleActiveSealPointerUp,
+      ACTIVE_POINTER_LISTENER_OPTIONS
+    );
+    window.addEventListener(
+      'pointercancel',
+      this.handleActiveSealPointerCancel,
+      ACTIVE_POINTER_LISTENER_OPTIONS
+    );
+    window.addEventListener(
+      'pointerout',
+      this.handleActiveSealPointerOut,
+      ACTIVE_POINTER_LISTENER_OPTIONS
+    );
+    window.addEventListener('blur', this.handleActiveSealWindowExit);
+    window.addEventListener('pagehide', this.handleActiveSealWindowExit);
+  }
+
+  private stopSealInputTracking(): void {
+    window.removeEventListener('pointermove', this.handleActiveSealPointerMove);
+    window.removeEventListener('pointerup', this.handleActiveSealPointerUp);
+    window.removeEventListener('pointercancel', this.handleActiveSealPointerCancel);
+    window.removeEventListener('pointerout', this.handleActiveSealPointerOut);
+    window.removeEventListener('blur', this.handleActiveSealWindowExit);
+    window.removeEventListener('pagehide', this.handleActiveSealWindowExit);
+  }
+
+  private releaseSealInput(drag: SealDrag): void {
     drag.control.classList.remove('is-dragging');
     if (drag.art) drag.art.classList.remove('is-dragging');
-    if (drag.control.hasPointerCapture(drag.pointerId)) {
-      drag.control.releasePointerCapture(drag.pointerId);
+    drag.owner.removeEventListener(
+      'lostpointercapture',
+      this.handleSealPointerCaptureLost
+    );
+    if (typeof drag.owner.hasPointerCapture !== 'function') return;
+    try {
+      if (drag.owner.hasPointerCapture(drag.pointerId)) {
+        drag.owner.releasePointerCapture(drag.pointerId);
+      }
+    } catch {
+      // Capture may already have been revoked by the embedded browser.
     }
   }
 

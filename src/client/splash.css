@@ -907,8 +907,13 @@ body.inline-daily-active .wrap {
 }
 
 .inline-piece--slider {
+  /* Reddit owns feed-pan gestures on mobile. A tap selects the seal and opens
+     visible destination buttons; mouse and pen can still drag directly. */
   cursor: grab;
-  touch-action: none;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .inline-piece--slider:active,
@@ -918,6 +923,12 @@ body.inline-daily-active .wrap {
 
 .inline-piece-control.is-selected {
   z-index: 3;
+}
+
+.inline-piece--slider.is-selected {
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 209, 102, 0.95),
+    0 0 0 2px rgba(6, 32, 51, 0.42);
 }
 
 /* Visual dots/rings live in the board-coordinate SVG layer. These buttons are
@@ -930,10 +941,90 @@ body.inline-daily-active .wrap {
 }
 
 .inline-target--slide {
-  border-radius: 12px;
-  /* Preserve keyboard access without turning visually empty ice into a hidden
-     pointer move. Pointer users drag seals, exactly as in GameScene. */
+  --stop-rotation: 45deg;
+  overflow: visible;
+  border-radius: 22%;
+  pointer-events: auto;
+}
+
+.inline-target--slide-left {
+  --stop-rotation: -135deg;
+}
+
+.inline-target--slide-up {
+  --stop-rotation: -45deg;
+}
+
+.inline-target--slide-down {
+  --stop-rotation: 135deg;
+}
+
+/* A stop remains a non-overlapping one-cell button. While pressed or keyboard
+   focused, this ice-toned footprint previews the seal's exact 1x2 landing. */
+.inline-target--slide::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 2px solid rgba(232, 247, 255, 0.96);
+  border-radius: 24%;
+  background: rgba(191, 227, 242, 0.34);
+  box-shadow: 0 3px 10px rgba(6, 32, 51, 0.3);
+  content: '';
+  opacity: 0;
   pointer-events: none;
+  transition: opacity 90ms ease-out;
+}
+
+.inline-target--slide-left::before {
+  width: 200%;
+}
+
+.inline-target--slide-right::before {
+  right: 0;
+  left: auto;
+  width: 200%;
+}
+
+.inline-target--slide-up::before {
+  height: 200%;
+}
+
+.inline-target--slide-down::before {
+  top: auto;
+  bottom: 0;
+  height: 200%;
+}
+
+.inline-target--slide::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  box-sizing: border-box;
+  width: clamp(11px, 23%, 16px);
+  aspect-ratio: 1;
+  border-top: 3px solid #e8f7ff;
+  border-right: 3px solid #e8f7ff;
+  content: '';
+  filter: drop-shadow(0 2px 2px rgba(6, 32, 51, 0.55));
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(var(--stop-rotation));
+  transition: transform 90ms ease-out;
+}
+
+.inline-target--slide:active::before,
+.inline-target--slide.is-previewing::before {
+  opacity: 0.72;
+}
+
+.inline-target--slide:focus-visible::before {
+  opacity: 0.48;
+}
+
+.inline-target--slide:active::after {
+  transform: translate(-50%, -50%) rotate(var(--stop-rotation)) scale(0.84);
 }
 
 [data-inline-piece-art],
