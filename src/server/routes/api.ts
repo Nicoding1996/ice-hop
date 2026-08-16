@@ -85,9 +85,9 @@ export const api = new Hono();
 api.route('/ugc', ugc);
 
 /**
- * Read-only feed metadata. Daily responses include the exact immutable board so
- * historical posts can restore the same playable inline card as new posts. This
- * route never calls `issueDailyPlay` and never returns a `playId`.
+ * Read-only feed metadata. Daily and Community responses include the exact
+ * immutable board so historical posts can restore the same playable inline
+ * card as new posts. This route never issues a play capability.
  */
 api.get('/post-preview', async (c) => {
   try {
@@ -122,8 +122,11 @@ api.get('/post-preview', async (c) => {
 
         return c.json<PostPreviewResponse>({
           type: 'post-preview',
+          version: 2,
           kind: 'ugc',
+          id: sub.id,
           board: structure.board,
+          par: sub.par,
           difficulty: difficultyFromPar(sub.par),
           creator: sub.creator,
           solves,
@@ -144,10 +147,6 @@ api.get('/post-preview', async (c) => {
     }
 
     const puzzle = await getDailyPuzzle(dailyRef);
-    const username = await reddit.getCurrentUsername();
-    const solveRecord = username
-      ? await getBestDailySolve(dailyRef, username)
-      : null;
     return c.json<PostPreviewResponse>({
       type: 'post-preview',
       version: 2,
@@ -157,9 +156,6 @@ api.get('/post-preview', async (c) => {
       board: puzzle.board,
       par: puzzle.par,
       difficulty: difficultyFromPar(puzzle.par),
-      ...(solveRecord
-        ? { solvedResult: { moves: solveRecord.moves, stars: solveRecord.stars } }
-        : {}),
     });
   } catch (error) {
     console.error(`/api/post-preview failed: ${error}`);

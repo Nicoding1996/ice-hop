@@ -122,11 +122,15 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
   const post = await reddit.submitCustomPost({
     title: `Ice Hop \u2014 ${article} ${label} puzzle by u/${submission.creator}`,
     entry: 'default',
-    // Bake the board + difficulty + creator into the post so the preview renders
-    // on first paint, with no /api/init round-trip (the thumbnail feels instant).
+    // Bake the exact immutable puzzle identity and ordered board into postData
+    // so current Community posts are playable inline on first paint. The host
+    // mapping remains authoritative and `/api/init` reconciles this snapshot.
     postData: splashData({
+      version: 2,
       kind: 'ugc',
+      id: submission.id,
       board: submission.board,
+      par: submission.par,
       difficulty: band,
       creator: submission.creator,
     }),

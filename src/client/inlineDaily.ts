@@ -1,5 +1,8 @@
 import { showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
-import type { DailySplashSnapshotV2 } from '../shared/api';
+import type {
+  DailySplashSnapshotV2,
+  UgcSplashSnapshotV2,
+} from '../shared/api';
 import type { Board, Move, Piece } from '../shared/game/types';
 import { parseDailyPuzzleId } from '../shared/daily';
 import { legalMoves } from '../shared/game/moves';
@@ -19,10 +22,11 @@ const MAX_COUNT = 10_000_000;
 const MAX_STREAK = 100_000;
 const SEAL_TAP_SLOP_PX = 10;
 
-type InlineDailyState =
+export type InlinePuzzleKind = 'daily' | 'ugc';
+
+type InlinePuzzleState =
   | 'preview'
   | 'loading'
-  | 'solved-recap'
   | 'playing'
   | 'animating'
   | 'awaiting-session'
@@ -39,10 +43,9 @@ export type InlineBoardRenderer = (
   label: string
 ) => string;
 
-export type InlineDailyOptions = {
+type InlineSharedOptions = {
   readonly root: HTMLElement;
   readonly postId: string;
-  readonly snapshot?: DailySplashSnapshotV2;
   readonly renderBoard: InlineBoardRenderer;
   readonly openExpanded: (
     event: MouseEvent,
@@ -53,15 +56,28 @@ export type InlineDailyOptions = {
   readonly onHydrated?: () => void;
 };
 
-export type InlineDailyController = {
+export type InlineDailyOptions = InlineSharedOptions & {
+  readonly snapshot?: DailySplashSnapshotV2;
+};
+
+export type InlineCommunityOptions = InlineSharedOptions & {
+  readonly snapshot?: UgcSplashSnapshotV2;
+};
+
+type InlinePuzzleOptions =
+  | (InlineDailyOptions & { readonly kind: 'daily' })
+  | (InlineCommunityOptions & { readonly kind: 'ugc' });
+
+type InlineSnapshot = DailySplashSnapshotV2 | UgcSplashSnapshotV2;
+
+export type InlinePuzzleController = {
   start(restoreKeyboardFocus?: boolean): void;
-  applySnapshot(
-    snapshot: DailySplashSnapshotV2,
-    result: SolvedResult | null
-  ): boolean;
-  applySolvedPreview(result: SolvedResult | null): void;
+  applySnapshot(snapshot: InlineSnapshot): boolean;
   setExpansionPending(pending: boolean): void;
 };
+
+/** Backward-compatible name for callers that only construct Daily controllers. */
+export type InlineDailyController = InlinePuzzleController;
 
 type SolvedResult = {
   readonly moves: number;
@@ -85,6 +101,7 @@ type DailyInit = {
 };
 
 type DailyPuzzleDisplay = {
+  readonly kind: 'daily';
   readonly puzzleId: string;
   readonly date: string;
   readonly board: Board;
@@ -92,7 +109,32 @@ type DailyPuzzleDisplay = {
   readonly difficulty: Difficulty;
 };
 
-type VerifiedSolve = {
+type CommunityPuzzleDisplay = {
+  readonly kind: 'ugc';
+  readonly id: string;
+  readonly board: Board;
+  readonly par: number;
+  readonly difficulty: Difficulty;
+  readonly creator: string;
+};
+
+type CommunityInit = {
+  readonly type: 'init';
+  readonly kind: 'ugc';
+  readonly puzzle: CommunityPuzzleDisplay & {
+    readonly votes: number;
+    readonly solves: number;
+  };
+  readonly username: string;
+  readonly solved: boolean;
+  readonly subredditName?: string;
+};
+
+type InlineSession = DailyInit | CommunityInit;
+type InlinePuzzleDisplay = DailyPuzzleDisplay | CommunityPuzzleDisplay;
+
+type DailyVerifiedSolve = {
+  readonly kind: 'daily';
   readonly accepted: true;
   readonly stars: number;
   readonly par: number;
@@ -102,6 +144,15 @@ type VerifiedSolve = {
   readonly totalPlayers: number;
   readonly streak: number;
 };
+
+type CommunityVerifiedSolve = {
+  readonly kind: 'ugc';
+  readonly ok: true;
+  readonly saved: boolean;
+  readonly firstSolve: boolean;
+};
+
+type VerifiedSolve = DailyVerifiedSolve | CommunityVerifiedSolve;
 
 type Point = { readonly x: number; readonly y: number };
 
@@ -231,11 +282,80 @@ const parseDailyInit = (value: unknown): DailyInit | null => {
     : { ...base, subredditName: subredditNameValue };
 };
 
+const parseCommunityInit = (value: unknown): CommunityInit | null => {
+  if (
+    !isObject(value) ||
+    property(value, 'type') !== 'init' ||
+    property(value, 'kind') !== 'ugc'
+  ) {
+    return null;
+  }
+
+  const puzzleValue = property(value, 'puzzle');
+  if (!isObject(puzzleValue)) return null;
+  const id = readBoundedString(property(puzzleValue, 'id'), 64);
+  const par = readInteger(property(puzzleValue, 'par'), 1, MAX_REPLAY_MOVES);
+  const difficulty = readDifficulty(property(puzzleValue, 'difficulty'));
+  const creator = readBoundedString(property(puzzleValue, 'creator'), 100);
+  const votes = readInteger(property(puzzleValue, 'votes'), 0, MAX_COUNT);
+  const solves = readInteger(property(puzzleValue, 'solves'), 0, MAX_COUNT);
+  const username = readBoundedString(property(value, 'username'), 100);
+  const solved = property(value, 'solved');
+  const subredditNameValue = property(value, 'subredditName');
+  const structure = validateBoardStructure(property(puzzleValue, 'board'));
+  if (
+    !id ||
+    par === null ||
+    !difficulty ||
+    difficultyFromPar(par) !== difficulty ||
+    !creator ||
+    votes === null ||
+    solves === null ||
+    !username ||
+    typeof solved !== 'boolean' ||
+    (subredditNameValue !== undefined &&
+      (typeof subredditNameValue !== 'string' || subredditNameValue.length > 100)) ||
+    !structure.ok
+  ) {
+    return null;
+  }
+
+  const board = structure.board;
+  const hopperCount = board.pieces.filter((piece) => piece.kind === 'HOPPER').length;
+  if (
+    hopperCount < 1 ||
+    hopperCount !== board.holes.length ||
+    isSolved(board, board.pieces)
+  ) {
+    return null;
+  }
+
+  const base: CommunityInit = {
+    type: 'init',
+    kind: 'ugc',
+    puzzle: {
+      kind: 'ugc',
+      id,
+      board,
+      par,
+      difficulty,
+      creator,
+      votes,
+      solves,
+    },
+    username,
+    solved,
+  };
+  return subredditNameValue === undefined
+    ? base
+    : { ...base, subredditName: subredditNameValue };
+};
+
 const parseVerifiedSolve = (
   value: unknown,
   session: DailyInit,
   expectedMoves: number
-): VerifiedSolve | null => {
+): DailyVerifiedSolve | null => {
   if (!isObject(value) || property(value, 'accepted') !== true) return null;
   const stars = readInteger(property(value, 'stars'), 1, 3);
   const par = readInteger(property(value, 'par'), 1, MAX_REPLAY_MOVES);
@@ -268,6 +388,7 @@ const parseVerifiedSolve = (
     return null;
   }
   return {
+    kind: 'daily',
     accepted: true,
     stars,
     par,
@@ -277,6 +398,53 @@ const parseVerifiedSolve = (
     totalPlayers,
     streak,
   };
+};
+
+type ParsedMarkPlayedResponse =
+  | CommunityVerifiedSolve
+  | {
+      readonly kind: 'ugc';
+      readonly ok: false;
+      readonly saved: false;
+      readonly reason: string;
+    };
+
+const parseMarkPlayedResponse = (value: unknown): ParsedMarkPlayedResponse | null => {
+  if (!isObject(value) || typeof property(value, 'ok') !== 'boolean') return null;
+  const ok = property(value, 'ok');
+  const saved = property(value, 'saved');
+  if (ok === true) {
+    const firstSolve = property(value, 'firstSolve');
+    return typeof saved === 'boolean' && typeof firstSolve === 'boolean'
+      ? { kind: 'ugc', ok: true, saved, firstSolve }
+      : null;
+  }
+  const reason = readBoundedString(property(value, 'reason'), 500);
+  return saved === false && reason
+    ? { kind: 'ugc', ok: false, saved: false, reason }
+    : null;
+};
+
+type ParsedVoteResponse = {
+  readonly ok: boolean;
+  readonly votes: number;
+  readonly reason?: string;
+};
+
+const parseVoteResponse = (value: unknown): ParsedVoteResponse | null => {
+  if (!isObject(value) || typeof property(value, 'ok') !== 'boolean') return null;
+  const ok = property(value, 'ok');
+  const votes = readInteger(property(value, 'votes'), 0, MAX_COUNT);
+  const reasonValue = property(value, 'reason');
+  if (
+    typeof ok !== 'boolean' ||
+    votes === null ||
+    (reasonValue !== undefined &&
+      (typeof reasonValue !== 'string' || reasonValue.length < 1 || reasonValue.length > 500))
+  ) {
+    return null;
+  }
+  return reasonValue === undefined ? { ok, votes } : { ok, votes, reason: reasonValue };
 };
 
 const parseCommentScoreResponse = (
@@ -333,7 +501,7 @@ const sameBoardInOrder = (left: Board, right: Board): boolean =>
     return other !== undefined && samePieceInOrder(piece, other);
   });
 
-const puzzleMatchesSnapshot = (
+const dailyPuzzleMatchesSnapshot = (
   puzzle: DailyPuzzleDisplay,
   snapshot: DailySplashSnapshotV2
 ): boolean =>
@@ -343,15 +511,36 @@ const puzzleMatchesSnapshot = (
   puzzle.difficulty === snapshot.difficulty &&
   sameBoardInOrder(puzzle.board, snapshot.board);
 
-const snapshotsMatch = (
-  left: DailySplashSnapshotV2,
-  right: DailySplashSnapshotV2
-): boolean => puzzleMatchesSnapshot(left, right);
+const communityPuzzleMatchesSnapshot = (
+  puzzle: CommunityPuzzleDisplay,
+  snapshot: UgcSplashSnapshotV2
+): boolean =>
+  puzzle.id === snapshot.id &&
+  puzzle.par === snapshot.par &&
+  puzzle.difficulty === snapshot.difficulty &&
+  puzzle.creator === snapshot.creator &&
+  sameBoardInOrder(puzzle.board, snapshot.board);
+
+const snapshotsMatch = (left: InlineSnapshot, right: InlineSnapshot): boolean => {
+  if (left.kind !== right.kind) return false;
+  return left.kind === 'daily' && right.kind === 'daily'
+    ? dailyPuzzleMatchesSnapshot(left, right)
+    : left.kind === 'ugc' && right.kind === 'ugc'
+      ? communityPuzzleMatchesSnapshot(left, right)
+      : false;
+};
 
 const sessionMatchesSnapshot = (
-  session: DailyInit,
-  snapshot: DailySplashSnapshotV2
-): boolean => puzzleMatchesSnapshot(session, snapshot);
+  session: InlineSession,
+  snapshot: InlineSnapshot
+): boolean => {
+  if (session.kind !== snapshot.kind) return false;
+  return session.kind === 'daily' && snapshot.kind === 'daily'
+    ? dailyPuzzleMatchesSnapshot(session, snapshot)
+    : session.kind === 'ugc' && snapshot.kind === 'ugc'
+      ? communityPuzzleMatchesSnapshot(session.puzzle, snapshot)
+      : false;
+};
 
 const centerOfCells = (board: Board, cells: readonly number[]): Point => {
   let x = 0;
@@ -432,22 +621,20 @@ const makeParagraph = (className: string, text: string): HTMLParagraphElement =>
   return paragraph;
 };
 
-class InlineDailyControllerImpl implements InlineDailyController {
+class InlinePuzzleControllerImpl implements InlinePuzzleController {
   private readonly stage: HTMLElement;
   private readonly contextText: HTMLElement;
   private readonly liveRegion: HTMLElement;
   private readonly topOpenButton: HTMLButtonElement;
-  private state: InlineDailyState = 'preview';
+  private state: InlinePuzzleState = 'preview';
   private started = false;
   private hydrationPending = false;
   private hydrationError = '';
-  private dailyStartTracked = false;
-  private recapDismissed = false;
-  private session: DailyInit | null = null;
+  private startTracked = false;
+  private session: InlineSession | null = null;
   private pieces: readonly Piece[] = [];
   private history: Move[] = [];
   private selected: number | null = null;
-  private previewSolvedResult: SolvedResult | null = null;
   private verified: VerifiedSolve | null = null;
   private solveBody: string | null = null;
   private verificationExpired = false;
@@ -461,16 +648,17 @@ class InlineDailyControllerImpl implements InlineDailyController {
   private drag: SealDrag | null = null;
   private suppressedClickPiece: number | null = null;
   private suppressedClickUntil = 0;
-  private loadErrorMessage = 'Today’s puzzle could not be loaded safely.';
+  private loadErrorMessage: string;
   private expansionPending = false;
   private scorePosted = false;
   private commentPending = false;
   private joined = false;
   private joinPending = false;
-  private snapshot: DailySplashSnapshotV2 | null;
+  private snapshot: InlineSnapshot | null;
 
-  constructor(private readonly options: InlineDailyOptions) {
+  constructor(private readonly options: InlinePuzzleOptions) {
     this.snapshot = options.snapshot ?? null;
+    this.loadErrorMessage = this.defaultLoadErrorMessage();
     const stage = options.root.querySelector('#inline-stage');
     const contextText = options.root.querySelector('#inline-context');
     const liveRegion = options.root.querySelector('#inline-live');
@@ -481,7 +669,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
       !(liveRegion instanceof HTMLElement) ||
       !(topOpenButton instanceof HTMLButtonElement)
     ) {
-      throw new Error('Inline Daily markup is incomplete.');
+      throw new Error('Inline puzzle markup is incomplete.');
     }
     this.stage = stage;
     this.contextText = contextText;
@@ -489,21 +677,32 @@ class InlineDailyControllerImpl implements InlineDailyController {
     this.topOpenButton = topOpenButton;
     this.topOpenButton.addEventListener('click', (event) => {
       const intent: InlineLaunchIntent =
-        this.state === 'verified-win' || this.state === 'solved-recap' ? 'home' : 'play';
+        this.state === 'verified-win' ? 'home' : 'play';
       this.openExpanded(event, intent);
     });
   }
 
-  private currentPuzzle(): DailyPuzzleDisplay | null {
+  private defaultLoadErrorMessage(): string {
+    return this.options.kind === 'daily'
+      ? 'Today’s puzzle could not be loaded safely.'
+      : 'This Community puzzle could not be loaded safely.';
+  }
+
+  private modeLabel(): string {
+    return this.options.kind === 'daily' ? 'Daily' : 'Community';
+  }
+
+  private currentPuzzle(): InlinePuzzleDisplay | null {
+    if (this.session?.kind === 'ugc') return this.session.puzzle;
     return this.session ?? this.snapshot;
   }
 
   start(restoreKeyboardFocus = false): void {
     if (this.started) {
-      // A second explicit start only belongs to the legacy fallback. Exact
+      // A second explicit start only belongs to a legacy fallback. Exact
       // snapshots hydrate on the first deliberate board interaction instead.
       if (!this.snapshot && !this.session && !this.hydrationPending) {
-        this.hydrateDaily(restoreKeyboardFocus);
+        this.hydrateSession(restoreKeyboardFocus);
       }
       return;
     }
@@ -516,7 +715,6 @@ class InlineDailyControllerImpl implements InlineDailyController {
       : [];
     this.history = [];
     this.selected = null;
-    this.previewSolvedResult = null;
     this.verified = null;
     this.solveBody = null;
     this.verificationExpired = false;
@@ -526,33 +724,72 @@ class InlineDailyControllerImpl implements InlineDailyController {
     this.commentPending = false;
     this.joined = false;
     this.joinPending = false;
-    this.recapDismissed = false;
     this.hydrationError = '';
-    this.loadErrorMessage = 'Today’s puzzle could not be loaded safely.';
+    this.loadErrorMessage = this.defaultLoadErrorMessage();
 
     if (this.snapshot) {
       this.state = 'playing';
       this.showRoot();
       this.render();
       if (restoreKeyboardFocus) this.focusFirstPieceControl();
-      this.announce(`Daily ready. Par ${this.snapshot.par}.`);
+      this.announce(`${this.modeLabel()} ready. Par ${this.snapshot.par}.`);
     } else {
-      // The only no-snapshot start is an explicit click on the offline legacy
-      // fallback. Normal Daily posts bind `/api/init` before revealing a board.
+      // A no-snapshot start belongs to an explicit click on a legacy fallback.
+      // `/api/init` supplies and verifies the exact host puzzle before play.
       this.state = 'loading';
-      this.hydrateDaily(restoreKeyboardFocus);
+      this.hydrateSession(restoreKeyboardFocus);
     }
   }
 
-  applySnapshot(
-    snapshot: DailySplashSnapshotV2,
-    result: SolvedResult | null
-  ): boolean {
+  applySnapshot(snapshot: InlineSnapshot): boolean {
     const existing = this.snapshot;
+    const kindMismatch = snapshot.kind !== this.options.kind;
     if (
+      kindMismatch ||
       (existing && !snapshotsMatch(existing, snapshot)) ||
       (this.session && !sessionMatchesSnapshot(this.session, snapshot))
     ) {
+      // Preserve only the board that was already visible. A session-only legacy
+      // play needs a read-only snapshot before its authority is cleared so the
+      // fatal surface can keep that exact board frozen while Retry re-runs init.
+      const session = this.session;
+      if (!existing && session) {
+        this.snapshot =
+          session.kind === 'daily'
+            ? {
+                version: 2,
+                kind: 'daily',
+                puzzleId: session.puzzleId,
+                date: session.date,
+                board: session.board,
+                par: session.par,
+                difficulty: session.difficulty,
+              }
+            : {
+                version: 2,
+                kind: 'ugc',
+                id: session.puzzle.id,
+                board: session.puzzle.board,
+                par: session.puzzle.par,
+                difficulty: session.puzzle.difficulty,
+                creator: session.puzzle.creator,
+              };
+      }
+      this.beginGeneration();
+      this.session = null;
+      this.selected = null;
+      this.verified = null;
+      this.solveBody = null;
+      this.scorePosted = false;
+      this.commentPending = false;
+      this.joined = false;
+      this.joinPending = false;
+      this.hydrationError = '';
+      this.showFatalLoadError(
+        kindMismatch
+          ? `The post preview did not match the expected ${this.modeLabel()} puzzle.`
+          : `The post preview did not match the active ${this.modeLabel()} puzzle.`
+      );
       return false;
     }
 
@@ -562,46 +799,19 @@ class InlineDailyControllerImpl implements InlineDailyController {
     } else if (!existing && !this.session) {
       // A legacy Play may have started /api/init just before the read-only
       // preview returned. Adopt the exact board immediately and leave that
-      // already-deliberate request in flight for identity verification.
+      // already-deliberate request in flight for identity/order verification.
       this.pieces = snapshot.board.pieces.map(clonePiece);
       this.history = [];
       this.selected = null;
-      this.previewSolvedResult = null;
       this.hydrationError = '';
-      this.loadErrorMessage = 'Today’s puzzle could not be loaded safely.';
+      this.loadErrorMessage = this.defaultLoadErrorMessage();
       this.state = 'playing';
       this.showRoot();
       this.render();
-      this.announce(`Daily ready. Par ${snapshot.par}.`);
+      this.announce(`${this.modeLabel()} ready. Par ${snapshot.par}.`);
     }
 
-    this.applySolvedPreview(result);
     return true;
-  }
-
-  applySolvedPreview(result: SolvedResult | null): void {
-    const snapshot = this.snapshot;
-    if (
-      !result ||
-      !snapshot ||
-      result.moves < snapshot.par ||
-      computeStars(result.moves, snapshot.par) !== result.stars ||
-      !this.started ||
-      this.session ||
-      this.recapDismissed ||
-      this.state !== 'playing' ||
-      this.history.length > 0 ||
-      this.selected !== null ||
-      this.drag
-    ) {
-      return;
-    }
-    const restoreFocus = this.stage.contains(document.activeElement);
-    this.previewSolvedResult = result;
-    this.state = 'solved-recap';
-    this.render();
-    if (restoreFocus) this.focusStageHeading();
-    this.announce("You've already solved this Daily.");
   }
 
   setExpansionPending(pending: boolean): void {
@@ -678,7 +888,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
     return generation === this.generation && requestId === this.requestSequence;
   }
 
-  private hydrateDaily(restoreKeyboardFocus = false): void {
+  private hydrateSession(restoreKeyboardFocus = false): void {
     if (restoreKeyboardFocus) this.hydrationKeyboardFocus = true;
     if (this.session || this.hydrationPending) return;
     const generation = this.generation;
@@ -693,24 +903,35 @@ class InlineDailyControllerImpl implements InlineDailyController {
       signal: request.controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`Daily init failed: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`${this.modeLabel()} init failed: ${response.status}`);
+        }
         const value: unknown = await response.json();
         if (!this.requestIsCurrent(generation, request.id)) return;
         this.hydrationPending = false;
         this.requestController = null;
 
-        if (isObject(value) && property(value, 'kind') === 'ugc') {
+        const responseKind = isObject(value) ? property(value, 'kind') : undefined;
+        if (
+          (responseKind === 'daily' || responseKind === 'ugc') &&
+          responseKind !== this.options.kind
+        ) {
           this.showFatalLoadError(
-            'This post contains a Community puzzle. Open the full game to play it.'
+            `This host post did not match the expected ${this.modeLabel()} puzzle.`
           );
           return;
         }
-        const session = parseDailyInit(value);
-        if (!session) throw new Error('The Daily response was incomplete.');
+        const session =
+          this.options.kind === 'daily'
+            ? parseDailyInit(value)
+            : parseCommunityInit(value);
+        if (!session) {
+          throw new Error(`The ${this.modeLabel()} response was incomplete.`);
+        }
         const snapshot = this.snapshot;
         if (snapshot && !sessionMatchesSnapshot(session, snapshot)) {
           this.showFatalLoadError(
-            'The post snapshot did not match the authoritative Daily.'
+            `The post snapshot did not match the authoritative ${this.modeLabel()} puzzle.`
           );
           return;
         }
@@ -718,19 +939,13 @@ class InlineDailyControllerImpl implements InlineDailyController {
         const hydratedState = this.state;
         const restoreHydrationFocus = this.hydrationKeyboardFocus;
         this.hydrationKeyboardFocus = false;
-        const hasLocalProgress =
-          this.history.length > 0 ||
-          this.selected !== null ||
-          this.drag !== null ||
-          hydratedState === 'animating' ||
-          hydratedState === 'awaiting-session' ||
-          hydratedState === 'solved-recap';
         this.session = session;
-        this.joined = session.subscribed;
+        this.joined = session.kind === 'daily' && session.subscribed;
         this.options.onHydrated?.();
 
         if (!snapshot) {
-          this.pieces = session.board.pieces.map(clonePiece);
+          const puzzle = session.kind === 'daily' ? session : session.puzzle;
+          this.pieces = puzzle.board.pieces.map(clonePiece);
           this.history = [];
           this.selected = null;
         }
@@ -745,26 +960,8 @@ class InlineDailyControllerImpl implements InlineDailyController {
         // immutable snapshot. Its commit will render with the hydrated session.
         if (hydratedState === 'animating') return;
 
-        // A read-only solved preview may win a response race with this init.
-        // Preserve the visible recap instead of letting stale unsolved init data
-        // switch the controller to playing behind that card.
-        if (hydratedState === 'solved-recap') {
-          this.state = 'solved-recap';
-          this.render();
-          if (restoreHydrationFocus) this.focusStageHeading();
-          return;
-        }
-
-        if (!hasLocalProgress && session.solved && !this.recapDismissed) {
-          this.pieces = session.board.pieces.map(clonePiece);
-          this.selected = null;
-          this.state = 'solved-recap';
-          this.render();
-          if (restoreHydrationFocus) this.focusStageHeading();
-          this.announce("You've already solved this Daily.");
-          return;
-        }
-
+        // Feed posts always remain puzzle surfaces. Prior completion status is
+        // reserved for the expanded game and never replaces this board.
         this.state = 'playing';
         // The exact snapshot is already the live surface. A normal hydration
         // must not rebuild it underneath a pointer gesture or steal focus.
@@ -775,10 +972,13 @@ class InlineDailyControllerImpl implements InlineDailyController {
         ) {
           this.render();
         } else {
-          this.prepareOpenButton(
-            this.topOpenButton,
-            this.history.length > 0 ? 'Continue full game' : 'Open full game'
-          );
+          const label =
+            this.options.kind === 'ugc' && this.history.length > 0
+              ? 'Restart to open full game'
+              : this.history.length > 0
+                ? 'Continue full game'
+                : 'Open full game';
+          this.prepareOpenButton(this.topOpenButton, label);
         }
         if (restoreHydrationFocus) this.focusFirstPieceControl();
       })
@@ -789,7 +989,9 @@ class InlineDailyControllerImpl implements InlineDailyController {
         const restoreHydrationFocus = this.hydrationKeyboardFocus;
         this.hydrationKeyboardFocus = false;
         console.error(error);
-        this.showHydrationError('Could not connect to verify this Daily yet.');
+        this.showHydrationError(
+          `Could not connect to verify this ${this.modeLabel()} puzzle yet.`
+        );
         if (restoreHydrationFocus) {
           if (!this.focusFirstRecoveryAction()) this.focusStageHeading();
         }
@@ -840,15 +1042,16 @@ class InlineDailyControllerImpl implements InlineDailyController {
     else this.options.root.removeAttribute('aria-busy');
 
     const puzzle = this.currentPuzzle();
-    if (puzzle) {
+    if (puzzle?.kind === 'daily') {
       this.contextText.textContent = `${formatDailyDate(puzzle.date)} · ${titleDifficulty(puzzle.difficulty)}`;
+    } else if (puzzle) {
+      this.contextText.textContent = `Community · by u/${puzzle.creator} · ${titleDifficulty(puzzle.difficulty)}`;
     } else {
-      this.contextText.textContent = 'Daily puzzle';
+      this.contextText.textContent = `${this.modeLabel()} puzzle`;
     }
 
     if (this.state === 'loading') this.renderSessionLoading();
     else if (this.state === 'load-error') this.renderLoadError();
-    else if (this.state === 'solved-recap') this.renderRecap();
     else if (this.state === 'playing') this.renderPlaying(null);
     else if (this.state === 'awaiting-session') this.renderAwaitingSession();
     else if (this.state === 'verifying') this.renderVerifying();
@@ -867,15 +1070,19 @@ class InlineDailyControllerImpl implements InlineDailyController {
       delete this.topOpenButton.dataset.idleLabel;
     } else {
       const topLabel =
-        this.state === 'verified-win' || this.state === 'solved-recap'
+        this.state === 'verified-win'
           ? '‹ Menu'
           : this.state === 'animating'
             ? 'Moving…'
-            : this.state === 'playing' && this.history.length > 0 && !this.session
-              ? 'Connecting progress…'
-              : this.state === 'playing' && this.history.length > 0
-                ? 'Continue full game'
-                : 'Open full game';
+            : this.options.kind === 'ugc' &&
+                this.state === 'playing' &&
+                this.history.length > 0
+              ? 'Restart to open full game'
+              : this.state === 'playing' && this.history.length > 0 && !this.session
+                ? 'Connecting progress…'
+                : this.state === 'playing' && this.history.length > 0
+                  ? 'Continue full game'
+                  : 'Open full game';
       this.prepareOpenButton(this.topOpenButton, topLabel);
     }
   }
@@ -887,7 +1094,9 @@ class InlineDailyControllerImpl implements InlineDailyController {
       this.state === 'awaiting-session' ||
       this.state === 'verifying' ||
       this.state === 'verification-error' ||
-      (this.state === 'playing' && this.history.length > 0 && !this.session)
+      (this.state === 'playing' &&
+        this.history.length > 0 &&
+        (this.options.kind === 'ugc' || !this.session))
     );
   }
 
@@ -907,7 +1116,9 @@ class InlineDailyControllerImpl implements InlineDailyController {
 
   private makeOpenButton(label: string, intent: InlineLaunchIntent): HTMLButtonElement {
     const button = makeButton(label, 'inline-button inline-button--secondary inline-open-button', (event) => {
-      if (intent === 'endless') trackClientEvent('daily_to_endless');
+      if (this.options.kind === 'daily' && intent === 'endless') {
+        trackClientEvent('daily_to_endless');
+      }
       this.openExpanded(event, intent);
     });
     this.prepareOpenButton(button, label);
@@ -920,36 +1131,42 @@ class InlineDailyControllerImpl implements InlineDailyController {
   }
 
   private prepareHandoff(intent: InlineLaunchIntent): boolean {
+    if (this.options.kind === 'ugc') {
+      // Community has no transcript handoff. Once a local move exists, keep the
+      // player on this exact host board rather than implying expansion resumes it.
+      return !(intent === 'play' && this.state === 'playing' && this.history.length > 0);
+    }
     if (intent === 'play' && this.state === 'playing' && this.history.length > 0) {
-      return this.persistHandoff();
+      return this.persistDailyHandoff();
     }
 
     // A fresh/restarted attempt or a route away from play must not inherit a
-    // transcript left by an earlier expansion that failed or was cancelled.
+    // transcript left by an earlier Daily expansion that failed or was cancelled.
     this.clearCurrentHandoff();
     return true;
   }
 
   private clearCurrentHandoff(): void {
     const puzzle = this.currentPuzzle();
-    if (puzzle && this.options.postId) {
+    if (puzzle?.kind === 'daily' && this.options.postId) {
       clearDailyHandoff(this.options.postId, puzzle.puzzleId);
     }
   }
 
-  private persistHandoff(): boolean {
+  private persistDailyHandoff(): boolean {
     if (this.history.length === 0) return true;
-    if (!this.session || !this.options.postId) {
-      this.hydrateDaily();
+    const session = this.session;
+    if (session?.kind !== 'daily' || !this.options.postId) {
+      this.hydrateSession();
       this.announce('Still connecting. Your progress remains on this board.');
       showToast('Still connecting — your progress is safe here.');
       return false;
     }
     const saved = saveDailyHandoff({
-      auth: this.session.username === 'anon' ? 'guest' : 'signed',
+      auth: session.username === 'anon' ? 'guest' : 'signed',
       postId: this.options.postId,
-      puzzleId: this.session.puzzleId,
-      playId: this.session.playId,
+      puzzleId: session.puzzleId,
+      playId: session.playId,
       moves: this.history.map(cloneMove),
     });
     if (!saved) {
@@ -962,9 +1179,12 @@ class InlineDailyControllerImpl implements InlineDailyController {
   private renderSessionLoading(): void {
     const card = document.createElement('div');
     card.className = 'inline-message-card';
-    const eyebrow = makeParagraph('inline-eyebrow', 'Daily puzzle');
+    const eyebrow = makeParagraph('inline-eyebrow', `${this.modeLabel()} puzzle`);
     const heading = document.createElement('h2');
-    heading.textContent = 'Getting a fresh play ready…';
+    heading.textContent =
+      this.options.kind === 'daily'
+        ? 'Getting a fresh play ready…'
+        : 'Getting the Community puzzle ready…';
     const status = document.createElement('div');
     status.className = 'inline-saving-status';
     status.setAttribute('role', 'status');
@@ -972,7 +1192,10 @@ class InlineDailyControllerImpl implements InlineDailyController {
     spinner.className = 'inline-spinner';
     spinner.setAttribute('aria-hidden', 'true');
     const text = document.createElement('span');
-    text.textContent = 'Starting the play clock…';
+    text.textContent =
+      this.options.kind === 'daily'
+        ? 'Starting the play clock…'
+        : 'Checking the exact host puzzle…';
     status.append(spinner, text);
     card.append(eyebrow, heading, status);
     this.stage.replaceChildren(card);
@@ -987,7 +1210,10 @@ class InlineDailyControllerImpl implements InlineDailyController {
     const card = document.createElement('div');
     card.className =
       'inline-message-card inline-message-card--win inline-message-card--pending';
-    const eyebrow = makeParagraph('inline-eyebrow', 'Daily complete');
+    const eyebrow = makeParagraph(
+      'inline-eyebrow',
+      `${this.modeLabel()} complete`
+    );
     const heading = document.createElement('h2');
     heading.textContent = 'Everyone made it in!';
     const stars = document.createElement('div');
@@ -1010,7 +1236,10 @@ class InlineDailyControllerImpl implements InlineDailyController {
     spinner.className = 'inline-spinner';
     spinner.setAttribute('aria-hidden', 'true');
     const text = document.createElement('span');
-    text.textContent = 'Saving your score…';
+    text.textContent =
+      this.options.kind === 'daily'
+        ? 'Saving your score…'
+        : 'Verifying your move history…';
     status.append(spinner, text);
     const card = this.buildCompletionCard(status);
     if (card) {
@@ -1060,12 +1289,14 @@ class InlineDailyControllerImpl implements InlineDailyController {
   private renderAwaitingSession(): void {
     if (this.hydrationError) {
       this.renderCompletionRecovery(
-        'Your score is waiting to save',
-        'Your completed move history is safe. Reconnect to save it.',
-        'Retry saving',
+        this.options.kind === 'daily'
+          ? 'Your score is waiting to save'
+          : 'Your solve is waiting to verify',
+        'Your completed move history is safe. Reconnect to send these same moves.',
+        'Retry verification',
         (event) => {
           if (event.detail === 0) this.completionKeyboardFocus = true;
-          this.hydrateDaily(event.detail === 0);
+          this.hydrateSession(event.detail === 0);
         }
       );
       return;
@@ -1080,7 +1311,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
       'inline-verification-status inline-verification-status--error inline-hydration-error';
     const copy = document.createElement('div');
     const title = document.createElement('strong');
-    title.textContent = 'Could not connect this play';
+    title.textContent = `Could not verify this ${this.modeLabel()} puzzle`;
     const detail = makeParagraph(
       'inline-verification-copy inline-error-detail',
       this.loadErrorMessage
@@ -1091,7 +1322,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
     const retry = makeButton(
       'Retry',
       'inline-button inline-button--primary inline-button--compact',
-      (event) => this.hydrateDaily(event.detail === 0)
+      (event) => this.hydrateSession(event.detail === 0)
     );
     const open = this.makeOpenButton('Open full game', 'play');
     open.classList.add('inline-button--compact');
@@ -1099,45 +1330,6 @@ class InlineDailyControllerImpl implements InlineDailyController {
     footer.append(copy, actions);
     const surface = this.buildPlaySurface(false, footer);
     if (surface) this.stage.replaceChildren(surface);
-  }
-
-  private renderRecap(): void {
-    const puzzle = this.currentPuzzle();
-    const result = this.session?.solvedResult ?? this.previewSolvedResult;
-    if (!puzzle || !result) {
-      this.showFatalLoadError('The saved Daily result was incomplete.');
-      return;
-    }
-    const card = document.createElement('div');
-    card.className = 'inline-message-card inline-message-card--recap';
-    const eyebrow = makeParagraph('inline-eyebrow', 'Daily complete');
-    const heading = document.createElement('h2');
-    heading.textContent = 'You already helped everyone in!';
-    const stars = document.createElement('div');
-    stars.className = 'inline-stars';
-    stars.textContent = '★'.repeat(result.stars);
-    stars.setAttribute('aria-label', `${result.stars} stars`);
-    const score = makeParagraph(
-      'inline-result-score',
-      `${result.moves} moves · par ${puzzle.par}`
-    );
-    const detail = makeParagraph(
-      'inline-message-copy',
-      'A fresh puzzle drops tomorrow. Replay here or explore more Ice Hop.'
-    );
-    const actions = document.createElement('div');
-    actions.className = 'inline-card-actions';
-    const more = this.makeOpenButton('More puzzles', 'endless');
-    more.classList.remove('inline-button--secondary');
-    more.classList.add('inline-button--primary');
-    const replay = makeButton(
-      'Play again',
-      'inline-button inline-button--secondary',
-      (event) => this.restartAttempt(event.detail === 0)
-    );
-    actions.append(more, replay);
-    card.append(eyebrow, heading, stars, score, detail, actions);
-    this.stage.replaceChildren(card);
   }
 
   private renderPlaying(focusPieceIndex: number | null): void {
@@ -1202,7 +1394,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
       const retry = makeButton(
         'Retry',
         'inline-button inline-button--secondary inline-button--compact',
-        (event) => this.hydrateDaily(event.detail === 0)
+        (event) => this.hydrateSession(event.detail === 0)
       );
       actions.append(retry);
       if (this.history.length > 0) {
@@ -1252,8 +1444,9 @@ class InlineDailyControllerImpl implements InlineDailyController {
     shell.style.setProperty('--inline-natural-width', `${size.x}px`);
     shell.style.setProperty('--inline-cell-width', `${(CELL / size.x) * 100}%`);
     shell.style.setProperty('--inline-cell-height', `${(CELL / size.y) * 100}%`);
+    const boardLabel = `${this.modeLabel()} puzzle board`;
     shell.setAttribute('role', 'group');
-    shell.setAttribute('aria-label', 'Daily puzzle board');
+    shell.setAttribute('aria-label', boardLabel);
     shell.setAttribute(
       'aria-describedby',
       'inline-board-instructions inline-board-state'
@@ -1261,7 +1454,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
 
     const visual = document.createElement('div');
     visual.className = 'inline-board-visual';
-    visual.innerHTML = this.options.renderBoard(board, this.pieces, 'Daily puzzle board');
+    visual.innerHTML = this.options.renderBoard(board, this.pieces, boardLabel);
     const svg = visual.querySelector('svg');
     if (svg) {
       // Static preview sizing must never participate in the interactive board.
@@ -1522,7 +1715,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
   private selectPiece(pieceIndex: number, focusSelected = false): void {
     const puzzle = this.currentPuzzle();
     if (this.expansionPending || this.state !== 'playing' || !puzzle) return;
-    if (!this.session && !this.hydrationPending) this.hydrateDaily();
+    if (!this.session && !this.hydrationPending) this.hydrateSession();
     const piece = this.pieces[pieceIndex];
     if (!piece || piece.kind === 'BLOCKER') return;
     const destinations = legalMoves(puzzle.board, this.pieces).filter(
@@ -1560,7 +1753,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
     ) {
       return;
     }
-    if (!this.session && !this.hydrationPending) this.hydrateDaily();
+    if (!this.session && !this.hydrationPending) this.hydrateSession();
     const legal = legalMoves(puzzle.board, this.pieces);
     const move = legal.find((entry) => sameMove(entry, candidate));
     if (!move) {
@@ -1632,9 +1825,11 @@ class InlineDailyControllerImpl implements InlineDailyController {
     if (!puzzle || this.state !== 'animating') return;
     this.pieces = applyMove(this.pieces, move).map(clonePiece);
     this.history.push(cloneMove(move));
-    if (!this.dailyStartTracked) {
-      this.dailyStartTracked = true;
-      trackClientEvent('daily_started');
+    if (!this.startTracked) {
+      this.startTracked = true;
+      trackClientEvent(
+        this.options.kind === 'daily' ? 'daily_started' : 'community_started'
+      );
     }
     this.selected = null;
     if (isSolved(puzzle.board, this.pieces)) {
@@ -1662,9 +1857,9 @@ class InlineDailyControllerImpl implements InlineDailyController {
       return;
     }
     this.clearCurrentHandoff();
-    const dismissingRecap = this.state === 'solved-recap';
-    const needsFreshSession = this.verificationExpired;
-    if (needsFreshSession && !this.snapshot) {
+    const needsFreshSession =
+      this.options.kind === 'daily' && this.verificationExpired;
+    if (needsFreshSession && !this.snapshot && puzzle.kind === 'daily') {
       this.snapshot = {
         version: 2,
         kind: 'daily',
@@ -1679,39 +1874,35 @@ class InlineDailyControllerImpl implements InlineDailyController {
     if (needsFreshSession) {
       this.session = null;
       this.beginGeneration();
-      this.recapDismissed = true;
       this.commentPending = false;
       this.joinPending = false;
       this.pieces = puzzle.board.pieces.map(clonePiece);
       this.history = [];
       this.selected = null;
-      this.previewSolvedResult = null;
       this.verified = null;
       this.solveBody = null;
       this.state = 'loading';
       this.completionKeyboardFocus = restoreKeyboardFocus;
       this.render();
       this.announce('Getting a fresh play session.');
-      this.hydrateDaily(restoreKeyboardFocus);
+      this.hydrateSession(restoreKeyboardFocus);
       return;
     }
 
     const needsHydration = !this.session;
     this.beginGeneration();
-    if (dismissingRecap) this.recapDismissed = true;
     this.commentPending = false;
     this.joinPending = false;
     this.pieces = puzzle.board.pieces.map(clonePiece);
     this.history = [];
     this.selected = null;
-    this.previewSolvedResult = null;
     this.verified = null;
     this.solveBody = null;
     this.state = 'playing';
     this.render();
     if (restoreKeyboardFocus) this.focusFirstPieceControl();
     this.announce('Puzzle restarted.');
-    if (needsHydration) this.hydrateDaily(restoreKeyboardFocus);
+    if (needsHydration) this.hydrateSession(restoreKeyboardFocus);
   }
 
   private beginVerification(restoreKeyboardFocus = false): void {
@@ -1723,19 +1914,30 @@ class InlineDailyControllerImpl implements InlineDailyController {
     if (!session) {
       this.state = 'awaiting-session';
       this.render();
-      this.announce('Everyone is in. Saving your score.');
-      if (!this.hydrationPending) this.hydrateDaily();
+      this.announce(
+        this.options.kind === 'daily'
+          ? 'Everyone is in. Saving your score.'
+          : 'Everyone is in. Connecting to verify these moves.'
+      );
+      if (!this.hydrationPending) this.hydrateSession();
       return;
     }
     const transcript = this.history.map(cloneMove);
-    this.solveBody = JSON.stringify({
-      puzzleId: session.puzzleId,
-      playId: session.playId,
-      moves: transcript,
-    });
+    this.solveBody =
+      session.kind === 'daily'
+        ? JSON.stringify({
+            puzzleId: session.puzzleId,
+            playId: session.playId,
+            moves: transcript,
+          })
+        : JSON.stringify({ id: session.puzzle.id, moves: transcript });
     this.state = 'verifying';
     this.render();
-    this.announce('Everyone is in. Saving your score.');
+    this.announce(
+      session.kind === 'daily'
+        ? 'Everyone is in. Saving your score.'
+        : 'Everyone is in. Verifying your move history.'
+    );
     this.verifySolve(this.solveBody);
   }
 
@@ -1746,8 +1948,9 @@ class InlineDailyControllerImpl implements InlineDailyController {
     const generation = this.generation;
     const request = this.beginRequest();
     const expectedMoves = this.history.length;
+    const path = session.kind === 'daily' ? '/api/solve' : '/api/ugc/played';
     const timer = window.setTimeout(() => request.controller.abort(), REQUEST_TIMEOUT_MS);
-    void fetch('/api/solve', {
+    void fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
@@ -1755,7 +1958,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
     })
       .then(async (response) => {
         if (!this.requestIsCurrent(generation, request.id)) return;
-        if (response.status === 410) {
+        if (session.kind === 'daily' && response.status === 410) {
           this.verificationExpired = true;
           this.state = 'verification-error';
           this.render();
@@ -1764,17 +1967,39 @@ class InlineDailyControllerImpl implements InlineDailyController {
           );
           return;
         }
-        if (!response.ok) throw new Error(`Daily solve failed: ${response.status}`);
+
         const value: unknown = await response.json();
         if (!this.requestIsCurrent(generation, request.id)) return;
-        const result = parseVerifiedSolve(value, session, expectedMoves);
-        if (!result) throw new Error('Daily solve response was malformed.');
-        const attemptStars = computeStars(result.moves, result.par);
+        if (session.kind === 'daily') {
+          if (!response.ok) throw new Error(`Daily solve failed: ${response.status}`);
+          const result = parseVerifiedSolve(value, session, expectedMoves);
+          if (!result) throw new Error('Daily solve response was malformed.');
+          const attemptStars = computeStars(result.moves, result.par);
+          this.verificationExpired = false;
+          this.verified = result;
+          this.state = 'verified-win';
+          this.render();
+          this.announce(
+            `Solve verified. ${result.moves} moves and ${attemptStars} stars.`
+          );
+          return;
+        }
+
+        const result = parseMarkPlayedResponse(value);
+        if (!result) throw new Error('Community completion response was malformed.');
+        if (!response.ok || !result.ok) {
+          throw new Error(result.ok ? 'Community completion failed.' : result.reason);
+        }
+        const savedMatchesIdentity =
+          session.username === 'anon' ? !result.saved : result.saved;
+        if (!savedMatchesIdentity) {
+          throw new Error('Community completion save state did not match the player.');
+        }
         this.verificationExpired = false;
         this.verified = result;
         this.state = 'verified-win';
         this.render();
-        this.announce(`Solve verified. ${result.moves} moves and ${attemptStars} stars.`);
+        this.announce(`Community solve verified in ${expectedMoves} moves.`);
       })
       .catch((error) => {
         if (!this.requestIsCurrent(generation, request.id)) return;
@@ -1807,9 +2032,11 @@ class InlineDailyControllerImpl implements InlineDailyController {
     }
 
     this.renderCompletionRecovery(
-      'Your score was not saved',
-      'Your completed move history is safe. Retry sends the same moves.',
-      'Retry saving',
+      this.options.kind === 'daily'
+        ? 'Your score was not saved'
+        : 'Your Community solve was not verified',
+      'Your completed move history is safe. Retry sends the same frozen moves.',
+      'Retry verification',
       (event) => {
         if (!this.solveBody || this.state !== 'verification-error') return;
         if (event.detail === 0) this.completionKeyboardFocus = true;
@@ -1823,11 +2050,27 @@ class InlineDailyControllerImpl implements InlineDailyController {
   private renderVerifiedWin(): void {
     const session = this.session;
     const result = this.verified;
-    if (!session || !result) {
+    if (!session || !result || session.kind !== result.kind) {
       this.state = 'verification-error';
       this.renderVerificationError();
       return;
     }
+    if (session.kind === 'ugc' && result.kind === 'ugc') {
+      this.renderCommunityVerifiedWin(session, result);
+      return;
+    }
+    if (session.kind === 'daily' && result.kind === 'daily') {
+      this.renderDailyVerifiedWin(session, result);
+      return;
+    }
+    this.state = 'verification-error';
+    this.renderVerificationError();
+  }
+
+  private renderDailyVerifiedWin(
+    session: DailyInit,
+    result: DailyVerifiedSolve
+  ): void {
     const card = document.createElement('div');
     card.className = 'inline-message-card inline-message-card--win';
     const eyebrow = makeParagraph('inline-eyebrow', 'Verified Daily');
@@ -1931,6 +2174,80 @@ class InlineDailyControllerImpl implements InlineDailyController {
     if (this.completionKeyboardFocus) this.focusStageHeading();
   }
 
+  private renderCommunityVerifiedWin(
+    session: CommunityInit,
+    result: CommunityVerifiedSolve
+  ): void {
+    const puzzle = session.puzzle;
+    const moves = this.history.length;
+    const attemptStars = computeStars(moves, puzzle.par);
+    const isCreator =
+      session.username !== 'anon' &&
+      session.username.toLowerCase() === puzzle.creator.toLowerCase();
+    const card = document.createElement('div');
+    card.className = 'inline-message-card inline-message-card--win';
+    const eyebrow = makeParagraph('inline-eyebrow', 'Verified Community solve');
+    const heading = document.createElement('h2');
+    heading.textContent = isCreator
+      ? 'Solved your own puzzle!'
+      : `Solved u/${puzzle.creator}’s puzzle!`;
+    const stars = document.createElement('div');
+    stars.className = 'inline-stars';
+    stars.textContent = '★'.repeat(attemptStars);
+    stars.setAttribute('aria-label', `${attemptStars} stars`);
+    const score = makeParagraph(
+      'inline-result-score',
+      `${moves} moves · par ${puzzle.par}`
+    );
+    const details = document.createElement('div');
+    details.className = 'inline-verified-details';
+    details.append(
+      makeParagraph(
+        'inline-message-copy',
+        session.username === 'anon'
+          ? 'Solve verified for this play. Guest progress is not saved.'
+          : result.saved
+            ? 'Solve verified and saved to your Community progress.'
+            : 'Solve verified for this play.'
+      )
+    );
+
+    const actions = document.createElement('div');
+    actions.className = 'inline-card-actions inline-card-actions--win';
+    const explore = this.makeOpenButton('Explore more puzzles', 'home');
+    explore.classList.remove('inline-button--secondary');
+    explore.classList.add('inline-button--primary');
+    actions.append(explore);
+
+    if (!isCreator) {
+      const upvote = makeButton(
+        'Upvote this puzzle',
+        'inline-button inline-button--secondary',
+        () => void this.upvoteCommunity(upvote, session)
+      );
+      actions.append(upvote);
+      if (session.username !== 'anon') {
+        const comment = makeButton(
+          this.scorePosted ? 'Score posted ✓' : 'Comment my score',
+          'inline-button inline-button--secondary',
+          () => void this.commentVerifiedScore(comment)
+        );
+        comment.disabled = this.scorePosted;
+        actions.append(comment);
+      }
+    }
+
+    const again = makeButton(
+      'Play again',
+      'inline-button inline-button--secondary',
+      (event) => this.restartAttempt(event.detail === 0)
+    );
+    actions.append(again);
+    card.append(eyebrow, heading, stars, score, details, actions);
+    this.stage.replaceChildren(card);
+    if (this.completionKeyboardFocus) this.focusStageHeading();
+  }
+
   private async postEmptyJson(path: string): Promise<unknown> {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -1960,7 +2277,13 @@ class InlineDailyControllerImpl implements InlineDailyController {
   private async shareVerifiedResult(button: HTMLButtonElement): Promise<void> {
     const session = this.session;
     const result = this.verified;
-    if (!session || !result || this.state !== 'verified-win') return;
+    if (
+      session?.kind !== 'daily' ||
+      result?.kind !== 'daily' ||
+      this.state !== 'verified-win'
+    ) {
+      return;
+    }
     const generation = this.generation;
     const attemptIsRankedBest = result.bestMoves === result.moves;
     const text = buildShareText({
@@ -1994,6 +2317,48 @@ class InlineDailyControllerImpl implements InlineDailyController {
       button.textContent = 'Retry share';
       button.disabled = false;
       showToast('Could not share your result.');
+    }
+  }
+
+  private async upvoteCommunity(
+    button: HTMLButtonElement,
+    session: CommunityInit
+  ): Promise<void> {
+    if (this.state !== 'verified-win') return;
+    if (session.username === 'anon') {
+      showLoginPrompt();
+      return;
+    }
+    const generation = this.generation;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    button.disabled = true;
+    button.textContent = 'Upvoting…';
+    try {
+      const response = await fetch('/api/ugc/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: session.puzzle.id }),
+        signal: controller.signal,
+      });
+      const value: unknown = await response.json();
+      const result = parseVoteResponse(value);
+      if (!result) throw new Error('Vote response was malformed.');
+      if (!response.ok) throw new Error(`Vote failed: ${response.status}`);
+      if (!this.actionIsCurrent(generation, button)) return;
+      button.textContent = result.ok
+        ? `Upvoted! (${result.votes})`
+        : result.reason ?? 'Already upvoted';
+      button.disabled = true;
+      showToast(result.ok ? 'Puzzle upvoted!' : result.reason ?? 'Vote not added.');
+    } catch (error) {
+      console.error(error);
+      if (!this.actionIsCurrent(generation, button)) return;
+      button.textContent = 'Retry upvote';
+      button.disabled = false;
+      showToast('Could not confirm the upvote.');
+    } finally {
+      window.clearTimeout(timer);
     }
   }
 
@@ -2069,7 +2434,7 @@ class InlineDailyControllerImpl implements InlineDailyController {
     if (this.expansionPending || this.drag) return;
     const puzzle = this.currentPuzzle();
     if (this.state !== 'playing' || !puzzle || event.button !== 0) return;
-    if (!this.session && !this.hydrationPending) this.hydrateDaily();
+    if (!this.session && !this.hydrationPending) this.hydrateSession();
     const piece = this.pieces[pieceIndex];
     if (!piece || piece.kind !== 'SLIDER') return;
     clearSelection();
@@ -2259,5 +2624,12 @@ class InlineDailyControllerImpl implements InlineDailyController {
   }
 }
 
-export const createInlineDaily = (options: InlineDailyOptions): InlineDailyController =>
-  new InlineDailyControllerImpl(options);
+export const createInlineDaily = (
+  options: InlineDailyOptions
+): InlinePuzzleController =>
+  new InlinePuzzleControllerImpl({ ...options, kind: 'daily' });
+
+export const createInlineCommunity = (
+  options: InlineCommunityOptions
+): InlinePuzzleController =>
+  new InlinePuzzleControllerImpl({ ...options, kind: 'ugc' });

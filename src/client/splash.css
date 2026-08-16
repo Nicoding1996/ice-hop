@@ -1174,19 +1174,7 @@ body.inline-daily-active .wrap {
   }
 
   .inline-play {
-    height: auto;
-    max-height: none;
-    grid-template-rows: auto auto auto;
     gap: 2px;
-  }
-
-  .inline-board-frame {
-    height: auto;
-  }
-
-  .inline-board {
-    width: min(100%, 460px);
-    min-width: min(100%, var(--inline-natural-width));
   }
 
   .inline-hud {

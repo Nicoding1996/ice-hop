@@ -80,6 +80,24 @@ const responseProperty = (value: object, key: string): unknown => Reflect.get(va
 const isResponseObject = (value: unknown): value is object =>
   typeof value === 'object' && value !== null;
 
+const parseMarkPlayedResponse = (value: unknown): MarkPlayedResponse | null => {
+  if (!isResponseObject(value) || typeof responseProperty(value, 'ok') !== 'boolean') {
+    return null;
+  }
+  const ok = responseProperty(value, 'ok');
+  const saved = responseProperty(value, 'saved');
+  if (ok === true) {
+    const firstSolve = responseProperty(value, 'firstSolve');
+    return typeof saved === 'boolean' && typeof firstSolve === 'boolean'
+      ? { ok: true, saved, firstSolve }
+      : null;
+  }
+  const reason = responseProperty(value, 'reason');
+  return saved === false && typeof reason === 'string' && reason.length > 0
+    ? { ok: false, saved: false, reason }
+    : null;
+};
+
 const parseLeaderboardEntry = (
   value: unknown,
   totalPlayers: number
@@ -1947,8 +1965,18 @@ export class GameScene extends Scene {
   }
 
   private onWinCommunity(): void {
-    const playedId = this.communityPuzzle?.id;
-    if (playedId) this.completionPromise = this.markPlayed(playedId);
+    const playedId = this.communityPuzzle?.id ?? '';
+    // Serialize the solved transcript once. Internal transport retries and the
+    // visible manual retry must submit this identical immutable request body.
+    const completionBody = JSON.stringify({
+      id: playedId,
+      moves: this.moveHistory.map((move) => ({
+        pieceIndex: move.pieceIndex,
+        kind: move.kind,
+        to: [...move.to],
+      })),
+    });
+    const generation = this.playGeneration;
     playWin();
     const w = this.scale.width;
     const h = this.scale.height;
@@ -1992,12 +2020,10 @@ export class GameScene extends Scene {
       });
       buttons.push(voteButton);
     }
-    // Let the solver drop their score into the puzzle's thread (creator feedback
-    // + the "beat my count" loop). Only for other people's puzzles, and only when
-    // this IS the host post's puzzle (not a "Next" puzzle in the same webview),
-    // so the comment lands in the right thread with the right par/creator.
+    // Let a signed solver drop their verified score into this exact puzzle's
+    // thread. Creator and host-post gates remain unchanged.
     let scoreButton: PillButton | undefined;
-    if (!isMine && this.isHostPostPuzzle) {
+    if (context.username && !isMine && this.isHostPostPuzzle) {
       scoreButton = makePill(this, {
         label: 'Comment my score',
         variant: 'secondary',
@@ -2006,14 +2032,25 @@ export class GameScene extends Scene {
           if (scoreButton) void this.postScore(scoreButton);
         },
       });
+      scoreButton.setEnabled(false);
       buttons.push(scoreButton);
     }
+
+    let verificationState: 'pending' | 'failed' | 'verified' = 'failed';
+    let retryVerification: (() => void) | undefined;
     const moreButton = makePill(this, {
-      label: 'Next puzzle \u25B6',
+      label: 'Verifying solve\u2026',
       variant: 'primary',
       minWidth: Math.min(240, contentW),
-      onClick: () => void this.nextCommunity(),
+      onClick: () => {
+        if (verificationState === 'verified') {
+          void this.nextCommunity();
+        } else if (verificationState === 'failed') {
+          retryVerification?.();
+        }
+      },
     });
+    moreButton.setEnabled(false);
     const dailyButton = makePill(this, {
       label: 'Back to daily',
       variant: 'ghost',
@@ -2059,6 +2096,34 @@ export class GameScene extends Scene {
     headline.setScale(0.92).setAlpha(0);
     this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
     this.time.delayedCall(180, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.3, Math.min(48, w * 0.13)));
+
+    const verifyCompletion = (): void => {
+      if (verificationState === 'pending' || verificationState === 'verified') return;
+      verificationState = 'pending';
+      moreButton.setLabelText('Verifying solve\u2026').setEnabled(false);
+      scoreButton?.setEnabled(false);
+      const completion = this.markPlayed(playedId, completionBody);
+      this.completionPromise = completion;
+      // Keep markPlayed rejecting for callers, but always observe this promise so
+      // a terminal background failure can never become an unhandled rejection.
+      void completion.then(
+        () => {
+          if (!this.isCurrentPlay(generation) || !moreButton.active) return;
+          verificationState = 'verified';
+          moreButton.setLabelText('Next puzzle \u25B6').setEnabled(true);
+          scoreButton?.setEnabled(true);
+        },
+        (error: unknown) => {
+          console.error(error);
+          if (!this.isCurrentPlay(generation) || !moreButton.active) return;
+          verificationState = 'failed';
+          moreButton.setLabelText('Retry verification').setEnabled(true);
+          scoreButton?.setEnabled(false);
+        }
+      );
+    };
+    retryVerification = verifyCompletion;
+    verifyCompletion();
   }
 
   private onWinEndless(): void {
@@ -2397,35 +2462,21 @@ export class GameScene extends Scene {
     this.time.delayedCall(150, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.4, Math.min(48, w * 0.13)));
   }
 
-  private async markPlayed(id: string): Promise<void> {
-    const rememberLocally = (): void => {
-      const locallyPlayed: string[] = this.registry.get('ugc.played.local') ?? [];
-      if (!locallyPlayed.includes(id)) {
-        this.registry.set('ugc.played.local', [...locallyPlayed, id]);
-      }
-    };
-    if (!context.username) {
-      rememberLocally();
-      return;
+  private async markPlayed(id: string, body: string): Promise<void> {
+    const response = await this.postCompletionWithRetries('/api/ugc/played', body);
+    const value: unknown = await response.json();
+    const result = parseMarkPlayedResponse(value);
+    if (!result) throw new Error('community completion response was malformed');
+    if (!result.ok) throw new Error(result.reason);
+    if (context.username ? !result.saved : result.saved) {
+      throw new Error('community completion save state did not match the player');
     }
 
-    const body = JSON.stringify({
-      id,
-      moves: this.moveHistory.map((move) => ({
-        pieceIndex: move.pieceIndex,
-        kind: move.kind,
-        to: [...move.to],
-      })),
-    });
-    try {
-      const response = await this.postCompletionWithRetries('/api/ugc/played', body);
-      const result: MarkPlayedResponse = await response.json();
-      if (!result.ok) throw new Error(result.reason);
-      // Signed players only hide the puzzle locally after durable server evidence
-      // succeeds; a failed request remains visible and retryable this session.
-      rememberLocally();
-    } catch (error) {
-      console.error(error);
+    // Both signed and guest solves are remembered only after the server has
+    // verified the exact transcript. Guest memory remains Phaser-session local.
+    const locallyPlayed: string[] = this.registry.get('ugc.played.local') ?? [];
+    if (!locallyPlayed.includes(id)) {
+      this.registry.set('ugc.played.local', [...locallyPlayed, id]);
     }
   }
 

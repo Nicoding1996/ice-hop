@@ -19,58 +19,60 @@ export type DailySplashSnapshotV2 = {
   readonly difficulty: Difficulty;
 };
 
-export type DailySolvedResult = {
-  readonly moves: number;
-  readonly stars: number;
-};
-
-/**
- * Metadata-only shape retained so old count-summary postData can be recognized
- * and upgraded automatically through `/api/post-preview`. Unknown legacy fields
- * are intentionally ignored by the runtime parser.
- */
 export type LegacyDailySplashPostData = {
   readonly kind: 'daily';
   readonly difficulty: Difficulty;
   readonly date?: string;
 };
 
-/** Existing exact Community preview payload. */
-export type UgcSplashPostData = {
+/**
+ * Exact immutable Community snapshot embedded in current postData and returned
+ * by the read-only historical-post preview route. Piece order is immutable
+ * because move transcripts address piece indexes.
+ */
+export type UgcSplashSnapshotV2 = {
+  readonly version: 2;
+  readonly kind: 'ugc';
+  readonly id: string;
+  readonly board: Board;
+  readonly par: number;
+  readonly difficulty: Difficulty;
+  readonly creator: string;
+};
+
+/** Legacy unversioned Community postData retained for historical posts. */
+export type LegacyUgcSplashPostData = {
   readonly kind: 'ugc';
   readonly board: Board;
   readonly difficulty: Difficulty;
   readonly creator: string;
 };
 
+/** Backward-compatible name for the historical unversioned payload. */
+export type UgcSplashPostData = LegacyUgcSplashPostData;
+
 /** Static splash payload JSON-stringified under `postData.splash`. */
 export type SplashPostData =
   | DailySplashSnapshotV2
+  | UgcSplashSnapshotV2
   | LegacyDailySplashPostData
-  | UgcSplashPostData;
+  | LegacyUgcSplashPostData;
 
 /** The `postData` object shape: the splash payload as a JSON string. */
 export const POST_DATA_SPLASH_KEY = 'splash';
 
 /**
- * Read-only feed metadata. Daily responses include the exact immutable board so
- * historical posts can become playable inline, but never include or issue a
- * `playId`; `/api/init` remains the play-capability endpoint.
+ * Read-only feed metadata. Daily and Community responses include only the exact
+ * immutable board needed to upgrade historical posts; personalized completion
+ * state is intentionally limited to the explicit `solved` Community status.
  */
 export type PostPreviewResponse =
-  | (DailySplashSnapshotV2 & {
+  | (DailySplashSnapshotV2 & { readonly type: 'post-preview' })
+  | (UgcSplashSnapshotV2 & {
       readonly type: 'post-preview';
-      readonly solvedResult?: DailySolvedResult;
-    })
-  | {
-      readonly type: 'post-preview';
-      readonly kind: 'ugc';
-      readonly board: Board;
-      readonly difficulty: Difficulty;
-      readonly creator: string;
       readonly solves: number;
       readonly solved: boolean;
-    };
+    });
 
 /** A community (UGC) puzzle, shaped for the client to render + play. */
 export type InitUgcPuzzle = {

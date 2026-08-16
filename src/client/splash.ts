@@ -1,10 +1,14 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { createInlineDaily, type InlineDailyController } from './inlineDaily';
+import {
+  createInlineCommunity,
+  createInlineDaily,
+  type InlinePuzzleController,
+} from './inlineDaily';
 import type {
-  DailySolvedResult,
   DailySplashSnapshotV2,
   PostPreviewResponse,
   SplashPostData,
+  UgcSplashSnapshotV2,
 } from '../shared/api';
 import { POST_DATA_SPLASH_KEY } from '../shared/api';
 import { todayUtc } from '../shared/date';
@@ -12,7 +16,6 @@ import { isDailyDate, parseDailyPuzzleId } from '../shared/daily';
 import type { Board, Piece } from '../shared/game/types';
 import { MAX_REPLAY_MOVES } from '../shared/game/replay';
 import { isSolved } from '../shared/game/rules';
-import { computeStars } from '../shared/scoring';
 import { validateBoardStructure } from '../shared/game/validation';
 import { difficultyFromPar, type Difficulty } from '../shared/solver/difficulty';
 
@@ -32,7 +35,8 @@ const launchStorageKey =
 
 let launchPending = false;
 let launchResetTimer: number | undefined;
-let inlineDaily: InlineDailyController | null = null;
+let inlinePuzzle: InlinePuzzleController | null = null;
+let inlinePuzzleKind: 'daily' | 'ugc' | null = null;
 let idleStartLabel = startButton?.textContent ?? "Play today's puzzle";
 
 const clearLaunchIntent = (): void => {
@@ -53,7 +57,7 @@ const resetLaunchState = (clearIntent = false): void => {
   launchResetTimer = undefined;
   if (clearIntent) clearLaunchIntent();
   launchPending = false;
-  inlineDaily?.setExpansionPending(false);
+  inlinePuzzle?.setExpansionPending(false);
   document.body.classList.remove('opening');
   startButton?.removeAttribute('aria-busy');
   exploreButton?.removeAttribute('aria-busy');
@@ -74,7 +78,7 @@ const openExpanded = (
   // when that handoff could not be saved.
   if (beforeRequest && !beforeRequest()) return;
   launchPending = true;
-  inlineDaily?.setExpansionPending(true);
+  inlinePuzzle?.setExpansionPending(true);
   document.body.classList.add('opening');
   if (startButton) startButton.disabled = true;
   if (exploreButton) exploreButton.disabled = true;
@@ -106,8 +110,8 @@ const openExpanded = (
 };
 
 startButton?.addEventListener('click', (event) => {
-  if (renderedKind === 'daily' && inlineDaily) {
-    beginDailyInline(event.detail === 0);
+  if (renderedKind && inlinePuzzle) {
+    beginInlinePuzzle(event.detail === 0);
     return;
   }
   openExpanded(event, 'play');
@@ -180,19 +184,6 @@ const readInteger = (value: unknown, min: number, max: number): number | null =>
     ? value
     : null;
 
-const parseDailySolvedResult = (
-  value: unknown,
-  par: number
-): DailySolvedResult | null => {
-  if (!isObject(value)) return null;
-  const moves = readInteger(property(value, 'moves'), par, MAX_REPLAY_MOVES);
-  const stars = readInteger(property(value, 'stars'), 1, 3);
-  if (moves === null || stars === null || computeStars(moves, par) !== stars) {
-    return null;
-  }
-  return { moves, stars };
-};
-
 const parseDailySplashSnapshotV2 = (value: object): DailySplashSnapshotV2 | null => {
   // Exact snapshots are untrusted feed data. Validate identity, structure, par,
   // and piece order before allowing the board to become interactive.
@@ -243,11 +234,59 @@ const parseDailySplashSnapshotV2 = (value: object): DailySplashSnapshotV2 | null
   };
 };
 
+const parseUgcSplashSnapshotV2 = (value: object): UgcSplashSnapshotV2 | null => {
+  if (property(value, 'version') !== 2 || property(value, 'kind') !== 'ugc') {
+    return null;
+  }
+
+  const id = property(value, 'id');
+  const par = readInteger(property(value, 'par'), 1, MAX_REPLAY_MOVES);
+  const difficulty = readDifficulty(property(value, 'difficulty'));
+  const creator = property(value, 'creator');
+  const structure = validateBoardStructure(property(value, 'board'));
+  if (
+    typeof id !== 'string' ||
+    id.length < 1 ||
+    id.length > 64 ||
+    par === null ||
+    !difficulty ||
+    difficultyFromPar(par) !== difficulty ||
+    typeof creator !== 'string' ||
+    creator.length < 1 ||
+    creator.length > 100 ||
+    !structure.ok
+  ) {
+    return null;
+  }
+
+  const board = structure.board;
+  const hoppers = board.pieces.filter((piece) => piece.kind === 'HOPPER').length;
+  if (hoppers < 1 || hoppers !== board.holes.length || isSolved(board, board.pieces)) {
+    return null;
+  }
+
+  return {
+    version: 2,
+    kind: 'ugc',
+    id,
+    board,
+    par,
+    difficulty,
+    creator,
+  };
+};
+
 const parseSplashPostData = (value: unknown): SplashPostData | null => {
   if (!isObject(value)) return null;
   const version = property(value, 'version');
   if (version !== undefined) {
-    return version === 2 ? parseDailySplashSnapshotV2(value) : null;
+    if (version !== 2) return null;
+    const kind = property(value, 'kind');
+    return kind === 'daily'
+      ? parseDailySplashSnapshotV2(value)
+      : kind === 'ugc'
+        ? parseUgcSplashSnapshotV2(value)
+        : null;
   }
 
   const kind = property(value, 'kind');
@@ -284,42 +323,15 @@ const parsePostPreviewResponse = (value: unknown): PostPreviewResponse | null =>
 
   if (kind === 'daily') {
     const snapshot = parseDailySplashSnapshotV2(value);
-    if (!snapshot) return null;
-    const solvedResultValue = property(value, 'solvedResult');
-    if (solvedResultValue === undefined) {
-      return { type: 'post-preview', ...snapshot };
-    }
-    const solvedResult = parseDailySolvedResult(solvedResultValue, snapshot.par);
-    if (!solvedResult) return null;
-    return { type: 'post-preview', ...snapshot, solvedResult };
+    return snapshot ? { type: 'post-preview', ...snapshot } : null;
   }
   if (kind !== 'ugc') return null;
 
-  const creator = property(value, 'creator');
-  const solves = property(value, 'solves');
+  const snapshot = parseUgcSplashSnapshotV2(value);
+  const solves = readInteger(property(value, 'solves'), 0, 10_000_000);
   const solved = property(value, 'solved');
-  const structure = validateBoardStructure(property(value, 'board'));
-  if (
-    typeof creator !== 'string' ||
-    creator.length < 1 ||
-    creator.length > 100 ||
-    typeof solves !== 'number' ||
-    !Number.isSafeInteger(solves) ||
-    solves < 0 ||
-    typeof solved !== 'boolean' ||
-    !structure.ok
-  ) {
-    return null;
-  }
-  return {
-    type: 'post-preview',
-    kind,
-    board: structure.board,
-    difficulty,
-    creator,
-    solves,
-    solved,
-  };
+  if (!snapshot || solves === null || typeof solved !== 'boolean') return null;
+  return { type: 'post-preview', ...snapshot, solves, solved };
 };
 
 // --- tiny SVG builders (mirror Phaser's ellipse/circle/rect/triangle) --------
@@ -602,16 +614,16 @@ const paintDailyMetadata = (
 
 const setLegacyConnecting = (): void => {
   if (!startButton) return;
-  setIdleStartLabel('Connecting to Daily…');
+  setIdleStartLabel(`Connecting to ${renderedKind === 'ugc' ? 'Community' : 'Daily'}…`);
   startButton.disabled = true;
   startButton.setAttribute('aria-busy', 'true');
 };
 
-const beginDailyInline = (restoreKeyboardFocus = false): void => {
+const beginInlinePuzzle = (restoreKeyboardFocus = false): void => {
   legacyKeyboardStartPending = restoreKeyboardFocus;
-  if (!inlineDaily) return;
+  if (!inlinePuzzle) return;
   setLegacyConnecting();
-  inlineDaily.start(restoreKeyboardFocus);
+  inlinePuzzle.start(restoreKeyboardFocus);
 };
 
 const showLegacyHydrationError = (): void => {
@@ -620,7 +632,9 @@ const showLegacyHydrationError = (): void => {
   if (!startButton) return;
   startButton.removeAttribute('aria-busy');
   startButton.disabled = false;
-  setIdleStartLabel('Retry inline Daily');
+  setIdleStartLabel(
+    `Retry inline ${renderedKind === 'ugc' ? 'Community puzzle' : 'Daily'}`
+  );
   if (restoreKeyboardFocus) {
     queueMicrotask(() => startButton.focus({ preventScroll: true }));
   }
@@ -640,17 +654,31 @@ const renderDailyStatic = (snapshot: DailySplashSnapshotV2): void => {
   paintDailyMetadata(snapshot.difficulty, snapshot.date);
 };
 
-const applyDailySnapshot = (
-  snapshot: DailySplashSnapshotV2,
-  solvedResult: DailySolvedResult | null
-): void => {
-  if (inlineDaily) {
-    if (!inlineDaily.applySnapshot(snapshot, solvedResult)) {
+const applyDailySnapshot = (snapshot: DailySplashSnapshotV2): void => {
+  if (!inlinePuzzle && initializeInlinePuzzle({ kind: 'daily', snapshot })) return;
+  if (inlinePuzzle) {
+    if (!inlinePuzzle.applySnapshot(snapshot)) {
       console.error('Daily preview did not match the active inline puzzle.');
     }
     return;
   }
   renderDailyStatic(snapshot);
+};
+
+const applyUgcSnapshot = (
+  snapshot: UgcSplashSnapshotV2,
+  solved: boolean,
+  solves: number
+): void => {
+  if (!inlinePuzzle && initializeInlinePuzzle({ kind: 'ugc', snapshot })) return;
+  if (inlinePuzzle) {
+    if (!inlinePuzzle.applySnapshot(snapshot)) {
+      console.error('Community preview did not match the active inline puzzle.');
+    }
+    return;
+  }
+  renderUgcStatic(snapshot.board, snapshot.difficulty, snapshot.creator);
+  applyUgcStatus(solved, solves);
 };
 
 // Reconcile current postData with live status, and automatically upgrade old
@@ -664,21 +692,24 @@ const loadPostPreview = async (): Promise<void> => {
     const data = parsePostPreviewResponse(raw);
     if (!data) return;
     if (data.kind === 'ugc') {
-      renderUgcStatic(data.board, data.difficulty, data.creator);
-      applyUgcStatus(data.solved, data.solves);
+      applyUgcSnapshot(data, data.solved, data.solves);
       return;
     }
 
-    applyDailySnapshot(data, data.solvedResult ?? null);
+    applyDailySnapshot(data);
   } catch (error) {
     console.error(error);
   }
 };
 
-// Exact Daily postData starts the real inline board synchronously. Older
-// metadata/count-only posts are recognized here and upgraded automatically by
-// `/api/post-preview` without ever constructing a fake board.
-const renderFromPostData = (): DailySplashSnapshotV2 | null => {
+// Exact V2 postData starts the real inline board synchronously. Historical
+// metadata/unversioned posts stay recognizable and upgrade through the
+// read-only `/api/post-preview` route without constructing a fake identity.
+type InlineBootstrap =
+  | { readonly kind: 'daily'; readonly snapshot: DailySplashSnapshotV2 | null }
+  | { readonly kind: 'ugc'; readonly snapshot: UgcSplashSnapshotV2 | null };
+
+const renderFromPostData = (): InlineBootstrap | null => {
   try {
     const raw = context.postData?.[POST_DATA_SPLASH_KEY];
     if (typeof raw !== 'string') return null;
@@ -686,47 +717,79 @@ const renderFromPostData = (): DailySplashSnapshotV2 | null => {
     const data = parseSplashPostData(value);
     if (!data) return null;
     if (data.kind === 'ugc') {
+      renderedKind = 'ugc';
+      if ('version' in data) return { kind: 'ugc', snapshot: data };
       renderUgcStatic(data.board, data.difficulty, data.creator);
-      return null;
+      return { kind: 'ugc', snapshot: null };
     }
     renderedKind = 'daily';
-    if ('version' in data) return data;
+    if ('version' in data) return { kind: 'daily', snapshot: data };
     paintDailyMetadata(data.difficulty, data.date);
-    return null;
+    return { kind: 'daily', snapshot: null };
   } catch (error) {
     console.error(error);
     return null;
   }
 };
 
-const initialDailySnapshot = renderFromPostData();
-
+const initialPuzzle = renderFromPostData();
 const inlineRootElement = document.getElementById('inline-daily');
-try {
-  if (inlineRootElement instanceof HTMLElement) {
-    const postId = typeof context.postId === 'string' ? context.postId : '';
-    inlineDaily = createInlineDaily({
+const postId = typeof context.postId === 'string' ? context.postId : '';
+
+const initializeInlinePuzzle = (puzzle: InlineBootstrap): boolean => {
+  if (inlinePuzzle) return inlinePuzzleKind === puzzle.kind;
+  if (!(inlineRootElement instanceof HTMLElement)) return false;
+  renderedKind = puzzle.kind;
+  try {
+    const common = {
       root: inlineRootElement,
       postId,
-      ...(initialDailySnapshot ? { snapshot: initialDailySnapshot } : {}),
-      renderBoard: (board, pieces, label) => renderBoardPreview(board, label, pieces),
-      openExpanded: (event, intent, beforeRequest) =>
-        openExpanded(event, intent, beforeRequest),
+      renderBoard: (board: Board, pieces: readonly Piece[], label: string) =>
+        renderBoardPreview(board, label, pieces),
+      openExpanded: (
+        event: MouseEvent,
+        intent: LaunchIntent,
+        beforeRequest?: () => boolean
+      ) => openExpanded(event, intent, beforeRequest),
       onLegacyHydrationError: showLegacyHydrationError,
       onHydrated: () => {
         legacyKeyboardStartPending = false;
       },
-    });
-    if (initialDailySnapshot) inlineDaily.start();
-  } else if (initialDailySnapshot) {
-    renderDailyStatic(initialDailySnapshot);
+    };
+    inlinePuzzle =
+      puzzle.kind === 'daily'
+        ? createInlineDaily({
+            ...common,
+            ...(puzzle.snapshot ? { snapshot: puzzle.snapshot } : {}),
+          })
+        : createInlineCommunity({
+            ...common,
+            ...(puzzle.snapshot ? { snapshot: puzzle.snapshot } : {}),
+          });
+    inlinePuzzleKind = puzzle.kind;
+    inlinePuzzle.setExpansionPending(launchPending);
+    if (puzzle.snapshot) inlinePuzzle.start();
+    return true;
+  } catch (error) {
+    console.error(error);
+    inlinePuzzle = null;
+    inlinePuzzleKind = null;
+    return false;
   }
-} catch (error) {
-  // Preserve the exact visible board and expanded-game fallback if the richer
-  // inline controller cannot initialize.
-  console.error(error);
-  inlineDaily = null;
-  if (initialDailySnapshot) renderDailyStatic(initialDailySnapshot);
+};
+
+try {
+  if (initialPuzzle && !initializeInlinePuzzle(initialPuzzle)) {
+    if (initialPuzzle.snapshot?.kind === 'daily') {
+      renderDailyStatic(initialPuzzle.snapshot);
+    } else if (initialPuzzle.snapshot?.kind === 'ugc') {
+      renderUgcStatic(
+        initialPuzzle.snapshot.board,
+        initialPuzzle.snapshot.difficulty,
+        initialPuzzle.snapshot.creator
+      );
+    }
+  }
 } finally {
   document.body.classList.remove('splash-booting');
 }
