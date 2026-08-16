@@ -1,15 +1,20 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
+import { createInlineDaily, type InlineDailyController } from './inlineDaily';
 import type {
-  DailyBoardTeaser,
+  DailySolvedResult,
+  DailySplashSnapshotV2,
   PostPreviewResponse,
   SplashPostData,
 } from '../shared/api';
 import { POST_DATA_SPLASH_KEY } from '../shared/api';
 import { todayUtc } from '../shared/date';
-import { isDailyDate } from '../shared/daily';
+import { isDailyDate, parseDailyPuzzleId } from '../shared/daily';
 import type { Board, Piece } from '../shared/game/types';
+import { MAX_REPLAY_MOVES } from '../shared/game/replay';
+import { isSolved } from '../shared/game/rules';
+import { computeStars } from '../shared/scoring';
 import { validateBoardStructure } from '../shared/game/validation';
-import type { Difficulty } from '../shared/solver/difficulty';
+import { difficultyFromPar, type Difficulty } from '../shared/solver/difficulty';
 
 // --- Launch actions ----------------------------------------------------------
 
@@ -18,17 +23,23 @@ const startButton = startElement instanceof HTMLButtonElement ? startElement : n
 const exploreElement = document.getElementById('explore-button');
 const exploreButton = exploreElement instanceof HTMLButtonElement ? exploreElement : null;
 type ExpandedModeEvent = Parameters<typeof requestExpandedMode>[0];
-type LaunchIntent = 'play' | 'home';
+type LaunchIntent = 'play' | 'home' | 'endless';
+
+const launchStorageKey =
+  typeof context.postId === 'string' && context.postId.length > 0
+    ? `icehop.launch:${context.postId}`
+    : 'icehop.launch:no-post';
 
 let launchPending = false;
 let launchResetTimer: number | undefined;
+let inlineDaily: InlineDailyController | null = null;
 let idleStartLabel = startButton?.textContent ?? "Play today's puzzle";
 
 const clearLaunchIntent = (): void => {
   try {
-    localStorage.removeItem('icehop.launch');
+    sessionStorage.removeItem(launchStorageKey);
   } catch {
-    /* localStorage is an optimization; default launch still opens the post */
+    /* sessionStorage is an optimization; default launch still opens the post */
   }
 };
 
@@ -42,6 +53,7 @@ const resetLaunchState = (clearIntent = false): void => {
   launchResetTimer = undefined;
   if (clearIntent) clearLaunchIntent();
   launchPending = false;
+  inlineDaily?.setExpansionPending(false);
   document.body.classList.remove('opening');
   startButton?.removeAttribute('aria-busy');
   exploreButton?.removeAttribute('aria-busy');
@@ -52,9 +64,17 @@ const resetLaunchState = (clearIntent = false): void => {
   if (exploreButton) exploreButton.disabled = false;
 };
 
-const openExpanded = (event: ExpandedModeEvent, intent: LaunchIntent): void => {
+const openExpanded = (
+  event: ExpandedModeEvent,
+  intent: LaunchIntent,
+  beforeRequest?: () => boolean
+): void => {
   if (launchPending) return;
+  // A continuation may require a durable one-shot transcript. Never navigate
+  // when that handoff could not be saved.
+  if (beforeRequest && !beforeRequest()) return;
   launchPending = true;
+  inlineDaily?.setExpansionPending(true);
   document.body.classList.add('opening');
   if (startButton) startButton.disabled = true;
   if (exploreButton) exploreButton.disabled = true;
@@ -66,24 +86,32 @@ const openExpanded = (event: ExpandedModeEvent, intent: LaunchIntent): void => {
   } else {
     exploreButton?.setAttribute('aria-busy', 'true');
     try {
-      localStorage.setItem('icehop.launch', 'home');
+      sessionStorage.setItem(launchStorageKey, intent);
     } catch {
-      /* localStorage unavailable - Boot will play the host post */
+      /* sessionStorage unavailable - Boot will play the host post */
     }
   }
 
   try {
-    // Keep this synchronous inside the click handler so Reddit retains the user gesture.
+    // Keep expansion in this click stack so Reddit retains the user gesture.
     requestExpandedMode(event, 'game');
-    // If expansion fails silently, clear any one-shot route and restore the card.
-    launchResetTimer = window.setTimeout(() => resetLaunchState(true), 4000);
+    // If expansion fails silently, restore this card. Keep the one-shot route
+    // and handoff until the expanded entrypoint consumes them or a later user
+    // action replaces them; its own init timeout is longer than this UI reset.
+    launchResetTimer = window.setTimeout(() => resetLaunchState(false), 4000);
   } catch (error) {
     console.error(error);
     resetLaunchState(true);
   }
 };
 
-startButton?.addEventListener('click', (event) => openExpanded(event, 'play'));
+startButton?.addEventListener('click', (event) => {
+  if (renderedKind === 'daily' && inlineDaily) {
+    beginDailyInline(event.detail === 0);
+    return;
+  }
+  openExpanded(event, 'play');
+});
 exploreButton?.addEventListener('click', (event) => openExpanded(event, 'home'));
 window.addEventListener('pageshow', () => resetLaunchState(true));
 
@@ -99,11 +127,12 @@ if (meta) {
   meta.textContent = context.username ? `${date}  -  hi ${context.username}` : date;
 }
 
-// --- Community-puzzle preview ------------------------------------------------
-// Daily posts use a spoiler-safe synthetic board. Community-puzzle posts
-// swap in the exact validated board because they are not timed. Both previews
-// mirror the in-game Phaser draw helpers (art/theme.ts): same proportions and
-// palette, emitted as static SVG so the splash stays Phaser-free and fast.
+// --- Feed-card puzzle preview -----------------------------------------------
+// Daily and Community cards both render their exact immutable board. Daily
+// snapshots become playable inline immediately; `/api/init` is still required
+// before an authoritative solve can be submitted.
+// All previews mirror the in-game Phaser draw helpers (art/theme.ts), emitted as
+// static SVG so the inline entrypoint stays Phaser-free and fast.
 
 const C = {
   sheet: '#d4ecf7',
@@ -143,46 +172,84 @@ const readDifficulty = (value: unknown): Difficulty | null =>
     ? value
     : null;
 
-const parseDailyBoardTeaser = (value: unknown): DailyBoardTeaser | null => {
+const readInteger = (value: unknown, min: number, max: number): number | null =>
+  typeof value === 'number' &&
+  Number.isSafeInteger(value) &&
+  value >= min &&
+  value <= max
+    ? value
+    : null;
+
+const parseDailySolvedResult = (
+  value: unknown,
+  par: number
+): DailySolvedResult | null => {
   if (!isObject(value)) return null;
-  const width = property(value, 'width');
-  const height = property(value, 'height');
-  const hoppers = property(value, 'hoppers');
-  const sliders = property(value, 'sliders');
-  const blockers = property(value, 'blockers');
-  const holes = property(value, 'holes');
-  const values = [width, height, hoppers, sliders, blockers, holes];
+  const moves = readInteger(property(value, 'moves'), par, MAX_REPLAY_MOVES);
+  const stars = readInteger(property(value, 'stars'), 1, 3);
+  if (moves === null || stars === null || computeStars(moves, par) !== stars) {
+    return null;
+  }
+  return { moves, stars };
+};
+
+const parseDailySplashSnapshotV2 = (value: object): DailySplashSnapshotV2 | null => {
+  // Exact snapshots are untrusted feed data. Validate identity, structure, par,
+  // and piece order before allowing the board to become interactive.
   if (
-    values.some(
-      (entry) =>
-        typeof entry !== 'number' || !Number.isSafeInteger(entry) || entry < 0
-    ) ||
-    typeof width !== 'number' ||
-    typeof height !== 'number' ||
-    typeof hoppers !== 'number' ||
-    typeof sliders !== 'number' ||
-    typeof blockers !== 'number' ||
-    typeof holes !== 'number' ||
-    width < 1 ||
-    height < 1 ||
-    width > 20 ||
-    height > 20
+    property(value, 'version') !== 2 ||
+    property(value, 'kind') !== 'daily'
   ) {
     return null;
   }
-  const cells = width * height;
+
+  const puzzleIdValue = property(value, 'puzzleId');
+  if (typeof puzzleIdValue !== 'string' || puzzleIdValue.length > 128) return null;
+  const puzzleId = puzzleIdValue;
+  const date = property(value, 'date');
+  const par = property(value, 'par');
+  const difficulty = readDifficulty(property(value, 'difficulty'));
+  const puzzleRef = parseDailyPuzzleId(puzzleId);
+  const structure = validateBoardStructure(property(value, 'board'));
   if (
-    holes > cells ||
-    hoppers !== holes ||
-    hoppers + blockers + sliders * 2 > cells
+    !puzzleRef ||
+    !isDailyDate(date) ||
+    puzzleRef.date !== date ||
+    typeof par !== 'number' ||
+    !Number.isSafeInteger(par) ||
+    par < 1 ||
+    par > MAX_REPLAY_MOVES ||
+    !difficulty ||
+    difficultyFromPar(par) !== difficulty ||
+    !structure.ok
   ) {
     return null;
   }
-  return { width, height, hoppers, sliders, blockers, holes };
+
+  const board = structure.board;
+  const hoppers = board.pieces.filter((piece) => piece.kind === 'HOPPER').length;
+  if (hoppers < 1 || hoppers !== board.holes.length || isSolved(board, board.pieces)) {
+    return null;
+  }
+
+  return {
+    version: 2,
+    kind: 'daily',
+    puzzleId,
+    date,
+    board,
+    par,
+    difficulty,
+  };
 };
 
 const parseSplashPostData = (value: unknown): SplashPostData | null => {
   if (!isObject(value)) return null;
+  const version = property(value, 'version');
+  if (version !== undefined) {
+    return version === 2 ? parseDailySplashSnapshotV2(value) : null;
+  }
+
   const kind = property(value, 'kind');
   const difficulty = readDifficulty(property(value, 'difficulty'));
   if (!difficulty) return null;
@@ -190,17 +257,9 @@ const parseSplashPostData = (value: unknown): SplashPostData | null => {
   if (kind === 'daily') {
     const dateValue = property(value, 'date');
     if (dateValue !== undefined && !isDailyDate(dateValue)) return null;
-    const teaserValue = property(value, 'teaser');
-    if (teaserValue === undefined) {
-      return dateValue === undefined
-        ? { kind, difficulty }
-        : { kind, date: dateValue, difficulty };
-    }
-    const teaser = parseDailyBoardTeaser(teaserValue);
-    if (!teaser) return null;
     return dateValue === undefined
-      ? { kind, difficulty, teaser }
-      : { kind, date: dateValue, difficulty, teaser };
+      ? { kind, difficulty }
+      : { kind, date: dateValue, difficulty };
   }
   if (kind !== 'ugc') return null;
 
@@ -224,11 +283,15 @@ const parsePostPreviewResponse = (value: unknown): PostPreviewResponse | null =>
   if (!difficulty) return null;
 
   if (kind === 'daily') {
-    const date = property(value, 'date');
-    const teaser = parseDailyBoardTeaser(property(value, 'teaser'));
-    return isDailyDate(date) && teaser
-      ? { type: 'post-preview', kind, date, difficulty, teaser }
-      : null;
+    const snapshot = parseDailySplashSnapshotV2(value);
+    if (!snapshot) return null;
+    const solvedResultValue = property(value, 'solvedResult');
+    if (solvedResultValue === undefined) {
+      return { type: 'post-preview', ...snapshot };
+    }
+    const solvedResult = parseDailySolvedResult(solvedResultValue, snapshot.par);
+    if (!solvedResult) return null;
+    return { type: 'post-preview', ...snapshot, solvedResult };
   }
   if (kind !== 'ugc') return null;
 
@@ -321,6 +384,35 @@ const penguinArt = (x: number, y: number, s: number): string => {
   );
 };
 
+/** Compact head, shoulders, and ripple used once a penguin reaches a hole. */
+const swimmingPenguinArt = (x: number, y: number, s: number): string => {
+  const sw = Math.max(1.5, 0.04 * s);
+  const eyeY = y - 0.1 * s;
+  return (
+    ell(x, y + 0.2 * s, 0.28 * s, 0.09 * s, 'transparent', {
+      stroke: C.shimmer,
+      sw: Math.max(1, 0.03 * s),
+      opacity: 0.55,
+    }) +
+    ell(x, y - 0.02 * s, 0.28 * s, 0.28 * s, C.pen, { stroke: C.penOut, sw }) +
+    ell(x, y + 0.06 * s, 0.18 * s, 0.17 * s, C.belly) +
+    ell(x - 0.12 * s, eyeY, 0.095 * s, 0.115 * s, C.eyeWhite) +
+    ell(x + 0.12 * s, eyeY, 0.095 * s, 0.115 * s, C.eyeWhite) +
+    cir(x - 0.1 * s, eyeY + 0.01 * s, 0.06 * s, C.eye) +
+    cir(x + 0.1 * s, eyeY + 0.01 * s, 0.06 * s, C.eye) +
+    cir(x - 0.07 * s, eyeY - 0.02 * s, 0.02 * s, C.eyeWhite) +
+    cir(x + 0.13 * s, eyeY - 0.02 * s, 0.02 * s, C.eyeWhite) +
+    tri(
+      [
+        [x - 0.055 * s, y - 0.02 * s],
+        [x + 0.055 * s, y - 0.02 * s],
+        [x, y + 0.06 * s],
+      ],
+      C.beak
+    )
+  );
+};
+
 /** Faceted ice block with snow cap and a soft ground shadow (drawRockInto). */
 const rockArt = (x: number, y: number, s: number): string =>
   ell(x, y + 0.33 * s, 0.31 * s, 0.08 * s, '#0a2233', { opacity: 0.3 }) +
@@ -357,7 +449,11 @@ const sealArt = (x: number, y: number, s: number, vertical: boolean): string => 
   return vertical ? `<g transform="rotate(90 ${n(x)} ${n(y)})">${art}</g>` : art;
 };
 
-const renderBoardPreview = (board: Board, label: string): string => {
+const renderBoardPreview = (
+  board: Board,
+  label: string,
+  pieces: readonly Piece[] = board.pieces
+): string => {
   const colOf = (i: number): number => i % board.width;
   const rowOf = (i: number): number => Math.floor(i / board.width);
   const cx = (i: number): number => PAD + colOf(i) * CELL + CELL / 2;
@@ -366,7 +462,9 @@ const renderBoardPreview = (board: Board, label: string): string => {
   const boardH = board.height * CELL;
   const w = boardW + PAD * 2;
   const h = boardH + PAD * 2;
-  const S = CELL * 0.9; // piece size, a hair under the cell like the real board
+  // GameScene passes the full cell size into every art helper. Keeping the same
+  // scale here makes holes, penguins, seals, and rocks identical at any viewport.
+  const S = CELL;
   const parts: string[] = [];
 
   // One connected ice sheet (paintIceSheet): soft shadow, base, faint scored
@@ -378,7 +476,7 @@ const renderBoardPreview = (board: Board, label: string): string => {
   const sH = boardH + sp * 2;
   const sr = CELL * 0.34;
   const gsw = Math.max(1, CELL * 0.02);
-  parts.push(box(sx + 2, sy + 4, sW, sH, sr, '#06121f', { opacity: 0.45 }));
+  parts.push(box(sx + 4, sy + 9, sW, sH, sr, '#06121f', { opacity: 0.45 }));
   parts.push(box(sx, sy, sW, sH, sr, C.sheet));
   for (let c = 1; c < board.width; c++) {
     const gx = PAD + c * CELL;
@@ -399,139 +497,29 @@ const renderBoardPreview = (board: Board, label: string): string => {
   // Water holes.
   for (const hole of board.holes) parts.push(holeArt(cx(hole), cy(hole), S));
 
-  // Pieces (penguins, seals, rocks).
-  for (const piece of board.pieces) {
+  // Pieces (penguins, seals, rocks). The outer wrapper owns movement/drag;
+  // selection scales only the inner art, matching GameScene's persistent views.
+  pieces.forEach((piece, pieceIndex) => {
+    let art = '';
     if (piece.kind === 'BLOCKER') {
-      parts.push(rockArt(cx(piece.cells[0]), cy(piece.cells[0]), S));
+      art = rockArt(cx(piece.cells[0]), cy(piece.cells[0]), S);
     } else if (piece.kind === 'SLIDER') {
       const last = piece.cells[piece.cells.length - 1];
       const ax = (cx(piece.cells[0]) + cx(last)) / 2;
       const ay = (cy(piece.cells[0]) + cy(last)) / 2;
       const vertical = rowOf(piece.cells[0]) !== rowOf(last);
-      parts.push(sealArt(ax, ay, S, vertical));
+      art = sealArt(ax, ay, S, vertical);
     } else {
-      parts.push(penguinArt(cx(piece.cells[0]), cy(piece.cells[0]), S));
+      art = board.holes.includes(piece.cells[0])
+        ? swimmingPenguinArt(cx(piece.cells[0]), cy(piece.cells[0]), S)
+        : penguinArt(cx(piece.cells[0]), cy(piece.cells[0]), S);
     }
-  }
+    parts.push(
+      `<g data-inline-piece-art="${pieceIndex}"><g data-inline-piece-inner="${pieceIndex}">${art}</g></g>`
+    );
+  });
 
-  return `<svg class="preview-art" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${label}">${parts.join('')}</svg>`;
-};
-
-// The Daily teaser mirrors the real board's dimensions and piece counts, but
-// places everything at synthetic anchors. It feels like the game while keeping
-// the actual layout unavailable until /api/init starts the play clock.
-type Anchor = readonly [number, number];
-type SliderCandidate = {
-  readonly cells: readonly [number, number];
-  readonly orient: 'H' | 'V';
-  readonly distance: number;
-};
-
-const HOLE_ANCHORS: readonly Anchor[] = [
-  [0.86, 0.14],
-  [0.14, 0.84],
-  [0.86, 0.84],
-];
-const SLIDER_ANCHORS: readonly Anchor[] = [
-  [0.42, 0.24],
-  [0.72, 0.54],
-];
-const BLOCKER_ANCHORS: readonly Anchor[] = [
-  [0.5, 0.52],
-  [0.22, 0.42],
-];
-const HOPPER_ANCHORS: readonly Anchor[] = [
-  [0.14, 0.14],
-  [0.5, 0.84],
-  [0.82, 0.66],
-];
-
-const buildDailyTeaserBoard = (teaser: DailyBoardTeaser): Board => {
-  const { width, height } = teaser;
-  const cellCount = width * height;
-  const occupied = new Set<number>();
-  const holes: number[] = [];
-  const pieces: Piece[] = [];
-  const allCells = Array.from({ length: cellCount }, (_, index) => index);
-  const distanceTo = (cell: number, anchor: Anchor): number => {
-    const col = cell % width;
-    const row = Math.floor(cell / width);
-    const targetCol = anchor[0] * Math.max(0, width - 1);
-    const targetRow = anchor[1] * Math.max(0, height - 1);
-    return (col - targetCol) ** 2 + (row - targetRow) ** 2;
-  };
-  const takeCell = (anchor: Anchor): number | null => {
-    const candidates = allCells
-      .filter((cell) => !occupied.has(cell))
-      .sort((a, b) => distanceTo(a, anchor) - distanceTo(b, anchor) || a - b);
-    const cell = candidates[0];
-    if (cell === undefined) return null;
-    occupied.add(cell);
-    return cell;
-  };
-
-  for (let index = 0; index < teaser.holes; index++) {
-    const anchor = HOLE_ANCHORS[index % HOLE_ANCHORS.length] ?? [0.5, 0.5];
-    const cell = takeCell(anchor);
-    if (cell !== null) holes.push(cell);
-  }
-
-  const placeSlider = (orient: 'H' | 'V', anchor: Anchor): boolean => {
-    const candidates: SliderCandidate[] = [];
-    for (let cell = 0; cell < cellCount; cell++) {
-      const col = cell % width;
-      const row = Math.floor(cell / width);
-      const second = orient === 'H' ? cell + 1 : cell + width;
-      if ((orient === 'H' && col + 1 >= width) || (orient === 'V' && row + 1 >= height)) {
-        continue;
-      }
-      const midCol = orient === 'H' ? col + 0.5 : col;
-      const midRow = orient === 'V' ? row + 0.5 : row;
-      const targetCol = anchor[0] * Math.max(0, width - 1);
-      const targetRow = anchor[1] * Math.max(0, height - 1);
-      candidates.push({
-        cells: [cell, second],
-        orient,
-        distance: (midCol - targetCol) ** 2 + (midRow - targetRow) ** 2,
-      });
-    }
-    const winner = candidates
-      .sort((a, b) => a.distance - b.distance || a.cells[0] - b.cells[0])
-      .find(({ cells }) => !occupied.has(cells[0]) && !occupied.has(cells[1]));
-    if (!winner) return false;
-    occupied.add(winner.cells[0]);
-    occupied.add(winner.cells[1]);
-    pieces.push({ kind: 'SLIDER', cells: winner.cells, orient: winner.orient });
-    return true;
-  };
-
-  for (let index = 0; index < teaser.sliders; index++) {
-    const anchor = SLIDER_ANCHORS[index % SLIDER_ANCHORS.length] ?? [0.5, 0.5];
-    const preferred: 'H' | 'V' = index % 2 === 0 ? 'H' : 'V';
-    if (!placeSlider(preferred, anchor)) {
-      void placeSlider(preferred === 'H' ? 'V' : 'H', anchor);
-    }
-  }
-
-  for (let index = 0; index < teaser.blockers; index++) {
-    const anchor = BLOCKER_ANCHORS[index % BLOCKER_ANCHORS.length] ?? [0.5, 0.5];
-    const cell = takeCell(anchor);
-    if (cell !== null) pieces.push({ kind: 'BLOCKER', cells: [cell] });
-  }
-  for (let index = 0; index < teaser.hoppers; index++) {
-    const anchor = HOPPER_ANCHORS[index % HOPPER_ANCHORS.length] ?? [0.5, 0.5];
-    const cell = takeCell(anchor);
-    if (cell !== null) pieces.push({ kind: 'HOPPER', cells: [cell] });
-  }
-
-  return { width, height, holes: holes.sort((a, b) => a - b), pieces };
-};
-
-const FALLBACK_DAILY_TEASER: Record<Difficulty, DailyBoardTeaser> = {
-  EASY: { width: 5, height: 5, hoppers: 1, sliders: 0, blockers: 1, holes: 1 },
-  MEDIUM: { width: 5, height: 5, hoppers: 2, sliders: 1, blockers: 1, holes: 2 },
-  HARD: { width: 5, height: 5, hoppers: 2, sliders: 2, blockers: 2, holes: 2 },
-  EXPERT: { width: 5, height: 5, hoppers: 3, sliders: 2, blockers: 2, holes: 3 },
+  return `<svg class="preview-art" viewBox="0 0 ${w} ${h}" overflow="visible" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${label}">${parts.join('')}</svg>`;
 };
 
 // Difficulty-dot colours: a small colour-coded cue inside an otherwise cool
@@ -544,8 +532,8 @@ const DIFFICULTY_DOT: Record<Difficulty, string> = {
 };
 
 let renderedKind: 'daily' | 'ugc' | null = null;
-let renderedDailyKey = '';
 let ugcBoardRendered = false;
+let legacyKeyboardStartPending = false;
 
 const paintBadge = (difficulty: Difficulty, prefix = ''): void => {
   const badge = document.getElementById('badge');
@@ -560,7 +548,6 @@ const paintBadge = (difficulty: Difficulty, prefix = ''): void => {
 const renderUgcStatic = (board: Board, difficulty: Difficulty, creator: string): void => {
   if (!ugcBoardRendered) {
     document.body.classList.add('puzzle-preview', 'ugc');
-    document.body.classList.remove('daily-preview');
     const hero = document.getElementById('hero');
     if (hero) {
       hero.innerHTML = renderBoardPreview(board, 'Community puzzle board preview');
@@ -595,29 +582,11 @@ const formatDailyDate = (date: string): string =>
     timeZone: 'UTC',
   });
 
-const renderDailyStatic = (
+const paintDailyMetadata = (
   difficulty: Difficulty,
-  teaser = FALLBACK_DAILY_TEASER[difficulty],
   date?: string
 ): void => {
-  if (renderedKind === 'ugc') return;
-  const key = `${date ?? 'legacy'}:${difficulty}:${teaser.width}:${teaser.height}:${teaser.hoppers}:${teaser.sliders}:${teaser.blockers}:${teaser.holes}`;
   const isToday = date === todayUtc();
-  if (key !== renderedDailyKey) {
-    document.body.classList.add('puzzle-preview', 'daily-preview');
-    document.body.classList.remove('ugc');
-    const board = buildDailyTeaserBoard(teaser);
-    const hero = document.getElementById('hero');
-    if (hero) {
-      const boardLabel = isToday ? "today's puzzle" : 'this Daily puzzle';
-      hero.innerHTML = `<div class="daily-teaser"><div class="daily-preview-shell">${renderBoardPreview(
-        board,
-        `Frosted illustration of ${boardLabel}`
-      )}<div class="daily-frost" aria-hidden="true"></div></div><span class="daily-reveal"><span class="daily-reveal-icon" aria-hidden="true">&#10052;</span>Board hidden until Play</span></div>`;
-    }
-    renderedDailyKey = key;
-  }
-
   paintBadge(difficulty, isToday ? 'Today: ' : 'Daily: ');
   const byline = document.getElementById('byline');
   if (byline) byline.textContent = '';
@@ -631,8 +600,62 @@ const renderDailyStatic = (
   renderedKind = 'daily';
 };
 
-// Refine static postData with live Community status or a legacy Daily's actual
-// counts. This endpoint is read-only: it never issues a Daily play.
+const setLegacyConnecting = (): void => {
+  if (!startButton) return;
+  setIdleStartLabel('Connecting to Daily…');
+  startButton.disabled = true;
+  startButton.setAttribute('aria-busy', 'true');
+};
+
+const beginDailyInline = (restoreKeyboardFocus = false): void => {
+  legacyKeyboardStartPending = restoreKeyboardFocus;
+  if (!inlineDaily) return;
+  setLegacyConnecting();
+  inlineDaily.start(restoreKeyboardFocus);
+};
+
+const showLegacyHydrationError = (): void => {
+  const restoreKeyboardFocus = legacyKeyboardStartPending;
+  legacyKeyboardStartPending = false;
+  if (!startButton) return;
+  startButton.removeAttribute('aria-busy');
+  startButton.disabled = false;
+  setIdleStartLabel('Retry inline Daily');
+  if (restoreKeyboardFocus) {
+    queueMicrotask(() => startButton.focus({ preventScroll: true }));
+  }
+};
+
+const renderDailyStatic = (snapshot: DailySplashSnapshotV2): void => {
+  if (renderedKind === 'ugc') return;
+  document.body.classList.add('puzzle-preview');
+  document.body.classList.remove('ugc');
+  const hero = document.getElementById('hero');
+  if (hero) {
+    hero.innerHTML = renderBoardPreview(
+      snapshot.board,
+      `Daily puzzle board for ${formatDailyDate(snapshot.date)}`
+    );
+  }
+  paintDailyMetadata(snapshot.difficulty, snapshot.date);
+};
+
+const applyDailySnapshot = (
+  snapshot: DailySplashSnapshotV2,
+  solvedResult: DailySolvedResult | null
+): void => {
+  if (inlineDaily) {
+    if (!inlineDaily.applySnapshot(snapshot, solvedResult)) {
+      console.error('Daily preview did not match the active inline puzzle.');
+    }
+    return;
+  }
+  renderDailyStatic(snapshot);
+};
+
+// Reconcile current postData with live status, and automatically upgrade old
+// metadata/count-only Daily posts to their exact immutable playable snapshot.
+// This route is read-only and never issues a Daily `playId`.
 const loadPostPreview = async (): Promise<void> => {
   try {
     const response = await fetch('/api/post-preview', { cache: 'no-store' });
@@ -643,35 +666,69 @@ const loadPostPreview = async (): Promise<void> => {
     if (data.kind === 'ugc') {
       renderUgcStatic(data.board, data.difficulty, data.creator);
       applyUgcStatus(data.solved, data.solves);
-    } else {
-      renderDailyStatic(data.difficulty, data.teaser, data.date);
+      return;
     }
+
+    applyDailySnapshot(data, data.solvedResult ?? null);
   } catch (error) {
     console.error(error);
   }
 };
 
-// Paint from postData first for an instant feed card. Runtime parsing keeps a
-// malformed post payload from reaching the SVG renderer. A complete Daily
-// teaser needs no follow-up request; Community still refreshes live solve state.
-const renderFromPostData = (): boolean => {
+// Exact Daily postData starts the real inline board synchronously. Older
+// metadata/count-only posts are recognized here and upgraded automatically by
+// `/api/post-preview` without ever constructing a fake board.
+const renderFromPostData = (): DailySplashSnapshotV2 | null => {
   try {
     const raw = context.postData?.[POST_DATA_SPLASH_KEY];
-    if (typeof raw !== 'string') return false;
+    if (typeof raw !== 'string') return null;
     const value: unknown = JSON.parse(raw);
     const data = parseSplashPostData(value);
-    if (!data) return false;
+    if (!data) return null;
     if (data.kind === 'ugc') {
       renderUgcStatic(data.board, data.difficulty, data.creator);
-      return false;
+      return null;
     }
-    renderDailyStatic(data.difficulty, data.teaser, data.date);
-    return data.teaser !== undefined && data.date !== undefined;
+    renderedKind = 'daily';
+    if ('version' in data) return data;
+    paintDailyMetadata(data.difficulty, data.date);
+    return null;
   } catch (error) {
     console.error(error);
-    return false;
+    return null;
   }
 };
 
-const hasCompleteDailyPostData = renderFromPostData();
-if (!hasCompleteDailyPostData) void loadPostPreview();
+const initialDailySnapshot = renderFromPostData();
+
+const inlineRootElement = document.getElementById('inline-daily');
+try {
+  if (inlineRootElement instanceof HTMLElement) {
+    const postId = typeof context.postId === 'string' ? context.postId : '';
+    inlineDaily = createInlineDaily({
+      root: inlineRootElement,
+      postId,
+      ...(initialDailySnapshot ? { snapshot: initialDailySnapshot } : {}),
+      renderBoard: (board, pieces, label) => renderBoardPreview(board, label, pieces),
+      openExpanded: (event, intent, beforeRequest) =>
+        openExpanded(event, intent, beforeRequest),
+      onLegacyHydrationError: showLegacyHydrationError,
+      onHydrated: () => {
+        legacyKeyboardStartPending = false;
+      },
+    });
+    if (initialDailySnapshot) inlineDaily.start();
+  } else if (initialDailySnapshot) {
+    renderDailyStatic(initialDailySnapshot);
+  }
+} catch (error) {
+  // Preserve the exact visible board and expanded-game fallback if the richer
+  // inline controller cannot initialize.
+  console.error(error);
+  inlineDaily = null;
+  if (initialDailySnapshot) renderDailyStatic(initialDailySnapshot);
+} finally {
+  document.body.classList.remove('splash-booting');
+}
+
+void loadPostPreview();

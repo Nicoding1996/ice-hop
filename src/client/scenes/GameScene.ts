@@ -25,6 +25,7 @@ import {
 import { boardSignature } from '../../shared/game/board';
 import { parseDailyPuzzleId } from '../../shared/daily';
 import { legalMoves } from '../../shared/game/moves';
+import { replayMoves } from '../../shared/game/replay';
 import { applyMove, isSolved } from '../../shared/game/rules';
 import { computeStars } from '../../shared/scoring';
 import {
@@ -61,6 +62,7 @@ import {
 } from '../art/theme';
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
+import { consumeDailyHandoff } from '../dailyHandoff';
 import { showHowToPlay } from '../howToPlay';
 import { trackClientEvent } from '../telemetry';
 
@@ -253,6 +255,8 @@ export class GameScene extends Scene {
   private won = false;
   /** True while the returning-player recap owns the interactive surface. */
   private dailyRecapOpen = false;
+  /** One start per expanded Daily visit, emitted on its first committed move. */
+  private dailyStartTracked = false;
   /** Whether the player has already posted their score to this post's comment
    *  thread (so "Comment my score" can't double-post). Reset for each puzzle. */
   private scorePosted = false;
@@ -366,6 +370,7 @@ export class GameScene extends Scene {
     this.busy = false;
     this.won = false;
     this.dailyRecapOpen = false;
+    this.dailyStartTracked = false;
     this.dragState = null;
     this.shareText = '';
     this.hintStage = 0;
@@ -655,19 +660,57 @@ export class GameScene extends Scene {
       this.subredditName = data.subredditName ?? '';
       this.moves = 0;
 
-      this.layout();
-      this.renderBoard();
-      this.updateHud();
-      trackClientEvent('daily_started');
       const guestResult = context.username
         ? null
         : guestDailyCompletionFor(
             this.registry.get('daily.solved.guest'),
             data.puzzleId
           );
-      if (data.solved || guestResult) {
+      const hasVerifiedRecap = data.solved || guestResult !== null;
+      let restoredProgress = false;
+      // Inline continuity is scoped to this Reddit tab and exact host-post
+      // Daily. The authoritative init supplies every trusted field; storage
+      // contributes only a bounded transcript that must legally replay.
+      const hostPostId = typeof context.postId === 'string' ? context.postId : '';
+      const handoff =
+        this.forceDaily || !hostPostId
+          ? null
+          : consumeDailyHandoff({
+              auth: data.username === 'anon' ? 'guest' : 'signed',
+              postId: hostPostId,
+              puzzleId: data.puzzleId,
+              ...(data.username === 'anon' ? {} : { playId: data.playId }),
+            });
+      if (handoff && handoff.moves.length > 0) {
+        const replay = replayMoves(data.board, handoff.moves);
+        if (replay.ok && !replay.solved) {
+          this.dailyStartTracked = true;
+          this.pieces = replay.pieces.map((piece) => ({
+            ...piece,
+            cells: [...piece.cells],
+          }));
+          this.moveHistory = replay.moves.map((move) => ({
+            pieceIndex: move.pieceIndex,
+            kind: move.kind,
+            to: [...move.to],
+          }));
+          this.moves = replay.moveCount;
+          restoredProgress = replay.moveCount > 0;
+          // Guest init tokens are intentionally regenerated on each disclosure;
+          // retain the earlier guest bearer token so the original inline clock
+          // remains authoritative. Signed players must match the stable init ID.
+          if (data.username === 'anon' && handoff.auth === 'guest') {
+            this.dailyPlayId = handoff.playId;
+          }
+        }
+      }
+
+      this.layout();
+      this.renderBoard();
+      this.updateHud();
+      if (hasVerifiedRecap && !restoredProgress) {
         this.showDailySolvedRecap(data.solvedResult ?? guestResult ?? undefined);
-      } else {
+      } else if (!restoredProgress) {
         this.maybeAutoShowHowTo();
       }
     } catch (error) {
@@ -1198,6 +1241,15 @@ export class GameScene extends Scene {
       this.pieces = applyMove(this.pieces, move);
       this.moves += 1;
       this.moveHistory.push({ pieceIndex: move.pieceIndex, kind: move.kind, to: [...move.to] });
+      if (
+        !this.isTest &&
+        !this.isEndless &&
+        !this.isCommunity &&
+        !this.dailyStartTracked
+      ) {
+        this.dailyStartTracked = true;
+        trackClientEvent('daily_started');
+      }
       this.selected = null;
       this.busy = false;
       // Rebuild only the moved piece's art (its outer view is already tweened to
@@ -2588,18 +2640,25 @@ export class GameScene extends Scene {
         return;
       }
 
+      const attemptIsRankedBest = result.bestMoves === this.moves;
       this.shareText = buildShareText({
         date: this.date,
         moves: this.moves,
         par: this.par,
         stars: computeStars(this.moves, this.par),
         streak: result.streak,
-        rank: result.rank,
-        totalPlayers: result.totalPlayers,
+        rank: attemptIsRankedBest ? result.rank : 0,
+        totalPlayers: attemptIsRankedBest ? result.totalPlayers : 0,
       });
 
       const lines: string[] = [];
-      if (result.totalPlayers >= 2 && result.rank > 0) {
+      if (result.bestMoves < this.moves) {
+        const rankSuffix =
+          result.rank > 0
+            ? ` · #${result.rank} of ${result.totalPlayers}`
+            : '';
+        lines.push(`Your best today: ${result.bestMoves} moves${rankSuffix}`);
+      } else if (result.totalPlayers >= 2 && result.rank > 0) {
         lines.push(`You're #${result.rank} of ${result.totalPlayers} today`);
       } else if (result.rank > 0) {
         lines.push('You set today\u2019s pace - first one in!');
@@ -2607,7 +2666,6 @@ export class GameScene extends Scene {
         lines.push('Playing as a guest \u2014 scores aren\u2019t saved.');
       }
       if (result.streak > 1) lines.push(`Streak: ${result.streak} days`);
-      if (result.bestMoves < this.moves) lines.push(`Your best today: ${result.bestMoves} moves`);
 
       if (!status.scene) return;
       status.setText(lines.join('\n'));

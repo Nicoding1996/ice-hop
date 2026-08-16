@@ -593,7 +593,11 @@ export class EditorScene extends Scene {
         proof,
       });
       try {
-        localStorage.setItem('icehop.launch', 'build');
+        const launchStorageKey =
+          typeof context.postId === 'string' && context.postId.length > 0
+            ? `icehop.launch:${context.postId}`
+            : 'icehop.launch:no-post';
+        sessionStorage.setItem(launchStorageKey, 'build');
       } catch {
         /* The pending draft still survives when storage is partly unavailable. */
       }

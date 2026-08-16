@@ -33,6 +33,12 @@ export const keys = {
     `daily:play:2:${ref.schema}:${ref.date}:${user}`,
   /** Singleton server-only signing secret for stateless guest Daily capabilities. */
   dailyGuestSecrets: (): string => `daily:guest-secrets:1`,
+  /**
+   * Expiring token-digest claims that make guest completion telemetry retry-safe.
+   * Version 1 was introduced with stateless guest solve idempotency.
+   */
+  dailyGuestCompletionClaims: (ref: DailyPuzzleRef): string =>
+    `daily:guest-completed:1:${ref.schema}:${ref.date}`,
   /** Per-puzzle leaderboard; schema 5 retains the historical date-only key. */
   dailyLeaderboard: (ref: DailyPuzzleRef): string => `lb:${dailyProgressSuffix(ref)}`,
   /** All-time progression count (one point per UTC date solved). */

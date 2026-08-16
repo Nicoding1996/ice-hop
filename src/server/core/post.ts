@@ -1,6 +1,6 @@
 import { reddit, redis } from '@devvit/web/server';
 import type { SplashPostData, UgcSubmission } from '../../shared/api';
-import { buildDailyBoardTeaser, POST_DATA_SPLASH_KEY } from '../../shared/api';
+import { POST_DATA_SPLASH_KEY } from '../../shared/api';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
 import type { Difficulty } from '../../shared/solver/difficulty';
 import { getOrCreateDailyPuzzle } from './daily';
@@ -57,13 +57,17 @@ export const createDailyPost = async (date: string) => {
   const post = await reddit.submitCustomPost({
     title: `Ice Hop - Daily Puzzle - ${date}`,
     entry: 'default',
-    // Bake a position-free board summary into the post. The splash can paint a
-    // puzzle-shaped teaser immediately without exposing cells before Play.
+    // Embed the exact immutable puzzle so the feed card is the real playable
+    // board immediately; `/api/init` still issues the capability required by
+    // authoritative `/api/solve` verification.
     postData: splashData({
+      version: 2,
       kind: 'daily',
+      puzzleId: puzzle.id,
       date: puzzle.date,
+      board: puzzle.board,
+      par: puzzle.par,
       difficulty: band,
-      teaser: buildDailyBoardTeaser(puzzle.board),
     }),
     styles: {
       backgroundColor: '#0a2a43ff',

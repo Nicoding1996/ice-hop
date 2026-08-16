@@ -5,71 +5,63 @@ import type { CreatorSolveProof } from './game/proof';
 import type { Difficulty } from './solver/difficulty';
 
 /**
- * Lossy Daily-board summary used by the feed teaser. It deliberately contains
- * counts but no cell positions, so a player cannot inspect the card payload to
- * study the Daily before its authoritative play clock starts.
+ * Exact immutable Daily snapshot embedded in current postData and returned by
+ * the read-only historical-post preview route. Piece order is immutable because
+ * move transcripts address piece indexes.
  */
-export type DailyBoardTeaser = {
-  readonly width: number;
-  readonly height: number;
-  readonly hoppers: number;
-  readonly sliders: number;
-  readonly blockers: number;
-  readonly holes: number;
+export type DailySplashSnapshotV2 = {
+  readonly version: 2;
+  readonly kind: 'daily';
+  readonly puzzleId: string;
+  readonly date: string;
+  readonly board: Board;
+  readonly par: number;
+  readonly difficulty: Difficulty;
 };
 
-export const buildDailyBoardTeaser = (board: Board): DailyBoardTeaser => {
-  let hoppers = 0;
-  let sliders = 0;
-  let blockers = 0;
-  for (const piece of board.pieces) {
-    if (piece.kind === 'HOPPER') hoppers++;
-    else if (piece.kind === 'SLIDER') sliders++;
-    else blockers++;
-  }
-  return {
-    width: board.width,
-    height: board.height,
-    hoppers,
-    sliders,
-    blockers,
-    holes: board.holes.length,
-  };
+export type DailySolvedResult = {
+  readonly moves: number;
+  readonly stars: number;
 };
 
 /**
- * Static splash payload baked into a post's `postData` (JSON-stringified under
- * the `splash` key) at creation, so the feed card renders on first paint with
- * NO server round-trip. Kept well under the 2KB postData limit. Community posts
- * carry their exact board; Daily posts carry only a position-free teaser.
+ * Metadata-only shape retained so old count-summary postData can be recognized
+ * and upgraded automatically through `/api/post-preview`. Unknown legacy fields
+ * are intentionally ignored by the runtime parser.
  */
+export type LegacyDailySplashPostData = {
+  readonly kind: 'daily';
+  readonly difficulty: Difficulty;
+  readonly date?: string;
+};
+
+/** Existing exact Community preview payload. */
+export type UgcSplashPostData = {
+  readonly kind: 'ugc';
+  readonly board: Board;
+  readonly difficulty: Difficulty;
+  readonly creator: string;
+};
+
+/** Static splash payload JSON-stringified under `postData.splash`. */
 export type SplashPostData =
-  | {
-      readonly kind: 'daily';
-      readonly difficulty: Difficulty;
-      /** Optional so posts created before dated board teasers remain readable. */
-      readonly date?: string;
-      readonly teaser?: DailyBoardTeaser;
-    }
-  | {
-      readonly kind: 'ugc';
-      readonly board: Board;
-      readonly difficulty: Difficulty;
-      readonly creator: string;
-    };
+  | DailySplashSnapshotV2
+  | LegacyDailySplashPostData
+  | UgcSplashPostData;
 
 /** The `postData` object shape: the splash payload as a JSON string. */
 export const POST_DATA_SPLASH_KEY = 'splash';
 
-/** Read-only feed metadata. Unlike `/api/init`, this never begins a play. */
+/**
+ * Read-only feed metadata. Daily responses include the exact immutable board so
+ * historical posts can become playable inline, but never include or issue a
+ * `playId`; `/api/init` remains the play-capability endpoint.
+ */
 export type PostPreviewResponse =
-  | {
+  | (DailySplashSnapshotV2 & {
       readonly type: 'post-preview';
-      readonly kind: 'daily';
-      readonly date: string;
-      readonly difficulty: Difficulty;
-      readonly teaser: DailyBoardTeaser;
-    }
+      readonly solvedResult?: DailySolvedResult;
+    })
   | {
       readonly type: 'post-preview';
       readonly kind: 'ugc';
@@ -100,7 +92,7 @@ export type InitResponse =
       /** Immutable schema + date identity, e.g. v6:2026-08-05. */
       readonly puzzleId: string;
       readonly date: string;
-      /** Non-resettable server clock bound before the board is disclosed. */
+      /** Non-resettable server-issued capability used to verify elapsed time. */
       readonly playId: string;
       readonly board: Board;
       readonly par: number;
@@ -130,9 +122,12 @@ export type SolveSubmission = {
 /** Server -> client after verifying and recording a daily solve. */
 export type SolveResultDTO = {
   readonly accepted: boolean;
+  /** Stars for the player's materialized best solve (`bestMoves`). */
   readonly stars: number;
   readonly par: number;
+  /** Move count for the just-verified attempt. */
   readonly moves: number;
+  /** Best verified move count; `rank` and `stars` describe this score. */
   readonly bestMoves: number;
   readonly rank: number;
   readonly totalPlayers: number;

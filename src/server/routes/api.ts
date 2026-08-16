@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { context, reddit, redis } from '@devvit/web/server';
-import { buildDailyBoardTeaser } from '../../shared/api';
 import type {
   CommentScoreResponse,
   EndlessHintRequest,
@@ -23,7 +22,6 @@ import {
   dailyPuzzleId,
   parseDailyPuzzleId,
   parsePostDailyMapping,
-  sameDailyPuzzle,
   type DailyPuzzleRef,
 } from '../../shared/daily';
 import { verifySolvedTranscript } from '../../shared/game/replay';
@@ -36,6 +34,7 @@ import type { TelemetryEventRequest } from '../../shared/telemetry';
 import { isClientTelemetryEvent } from '../../shared/telemetry';
 import { syncAchievements } from '../core/achievements';
 import {
+  claimGuestDailyCompletion,
   completeEndlessPuzzle,
   finalizeEndlessIssue,
   getBestCommunityCompletion,
@@ -82,19 +81,13 @@ const getPostDailyRef = async (postId: string): Promise<DailyPuzzleRef | null> =
   return ref;
 };
 
-const isTrustedDailyRef = async (requestedRef: DailyPuzzleRef): Promise<boolean> => {
-  if (sameDailyPuzzle(requestedRef, await getCanonicalDailyRef(todayUtc()))) return true;
-  if (!context.postId) return false;
-  const hostRef = await getPostDailyRef(context.postId);
-  return hostRef !== null && sameDailyPuzzle(requestedRef, hostRef);
-};
-
 export const api = new Hono();
 api.route('/ugc', ugc);
 
 /**
- * Feed-safe post metadata. This route deliberately never calls issueDailyPlay,
- * so scrolling past a Daily neither exposes its cells nor starts its timer.
+ * Read-only feed metadata. Daily responses include the exact immutable board so
+ * historical posts can restore the same playable inline card as new posts. This
+ * route never calls `issueDailyPlay` and never returns a `playId`.
  */
 api.get('/post-preview', async (c) => {
   try {
@@ -151,12 +144,22 @@ api.get('/post-preview', async (c) => {
     }
 
     const puzzle = await getDailyPuzzle(dailyRef);
+    const username = await reddit.getCurrentUsername();
+    const solveRecord = username
+      ? await getBestDailySolve(dailyRef, username)
+      : null;
     return c.json<PostPreviewResponse>({
       type: 'post-preview',
+      version: 2,
       kind: 'daily',
+      puzzleId: puzzle.id,
       date: puzzle.date,
+      board: puzzle.board,
+      par: puzzle.par,
       difficulty: difficultyFromPar(puzzle.par),
-      teaser: buildDailyBoardTeaser(puzzle.board),
+      ...(solveRecord
+        ? { solvedResult: { moves: solveRecord.moves, stars: solveRecord.stars } }
+        : {}),
     });
   } catch (error) {
     console.error(`/api/post-preview failed: ${error}`);
@@ -171,7 +174,6 @@ api.get('/init', async (c) => {
     const forceDaily = c.req.query('daily') === '1';
     const username = (await reddit.getCurrentUsername()) ?? 'anon';
     const signedIn = username !== 'anon';
-    await trackDailyActive(username);
 
     let dailyRef: DailyPuzzleRef;
     if (!forceDaily && postId) {
@@ -276,8 +278,11 @@ api.post('/solve', async (c) => {
 
     const username = await reddit.getCurrentUsername();
     const timeMs = await getDailyElapsed(username ?? 'anon', body.playId, requestedRef);
-    if (timeMs === null && !(await isTrustedDailyRef(requestedRef))) {
-      return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
+    if (timeMs === null) {
+      return c.json<ErrorResponse>(
+        { status: 'error', message: 'daily play has expired' },
+        410
+      );
     }
 
     const puzzle = await getDailyPuzzle(requestedRef);
@@ -291,7 +296,8 @@ api.post('/solve', async (c) => {
 
     const moves = replay.moveCount;
     if (!username) {
-      await trackTelemetry('daily:completed:guest');
+      const firstCompletion = await claimGuestDailyCompletion(body.playId, requestedRef);
+      if (firstCompletion) await trackTelemetry('daily:completed:guest');
       return c.json<SolveResultDTO>({
         accepted: true,
         stars: computeStars(moves, puzzle.par),
@@ -304,9 +310,6 @@ api.post('/solve', async (c) => {
       });
     }
 
-    if (timeMs === null) {
-      return c.json<ErrorResponse>({ status: 'error', message: 'daily play has expired' }, 400);
-    }
     const outcome = await recordSolve(requestedRef, username, puzzle.par, moves, timeMs);
     if (outcome.firstSolve) await trackTelemetry('daily:completed:signed');
     return c.json<SolveResultDTO>({
@@ -570,6 +573,9 @@ api.post('/telemetry', async (c) => {
       ? `user:${username}`
       : `post:${context.postId ?? 'guest-without-post'}`;
     const accepted = await trackClientTelemetry(body.event, actor);
+    if (accepted && body.event === 'daily_started') {
+      await trackDailyActive(username ?? 'anon');
+    }
     return accepted
       ? c.json({ ok: true })
       : c.json({ ok: false }, 429);

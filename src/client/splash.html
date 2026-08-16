@@ -12,7 +12,7 @@
     />
     <title>Ice Hop</title>
   </head>
-  <body>
+  <body class="splash-booting">
     <!-- Calm dawn atmosphere: aurora glow, faint stars, soft snow drifts. -->
     <div class="backdrop" aria-hidden="true">
       <div class="aurora"></div>
@@ -89,6 +89,20 @@
         <p class="meta" id="meta">Daily puzzle</p>
       </section>
     </main>
+
+    <section class="inline-daily" id="inline-daily" aria-labelledby="inline-title" hidden>
+      <header class="inline-topbar">
+        <div class="inline-brand">
+          <h1 id="inline-title">ICE HOP</h1>
+          <p id="inline-context">Daily puzzle</p>
+        </div>
+        <button class="inline-top-open" id="inline-open-button" type="button">
+          Open full game
+        </button>
+      </header>
+      <div class="inline-stage" id="inline-stage"></div>
+      <p class="visually-hidden" id="inline-live" aria-live="polite" aria-atomic="true"></p>
+    </section>
 
     <script type="module" src="splash.ts" defer></script>
   </body>

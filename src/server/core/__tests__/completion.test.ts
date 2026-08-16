@@ -200,7 +200,7 @@ afterEach(() => {
 });
 
 describe('server-authoritative Daily timing', () => {
-  it('reuses the original pre-disclosure clock instead of allowing a reset', async () => {
+  it('reuses the original issued play clock instead of allowing a reset', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));
     const ref = currentDailyPuzzleRef('2026-08-05');

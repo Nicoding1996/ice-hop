@@ -1,4 +1,10 @@
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import { redis } from '@devvit/web/server';
 import type {
   EndlessSolveResponse,
@@ -19,6 +25,7 @@ import { trackEndlessCompleted, trackTelemetry } from './telemetry';
 const ENDLESS_ISSUE_TTL_SECONDS = 60 * 60 * 48;
 const ENDLESS_RESOLUTION_TTL_SECONDS = 60 * 60 * 72;
 const DAILY_PLAY_TTL_SECONDS = 60 * 60 * 24 * 8;
+const GUEST_DAILY_COMPLETION_TTL_SECONDS = 60 * 60 * 24 * 32;
 const TRANSACTION_ATTEMPTS = 8;
 
 const property = (value: object, key: string): unknown => Reflect.get(value, key);
@@ -126,7 +133,7 @@ const parseGuestDailyToken = async (token: string): Promise<DailyPlay | null> =>
   }
 };
 
-/** Bind one non-resettable server clock before disclosing a Daily board. */
+/** Bind one non-resettable clock when a viewer requests a Daily play session. */
 export const issueDailyPlay = async (user: string, ref: DailyPuzzleRef): Promise<string> => {
   const candidate: DailyPlay = {
     playId: randomUUID(),
@@ -166,7 +173,7 @@ export const issueDailyPlay = async (user: string, ref: DailyPuzzleRef): Promise
   throw new Error('Daily play clock was too busy to issue.');
 };
 
-/** Return trusted elapsed milliseconds for the puzzle's original disclosure. */
+/** Return trusted elapsed milliseconds from the puzzle's original issued play. */
 export const getDailyElapsed = async (
   user: string,
   playId: string,
@@ -188,6 +195,27 @@ export const getDailyElapsed = async (
     return null;
   }
   return Math.max(0, now - play.startedAt);
+};
+
+/**
+ * Claim one valid guest play for aggregate completion telemetry. The signed
+ * bearer token is hashed before storage; the per-puzzle hash expires after the
+ * telemetry return window so retries cannot inflate completion counts.
+ */
+export const claimGuestDailyCompletion = async (
+  playId: string,
+  ref: DailyPuzzleRef
+): Promise<boolean> => {
+  try {
+    const digest = createHash('sha256').update(playId).digest('base64url');
+    const key = keys.dailyGuestCompletionClaims(ref);
+    const added: unknown = await redis.hSetNX(key, digest, '1');
+    await redis.expire(key, GUEST_DAILY_COMPLETION_TTL_SECONDS);
+    return typeof added === 'number' ? added > 0 : added === true;
+  } catch (error) {
+    console.error(`Guest Daily completion claim failed: ${error}`);
+    return false;
+  }
 };
 
 export const MAX_OUTSTANDING_ENDLESS_ISSUES = 16;

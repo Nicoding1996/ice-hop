@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { context } from '@devvit/web/client';
 import { initAudioPrefs } from '../audio';
 
 // Minimal boot scene. We render the board with vector shapes (no image assets
@@ -10,19 +11,22 @@ export class Boot extends Scene {
 
   create(): void {
     initAudioPrefs();
-    // Splash actions can stash a one-shot destination before expanding. The
-    // inline splash and expanded game share the app's webview origin, so
-    // localStorage carries across. Clear it immediately so later launches
-    // cannot inherit stale navigation; default to playing the current post.
+    // Splash actions can stash a one-shot destination before expanding. Scope
+    // it to this Reddit tab and host post so another card/tab cannot reroute us.
+    const launchStorageKey =
+      typeof context.postId === 'string' && context.postId.length > 0
+        ? `icehop.launch:${context.postId}`
+        : 'icehop.launch:no-post';
     let launch: string | null = null;
     try {
-      launch = localStorage.getItem('icehop.launch');
-      if (launch) localStorage.removeItem('icehop.launch');
+      launch = sessionStorage.getItem(launchStorageKey);
+      if (launch) sessionStorage.removeItem(launchStorageKey);
     } catch {
-      /* localStorage unavailable - just play the post */
+      /* sessionStorage unavailable - just play the post */
     }
     if (launch === 'build') this.scene.start('EditorScene', {});
     else if (launch === 'home') this.scene.start('HomeScene', {});
+    else if (launch === 'endless') this.scene.start('EndlessScene', {});
     else this.scene.start('GameScene', {});
   }
 }
