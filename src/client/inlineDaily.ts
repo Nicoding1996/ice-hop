@@ -887,6 +887,10 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
 
   setExpansionPending(pending: boolean): void {
     this.expansionPending = pending;
+    // Expansion may be triggered by a second input modality while a mouse or
+    // pen still owns the board pointer. Return that purely visual preview to
+    // its canonical origin before move input is locked.
+    if (pending) this.abortActiveSealDrag(false);
     const stateLocked = this.expansionIsLocked();
     const buttons = this.options.root.querySelectorAll('.inline-open-button');
     for (const element of Array.from(buttons)) {
@@ -1689,10 +1693,16 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
           if (sliderVisual) {
             const clearPreview = (): void => {
               target.classList.remove('is-previewing');
+              window.removeEventListener('blur', clearPreview);
+              window.removeEventListener('pagehide', clearPreview);
             };
             target.addEventListener('pointerdown', (event) => {
               if (event.pointerType === 'mouse' && event.button !== 0) return;
               target.classList.add('is-previewing');
+              // A host focus change or suspended iframe is not guaranteed to
+              // dispatch pointerup/cancel back to this destination button.
+              window.addEventListener('blur', clearPreview);
+              window.addEventListener('pagehide', clearPreview);
             });
             target.addEventListener('pointerup', clearPreview);
             target.addEventListener('pointercancel', clearPreview);

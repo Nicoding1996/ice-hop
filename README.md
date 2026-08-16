@@ -217,6 +217,13 @@ It stays Phaser-free; Phaser remains in expanded `game.html` only.
   and available height while retaining the HUD, footer, and touch targets. Do not
   restore short-height `height: auto` or unconstrained grid-row overrides that
   collapse size-container rows.
+- Inline seals are feed-safe across input modes on both Daily and Community:
+  touch selects visible one-cell lane stops, pressing or focusing a stop previews
+  the exact 1x2 landing footprint, and activating it commits one canonical move.
+  Keyboard uses the same labelled buttons; mouse and pen may also drag toward a
+  legal stop. Cancellation, lost capture, or leaving the iframe returns the seal
+  to its origin without recording a move, while native touch panning remains
+  available to Reddit's feed.
 
 Local source or build changes do not alter clients already live on Reddit.
 Historical upgrade requires both the current bundle and a valid host mapping.
@@ -263,6 +270,14 @@ version to each uploaded build.
   frozen server-replayed solve transcripts, and fail-closed mismatch recovery.
 - Preserved expanded Daily recap/loading behavior while making verified guest
   completion explicitly non-durable.
+- Redesigned inline seal movement for mobile feed play with tap-to-select lane
+  stops, exact 1x2 landing previews, labelled keyboard controls, feed-safe touch
+  panning, and robust mouse/pen drag commit/cancel behavior shared by Daily and
+  Community posts.
+- Validated horizontal and vertical lanes at near, middle, and far stops; held
+  touch and keyboard previews; one-activation commits; cancellation and feed-pan
+  behavior; mouse/pen dragging; responsive card sizes; and both Daily and
+  Community continuation contracts.
 
 ### 0.1.0 - 2026-08-05
 

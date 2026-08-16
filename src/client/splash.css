@@ -1328,6 +1328,8 @@ body.inline-daily-active .wrap {
   .inline-button,
   .inline-piece-control,
   .inline-target,
+  .inline-target--slide::before,
+  .inline-target--slide::after,
   [data-inline-piece-art],
   [data-inline-piece-inner] {
     transition: none !important;
