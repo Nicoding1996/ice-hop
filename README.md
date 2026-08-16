@@ -56,6 +56,19 @@ insight matters more than speed.
 - No sign-in wall: play as a guest, and sign in from the win screen when you want
   to save your streak and progress.
 
+### Sound and music
+
+Ice Hop has synthesized hop, slide, splash, and win effects plus a calm ambient
+soundtrack. **SFX** and **Music** can be changed independently from the playable
+feed post and the expanded hub; the speaker in expanded play is a temporary
+combined mute that restores the channel mix you had before muting.
+
+Music never starts because a card merely scrolled into view. In the feed it
+starts only after your first legal move; in the expanded game it starts after
+your first pointer or keyboard gesture. Hidden or offscreen views suspend audio,
+and the inline win arpeggio waits until the server has verified the completed
+move history.
+
 ---
 
 ## Ways to keep playing
@@ -120,6 +133,8 @@ stream varied and gives every creator a fair shot.
 - **[Hono](https://hono.dev) 4** - the serverless API on Devvit's Node runtime.
 - **TypeScript** + **Vite** (via `@devvit/start/vite`), with a pure, framework-free
   game engine and solver shared between both clients and the server.
+- **Web Audio API** for synthesized game cues and a lazily decoded ambient loop,
+  shipped as OGG plus MP3 fallback with independent persisted SFX/music controls.
 - **Redis** (Devvit's managed store) for the daily puzzle, solves, streaks,
   leaderboards, and community submissions.
 
@@ -140,11 +155,13 @@ src/
     routes/   # /api (preview, init, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
     core/     # daily puzzle, endless pool, leaderboard + streaks, UGC, post creation, Redis keys
   client/   # runs in the post iframe
-    splash.*        # lightweight Phaser-free playable Daily/Community feed surface
-    inlineDaily.ts  # shared inline board controller and verification/recovery UX
-    dailyHandoff.ts # bounded Daily attempt continuation into expanded play
-    game.*          # expanded Phaser view
-    scenes/         # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene, MyPuzzlesScene
+    audio.ts         # synthesized SFX, dual-format ambient loop, prefs + lifecycle
+    public/          # checked-in OGG/MP3 soundtrack encodes copied into the build
+    splash.*         # lightweight Phaser-free playable Daily/Community feed surface
+    inlineDaily.ts   # shared inline board controller and verification/recovery UX
+    dailyHandoff.ts  # bounded Daily attempt continuation into expanded play
+    game.*           # expanded Phaser view
+    scenes/          # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene, MyPuzzlesScene
 ```
 
 See `.kiro/steering/` for the full design, tech, and structure notes.
@@ -175,6 +192,34 @@ npm run build        # vite build
 npm run deploy       # type-check + devvit upload
 npm run launch       # deploy + devvit publish
 ```
+
+### Audio release assets
+
+The ambient soundtrack is one approximately 127.78-second stereo, 44.1 kHz loop
+checked in as two browser-compatible encodes. Vite copies both files from
+`src/client/public/` to the client artifact root:
+
+- `ice-hop-music.ogg` — Vorbis, 1,833,149 bytes, SHA-256
+  `25884E9026C587904B0D015E1678E9B58B6A1886447F4AA3358708D80F0AD026`
+- `ice-hop-music.mp3` — MP3, 2,045,535 bytes, SHA-256
+  `64F92B0C603BD91DA84621A885D21AB3A740D50508131901EA9536FF9F754BA4`
+
+Chromium/Android prefers OGG; Safari/iOS goes directly to MP3, and a failed first
+choice falls back to the other encode. The selected file is fetched only after a
+local playback gesture and decoded for gapless Web Audio looping. Hidden and
+offscreen documents suspend immediately. Page hide and entrypoint transition
+release the source and decoded cache immediately; normal mute invalidates the
+cache but lets the active source retain it for no more than a 700ms fade. An
+offscreen feed card releases its source and cache after five seconds, so inactive
+cards do not retain roughly 45 MB each. Returning views may reload only when music
+is still enabled and that document was previously gesture-authorized.
+
+The files entered this repository through project-author commits `0319f20` and
+`42754f3`. **Release-owner rights attestation (2026-08-16):** the soundtrack was
+created by the release owner or is covered by permission/license to redistribute
+it in Ice Hop on Reddit, including both the OGG and MP3 encodes. Any future
+replacement must carry an equivalent creator/source and redistribution-rights
+record; commit history alone is not sufficient.
 
 ### How puzzle posts are created
 
@@ -224,6 +269,10 @@ It stays Phaser-free; Phaser remains in expanded `game.html` only.
   legal stop. Cancellation, lost capture, or leaving the iframe returns the seal
   to its origin without recording a move, while native touch panning remains
   available to Reddit's feed.
+- Inline SFX and Music controls are independent, persisted, grouped for assistive
+  technology, and remain at least 44px tall. A legal move—not a feed tap—starts
+  enabled music and its move cue; water landings add a splash, and the win cue is
+  delayed until authoritative Daily or Community verification succeeds.
 
 Local source or build changes do not alter clients already live on Reddit.
 Historical upgrade requires both the current bundle and a valid host mapping.
@@ -259,10 +308,29 @@ confirmed upload.
 
 ## Changelog
 
-Repository release numbers describe this source tree; Devvit assigns its own app
-version to each uploaded build.
+The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
+source/package hardening milestone that preceded those later platform builds.
 
-### Unreleased
+### 0.0.25 - 2026-08-16
+
+Audio and feed-control release built from the exact post-`0.0.24` candidate.
+
+- Added the dual-format ambient soundtrack to inline and expanded play, preferring
+  OGG on Chromium/Android and MP3 on Safari/iOS with decode fallback.
+- Added independent, persisted SFX and Music controls to playable feed posts;
+  inline playback starts only with the first legal move, never from feed scroll.
+- Connected synthesized hop/slide cues to legal moves, splash to water landings,
+  and the win arpeggio only to server-verified Daily or Community completion.
+- Suspended hidden/offscreen audio, stopped the old document during expanded-mode
+  handoff, and bounded decoded-buffer retention by releasing inactive caches.
+- Preserved independent channel choices through the expanded play-screen master
+  mute and added grouped semantics, clear disabled styling, responsive 44px touch
+  targets, keyboard focus treatment, and reduced-motion behavior to feed controls.
+- Locked and validated both soundtrack encodes in the production client artifact.
+
+### 0.0.24 - 2026-08-16
+
+Playable-feed release.
 
 - Unified new Daily and Community posts on a directly playable, Phaser-free
   DOM/SVG feed board backed by exact immutable V2 snapshots.

@@ -14,7 +14,15 @@ import {
   PillButton,
 } from '../art/theme';
 import { showHowToPlay } from '../howToPlay';
-import { isSoundOn, setSoundOn, isMusicOn, setMusicOn, playHop } from '../audio';
+import {
+  isSoundOn,
+  setSoundOn,
+  isMusicOn,
+  setMusicOn,
+  playHop,
+  startMusic,
+  clearMasterAudioMute,
+} from '../audio';
 
 /** The hub: pick the daily, build a puzzle, or browse the community stream. */
 export class HomeScene extends Scene {
@@ -30,6 +38,10 @@ export class HomeScene extends Scene {
   }
 
   create(): void {
+    // The play HUD's speaker is a scene-local convenience; the hub returns to
+    // the player's independently persisted channel choices without authorizing
+    // music unless this expanded document already received a valid gesture.
+    clearMasterAudioMute();
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
     this.bgLayer = this.add.container(0, 0);
@@ -177,7 +189,8 @@ export class HomeScene extends Scene {
 
   private toggleMusic(): void {
     const on = !isMusicOn();
-    setMusicOn(on); // starts / fades out the ambient bed
+    setMusicOn(on);
+    if (on) startMusic(); // this expanded-view click is the authorizing gesture
     this.musicButton.setLabelText(this.musicLabel());
   }
 

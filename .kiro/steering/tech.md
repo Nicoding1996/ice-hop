@@ -38,9 +38,25 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   palette + helper module, `src/client/art/theme.ts`, holds the penguin / seal /
   rock / water, the connected ice sheet, the backdrop, win FX, and the scene
   fades (`fadeToScene` / `fadeInScene`).
-- Sound is synthesized at runtime with the Web Audio API
-  (`src/client/audio.ts`) - no audio files. It unlocks on the first tap and has
-  a mute toggle persisted to `localStorage`.
+- Audio lives in `src/client/audio.ts`. Hop, slide, splash, and verified-win
+  cues are synthesized at runtime with Web Audio; the ambient soundtrack is one
+  checked-in composition encoded as `ice-hop-music.ogg` and
+  `ice-hop-music.mp3` under `src/client/public/` for Chromium/Android and
+  Safari/iOS decode fallback.
+- SFX and music have independent `localStorage` preferences and independent
+  controls in the inline post and expanded hub. The expanded play HUD exposes a
+  combined mute that restores the player's previous channel mix when re-enabled.
+  Inline music is authorized only by the first legal move; expanded music is
+  authorized by its first local pointer or keyboard gesture, never by feed scroll.
+- Hidden/offscreen documents suspend their shared `AudioContext`. A decoded music
+  cache is invalidated immediately on page hide, mute, or entrypoint transition;
+  mute may retain the active source for its bounded 700ms fade. An offscreen card
+  releases its source and cache after five seconds. A still-enabled, previously
+  authorized view may reload and resume when visible. Audio failures are
+  enhancement-only and must never interrupt gameplay.
+- Audio asset replacements require a documented creator/source, redistribution
+  rights, and matching OGG/MP3 encodes. Repository history alone is not evidence
+  of those rights; keep an explicit provenance record with any replacement.
 
 ## Unified custom-post contract
 

@@ -8,9 +8,32 @@ let master: GainNode | null = null;
 let noiseBuf: AudioBuffer | null = null;
 let enabled = true;
 let musicEnabled = false;
+let masterMuted = false;
 let viewportVisible = true;
 const STORE_KEY = 'icehop.sound';
 const MUSIC_KEY = 'icehop.music';
+
+const applySoundPreference = (on: boolean): void => {
+  enabled = on;
+  try {
+    localStorage.setItem(STORE_KEY, on ? 'on' : 'off');
+  } catch {
+    /* ignore storage failures */
+  }
+};
+
+const applyMusicPreference = (on: boolean): void => {
+  musicEnabled = on;
+  try {
+    localStorage.setItem(MUSIC_KEY, on ? 'on' : 'off');
+  } catch {
+    /* ignore storage failures */
+  }
+  // Enabling a preference is not first-time playback authorization. A legal
+  // inline move or an expanded-view gesture must call startMusic explicitly.
+  if (!on) stopMusicPlayback(false, true);
+  else if (musicAuthorized) startMusic();
+};
 
 export const initAudioPrefs = (): void => {
   try {
@@ -27,42 +50,47 @@ export const initAudioPrefs = (): void => {
   }
   // A same-origin entrypoint/tab may have changed the preference. Reconcile an
   // external mute immediately, but never auto-start an external enable.
-  if (!musicEnabled) stopMusicPlayback(false);
+  if (!musicEnabled) stopMusicPlayback(false, true);
 };
 
 export const isSoundOn = (): boolean => enabled;
 
 export const setSoundOn = (on: boolean): void => {
-  enabled = on;
-  try {
-    localStorage.setItem(STORE_KEY, on ? 'on' : 'off');
-  } catch {
-    /* ignore storage failures */
-  }
+  // An explicit channel choice also clears the temporary play-HUD master mute.
+  masterMuted = false;
+  applySoundPreference(on);
 };
 
 export const isMusicOn = (): boolean => musicEnabled;
 
 export const setMusicOn = (on: boolean): void => {
-  musicEnabled = on;
-  try {
-    localStorage.setItem(MUSIC_KEY, on ? 'on' : 'off');
-  } catch {
-    /* ignore storage failures */
-  }
-  if (on) startMusic();
-  else stopMusic();
+  // An explicit channel choice also clears the temporary play-HUD master mute.
+  masterMuted = false;
+  applyMusicPreference(on);
 };
 
-/** True when any audio channel (SFX or music) is currently on. Drives the
- *  single play-screen mute toggle, which silences and restores both together. */
-export const isAnyAudioOn = (): boolean => enabled || musicEnabled;
+/** True when at least one configured channel is currently audible. Drives the
+ *  expanded play-screen master-mute icon without changing channel preferences. */
+export const isAnyAudioOn = (): boolean =>
+  !masterMuted && (enabled || musicEnabled);
 
-/** Master mute for the play screen: flip SFX and music together. (setMusicOn
- *  starts/stops the ambient bed; setSoundOn just gates the effects.) */
+/** Transient master gate for the play HUD. It never writes the independent SFX
+ *  or music preferences, so reloads and other entrypoints retain the same mix. */
 export const setAllAudioOn = (on: boolean): void => {
-  setSoundOn(on);
-  setMusicOn(on);
+  masterMuted = !on;
+  if (on) {
+    if (musicEnabled) startMusic();
+  } else {
+    stopMusicPlayback(false, true);
+  }
+};
+
+/** Leaving play clears its transient master gate without creating first-time
+ *  music authorization; an already authorized hub may resume its saved mix. */
+export const clearMasterAudioMute = (): void => {
+  if (!masterMuted) return;
+  masterMuted = false;
+  if (musicEnabled && musicAuthorized) startMusic();
 };
 
 const audioMayPlay = (): boolean => !document.hidden && viewportVisible;
@@ -106,7 +134,7 @@ const ensureCtx = (): AudioContext | null => {
 };
 
 const audio = (): AudioContext | null => {
-  if (!enabled) return null;
+  if (!enabled || masterMuted) return null;
   return ensureCtx();
 };
 
@@ -257,11 +285,13 @@ export const playWin = (): void => {
 // --- Background music: a real, looping ambient track ------------------------
 // Synthesis could not sound like real instruments, so the soundtrack is now a
 // recorded loop (src/client/public/ice-hop-music.ogg, copied to the client root
-// at build time). It is fetched and decoded once into a Web Audio buffer, then
-// looped gaplessly through its own quiet gain - independent of the SFX mute, and
-// paused with the shared context when its document/card is not visible. Both
-// entrypoints honor the preference: expanded starts on its first gesture, while
-// inline starts with the first legal move. Missing/undecodable files stay silent.
+// at build time). It is fetched and decoded on demand into a Web Audio buffer,
+// then looped gaplessly through its own quiet gain independently of the SFX mute.
+// Hidden/offscreen views suspend immediately and discard their decoded cache
+// after a short grace period, bounding retained PCM across interacted feed cards.
+// Both entrypoints honor the preference: expanded starts on its first gesture,
+// while inline starts with the first legal move. Missing/undecodable files stay
+// silent and never interrupt play.
 
 // Two encodes of the same loop: OGG (smaller, gapless on Chrome/Android) and MP3
 // (Safari/iOS, whose WebKit cannot decode Vorbis via decodeAudioData). We always
@@ -272,6 +302,7 @@ export const playWin = (): void => {
 const MUSIC_OGG = 'ice-hop-music.ogg';
 const MUSIC_MP3 = 'ice-hop-music.mp3';
 const MUSIC_VOL = 0.3; // sits under the SFX but present; tune to taste
+const MUSIC_BUFFER_RELEASE_DELAY_MS = 5_000;
 
 // Prefer the playable format up front. Safari/iOS reports '' (can't play) for
 // OGG Vorbis, so it fetches the MP3 directly; Chrome/Android keep the gapless OGG.
@@ -287,8 +318,10 @@ const orderedMusicUrls = (): string[] => {
 
 let musicGain: GainNode | null = null;
 let musicSource: AudioBufferSourceNode | null = null;
-let musicBuffer: AudioBuffer | null = null; // decoded once, then cached
+let musicBuffer: AudioBuffer | null = null;
 let musicBufferPromise: Promise<AudioBuffer | null> | null = null;
+let musicBufferGeneration = 0;
+let musicReleaseTimer: number | undefined;
 let musicLoading = false;
 let musicAuthorized = false;
 let musicGeneration = 0;
@@ -319,6 +352,49 @@ const stopFadingMusic = (): void => {
   fadingMusic.clear();
 };
 
+const clearMusicReleaseTimer = (): void => {
+  if (musicReleaseTimer === undefined) return;
+  window.clearTimeout(musicReleaseTimer);
+  musicReleaseTimer = undefined;
+};
+
+const discardDecodedMusicBuffer = (): void => {
+  // Invalidate cache eligibility but retain any in-flight promise as the single
+  // fetch/decode. A later active caller may await it without starting a duplicate.
+  musicBufferGeneration += 1;
+  musicBuffer = null;
+};
+
+const releaseInactiveMusicResources = (): void => {
+  if (audioMayPlay()) return;
+  clearMusicReleaseTimer();
+  const resumeWhenVisible = musicAuthorized && musicEnabled;
+  musicGeneration += 1;
+  musicLoading = false;
+  stopFadingMusic();
+
+  const source = musicSource;
+  const gain = musicGain;
+  musicSource = null;
+  musicGain = null;
+  if (source && gain) releaseMusicNodes(source, gain);
+  else {
+    if (source) runAudioEffect(() => source.stop());
+    if (gain) runAudioEffect(() => gain.disconnect());
+  }
+
+  discardDecodedMusicBuffer();
+  musicAuthorized = resumeWhenVisible;
+};
+
+const scheduleInactiveMusicRelease = (): void => {
+  if (musicReleaseTimer !== undefined) return;
+  musicReleaseTimer = window.setTimeout(() => {
+    musicReleaseTimer = undefined;
+    releaseInactiveMusicResources();
+  }, MUSIC_BUFFER_RELEASE_DELAY_MS);
+};
+
 const fetchMusicBuffer = async (ac: AudioContext): Promise<AudioBuffer | null> => {
   for (const url of orderedMusicUrls()) {
     try {
@@ -334,28 +410,37 @@ const fetchMusicBuffer = async (ac: AudioContext): Promise<AudioBuffer | null> =
 
 const loadMusicBuffer = (ac: AudioContext): Promise<AudioBuffer | null> => {
   if (musicBuffer) return Promise.resolve(musicBuffer);
-  if (!musicBufferPromise) {
-    // Muting authorizes no source, but it does not launch a duplicate multi-MB
-    // request when the same in-flight decode can satisfy a later local gesture.
-    musicBufferPromise = fetchMusicBuffer(ac)
-      .then((buffer) => {
-        musicBuffer = buffer;
-        return buffer;
-      })
-      .finally(() => {
-        musicBufferPromise = null;
-      });
+
+  const bufferGeneration = musicBufferGeneration;
+  let request = musicBufferPromise;
+  if (!request) {
+    // Keep fetch/decode single-flight even when cache eligibility is invalidated.
+    // decodeAudioData cannot be cancelled safely across the supported browsers.
+    const pending = fetchMusicBuffer(ac);
+    musicBufferPromise = pending;
+    request = pending;
+    const clearRequest = (): void => {
+      if (musicBufferPromise === pending) musicBufferPromise = null;
+    };
+    void pending.then(clearRequest, clearRequest);
   }
-  return musicBufferPromise;
+
+  return request.then((buffer) => {
+    if (bufferGeneration === musicBufferGeneration) musicBuffer = buffer;
+    return buffer;
+  });
 };
 
-/** Start the looping track. No-op when music is off or already playing. Must be
- *  called from a user gesture the first time (browser autoplay policy). */
+/** Start the looping track. No-op when music is off, master-muted, or already
+ *  playing. Callers must establish the document's allowed local gesture. */
 export const startMusic = (): void => {
-  if (!musicEnabled) return;
-  // Authorization survives a lifecycle suspension/load race, but is cleared by
-  // an explicit mute or entrypoint transition.
+  if (!musicEnabled || masterMuted) return;
+  // Authorization survives channel/master mute and lifecycle suspension, but is
+  // cleared when this document hands playback to another entrypoint.
   musicAuthorized = true;
+  if (!audioMayPlay()) return;
+  clearMusicReleaseTimer();
+  stopFadingMusic();
   if (musicSource || musicLoading) return;
   const ac = ensureCtx();
   if (!ac) return;
@@ -363,15 +448,23 @@ export const startMusic = (): void => {
   musicLoading = true;
   void loadMusicBuffer(ac)
     .then((buf) => {
-      // A mute or view transition can cancel an in-flight source authorization
-      // without discarding the shared fetch/decode work.
+      // A mute, inactive-view release, or entrypoint transition invalidates this
+      // source generation even if its best-effort decode finishes afterward.
       if (generation !== musicGeneration) return;
       musicLoading = false;
       if (!buf) {
         musicAuthorized = false;
         return;
       }
-      if (!musicEnabled || !musicAuthorized || musicSource || !audioMayPlay()) return;
+      if (
+        !musicEnabled ||
+        masterMuted ||
+        !musicAuthorized ||
+        musicSource ||
+        !audioMayPlay()
+      ) {
+        return;
+      }
       const t = ac.currentTime;
       const gain = ac.createGain();
       gain.gain.setValueAtTime(0.0001, t);
@@ -390,12 +483,18 @@ export const startMusic = (): void => {
     });
 };
 
-function stopMusicPlayback(immediate: boolean): void {
-  // Invalidating the generation also prevents a pending decode from starting a
-  // source after the player muted or left this webview.
+function stopMusicPlayback(
+  immediate: boolean,
+  preserveAuthorization = false
+): void {
+  // Invalidating the generations prevents a pending decode from caching data or
+  // starting a source after the player muted or left this webview.
+  const wasAuthorized = musicAuthorized;
+  clearMusicReleaseTimer();
   musicGeneration += 1;
   musicLoading = false;
-  musicAuthorized = false;
+  musicAuthorized = preserveAuthorization && wasAuthorized;
+  discardDecodedMusicBuffer();
   if (immediate) stopFadingMusic();
   const src = musicSource;
   const gain = musicGain;
@@ -431,8 +530,9 @@ function stopMusicPlayback(immediate: boolean): void {
   fadingMusic.add(fading);
 }
 
-/** Fade the track out and free it. No-op when nothing is playing. */
-export const stopMusic = (): void => stopMusicPlayback(false);
+/** Fade the track out and release its decoded cache. A user-level stop keeps
+ *  this document's prior gesture authorization for a later explicit re-enable. */
+export const stopMusic = (): void => stopMusicPlayback(false, true);
 
 /** Stop this document's track before Reddit opens another entrypoint. Unlike a
  *  user mute, this preserves the preference for the expanded document. Returns
@@ -447,11 +547,14 @@ const syncAudioContextVisibility = (): void => {
   runAudioEffect(() => {
     if (!audioMayPlay()) {
       if (ctx) ignoreAudioPromise(ctx.suspend());
+      if (document.hidden) releaseInactiveMusicResources();
+      else scheduleInactiveMusicRelease();
       return;
     }
+    clearMusicReleaseTimer();
     if (ctx?.state === 'suspended') ignoreAudioPromise(ctx.resume());
-    // A gesture-authorized decode may have completed while this card was hidden.
-    // Reuse that authorization and cached buffer when it becomes active again.
+    // A locally authorized view can resume from its short-lived cache or load a
+    // fresh one after an offscreen release; visibility never grants permission.
     if (musicAuthorized && musicEnabled && !musicSource && !musicLoading) {
       startMusic();
     }
@@ -459,7 +562,8 @@ const syncAudioContextVisibility = (): void => {
 };
 
 /** Suspend all audio whenever Reddit backgrounds or scrolls this webview away.
- *  Inline callers install this without arming music on an arbitrary feed tap. */
+ *  Decoded music is released immediately on page hide and after a short
+ *  offscreen grace period, while local gesture authorization is preserved. */
 export const installAudioVisibilityLifecycle = (): void => {
   if (visibilityLifecycleArmed) return;
   visibilityLifecycleArmed = true;
@@ -467,6 +571,7 @@ export const installAudioVisibilityLifecycle = (): void => {
   window.addEventListener('pagehide', () => {
     viewportVisible = false;
     syncAudioContextVisibility();
+    releaseInactiveMusicResources();
   });
   window.addEventListener('pageshow', () => {
     viewportVisible = true;

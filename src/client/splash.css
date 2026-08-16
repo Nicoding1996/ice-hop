@@ -663,11 +663,10 @@ body.inline-daily-active .wrap {
   opacity: 0.62;
 }
 
-/* A board move already supplies its own motion/status feedback. Keep the
-   unrelated full-game action visually steady while its click is briefly locked. */
+/* A board move already supplies its own motion/status feedback. Use the normal
+   disabled opacity but not a misleading wait cursor for this unrelated action. */
 .inline-daily[data-state='animating'] .inline-top-open:disabled:not([aria-busy='true']) {
   cursor: default;
-  opacity: 1;
 }
 
 .inline-stage {

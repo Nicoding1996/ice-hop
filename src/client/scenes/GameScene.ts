@@ -1454,8 +1454,8 @@ export class GameScene extends Scene {
     this.hintStage = 0;
   }
 
-  /** Master mute for the play HUD: silence or restore both SFX and music, then
-   *  redraw the speaker icon (waves vs. slash) to match the new state. */
+  /** Master mute for the play HUD: silence both channels or restore their prior
+   *  independent mix, then redraw the speaker icon to match the new state. */
   private toggleMute(): void {
     const on = !isAnyAudioOn();
     setAllAudioOn(on);

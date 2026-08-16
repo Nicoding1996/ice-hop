@@ -270,6 +270,14 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   `theme.ts`) between every scene. Always pass a fresh data object to
   `scene.start` - Phaser keeps the previous scene data when started with
   `undefined`, which once reloaded a stale community puzzle.
-- Sound: synthesized via the Web Audio API (`src/client/audio.ts`), no audio
-  files - a hop, a slide, a splash, and a win arpeggio, with a persisted mute
-  toggle on the hub.
+- Audio: hop, slide, splash, and the verified-win arpeggio are synthesized in
+  `src/client/audio.ts`; the ambient loop is a checked-in composition with OGG
+  first on Chromium/Android and MP3 fallback for Safari/iOS. Inline and hub SFX /
+  Music controls persist independently. The compact expanded-play speaker is a
+  combined mute that restores the previous channel mix rather than overwriting it.
+  Music never starts from feed scrolling: inline play authorizes it on the first
+  legal move, while expanded play authorizes it on the first local pointer or
+  keyboard gesture. Hidden/offscreen views suspend immediately and release their
+  decoded track after a bounded grace period; entrypoint transitions stop the old
+  document before the new one can begin. The inline win cue plays only after the
+  server has replayed and accepted the exact transcript.
