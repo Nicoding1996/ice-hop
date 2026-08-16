@@ -125,12 +125,13 @@ solvability/par policy, and a legal creator solve of the exact board.
 The community stream is built per player (`listStreamForUser` + the pure
 `orderCommunityStream` in `community.ts`):
 
-- Excludes puzzles the player has already solved (tracked in `ugc:played:{user}`,
-  recorded when a community puzzle is solved). Skips do NOT mark a puzzle played,
-  so a skipped puzzle can resurface later.
+- For authenticated players, excludes puzzles in the durable
+  `ugc:played:{user}` ledger. Skips do NOT mark a puzzle played, so they can
+  resurface. Guest solves are server-replayed but return `saved:false`; they do
+  not enter this ledger or persistently filter the stream.
 - Includes the player's own puzzles, so a creator (including one in a small or
   newly launched community) can see their submission go live instead of an empty
-  stream; solved ones still drop out via the played set.
+  stream; signed solved ones still drop out via the played set.
 - Interleaves the top-voted pool with the newest pool, so favourites stay visible
   and new submissions still get seen (no pure vote-ranking that buries new work).
 
@@ -197,15 +198,38 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   all invalidate the proof.
 - Play controls: tap a penguin to hop it; drag a seal along its axis to slide it.
 
-## Navigation & flow
+## Inline Daily and Community posts
+
+- New custom posts share one lightweight Phaser-free DOM/SVG board. Their exact
+  immutable V2 `postData.splash` snapshots paint immediately; Daily carries its
+  puzzle/date and Community its puzzle/creator. Ordered piece arrays are part of
+  identity because legal transcripts address pieces by index.
+- The first deliberate board interaction lazily calls `GET /api/init` to reconcile
+  the snapshot with the authoritative host puzzle and, for Daily, obtain a
+  `playId`. A prior Daily solve never replaces this feed board with a recap.
+- Daily solves use `/api/solve`. Community signed and guest solves send one frozen
+  canonical `{id,moves}` transcript to `/api/ugc/played`. Both are server-replayed;
+  signed success persists, while guest Daily has no durable rank/streak and guest
+  Community returns `saved:false` without a played-ledger or creator-total write.
+- Snapshot, preview, or init disagreement fails closed: abort stale work, freeze
+  the visible board, remove move controls, and show Retry/Open-full-game recovery.
+  Pending expansion locks even a controller created or upgraded after it began.
+- After a Community move, expansion stays locked because no transcript handoff
+  exists. A hydrated Daily attempt can use the bounded Daily handoff instead.
+- Compact feed sizing preserves board aspect ratio and constrains it by both card
+  width and available height, retaining HUD/footer/touch targets. Never restore
+  short-height `height: auto` or unconstrained grid-row overrides that collapse
+  size-container rows.
+
+## Expanded navigation & flow
 
 - Home hub (`HomeScene`): the menu screen with Play today's puzzle / Endless
   puzzles / Build a puzzle / My puzzles / Community puzzles, plus a persistent
   sound on/off toggle and a "?" chip that opens the shared "How to play" overlay
   (`showHowToPlay` in `howToPlay.ts`). The game is built to read without
   instructions, so "?" is a discoverable safety net, not a wall; the same overlay
-  is reachable from the play screen for a first-timer who lands straight on the
-  daily.
+  is reachable from the expanded play screen for a first-timer who opens the full
+  Daily.
 - My puzzles (`MyPuzzlesScene`): a creator dashboard listing the puzzles you've
   built with their solve and upvote counts plus headline totals - the reason a
   builder comes back. Paginated (Prev / Next) rather than scrolled so rows never
@@ -215,32 +239,33 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   lifetime "Solved so far" banner, per-tier counts, and a paginated Awards panel
   (from GET `/api/endless/stats`: total, `byTier`, and the achievement snapshot),
   then routes into `GameScene` in Endless mode.
-- In play, the HUD nav is a single "‹ Menu" button (top-left) back to the hub
-  plus a "↺ Restart" button (bottom strip) that restores the current board to its
-  start; Restart only appears once a move has been made (it swaps in for the
+- In expanded play, the HUD nav is a single "‹ Menu" button (top-left) back to the
+  hub plus a "↺ Restart" button (bottom strip) that restores the current board to
+  its start; Restart only appears once a move has been made (it swaps in for the
   first-move hint), so a stranded/unsolvable board is never a dead end. In Endless
   a "Hint" button sits beside Restart (best next move; the solve then won't
   count). Endless play also shows a top-right "Solved: N" progression banner.
-- No dead ends: the daily win screen offers Share result (native share sheet,
-  clipboard fallback), Comment my score (posts a spoiler-free score line straight
-  into the current post's thread, authored by the player via `/api/comment-score`;
-  gated by a `scorePosted` flag and a "this puzzle came from the host post" check
-  so it can never double-post or comment a mismatched puzzle), More puzzles (->
-  Endless tier select), and Menu; endless wins offer Next puzzle (same tier) /
-  Change level / Menu; community wins offer Upvote / Next / Back to daily; test
-  wins offer Back to editing. Signed-in players who haven't joined also get a
-  "Join r/{subreddit}" CTA (`/api/subscribe` - a one-tap opt-in that never gates
-  play; we keep an app-side `subscribed:{user}` flag to stop re-prompting), and
-  logged-out players get a "Sign in to save your streak / progress" CTA on the win
-  screens (`showLoginPrompt`, a natural breakpoint). A failed puzzle load (network
-  / API) shows a "Try again" + Menu recovery instead of hanging on the loader.
-- Returning to a solved daily: re-opening a daily you've already solved shows a
-  recap (your moves + stars, "a fresh puzzle drops tomorrow") that funnels onward
-  to Endless / Community, with a quiet "Play today's again" to replay - never
-  silently dropping you back onto a board you've beaten. First/unsolved visits
-  still drop straight into the board (feed-first; no menu wall).
-- Loading state: the board hides behind a calm "Getting the penguins ready..."
-  message until the puzzle is fetched and rendered, so no half-built frame flashes.
+- No dead ends in expanded `GameScene`: the Daily win screen offers Share result
+  (native share sheet, clipboard fallback), Comment my score (posts a spoiler-free
+  score line straight into the current post's thread, authored by the player via
+  `/api/comment-score`; gated by a `scorePosted` flag and a "this puzzle came from
+  the host post" check so it can never double-post or comment a mismatched puzzle),
+  More puzzles (-> Endless tier select), and Menu; Endless wins offer Next puzzle
+  (same tier) / Change level / Menu; Community wins offer Upvote / Next / Back to
+  daily; Test wins offer Back to editing. Signed-in players who haven't joined
+  also get a "Join r/{subreddit}" CTA (`/api/subscribe` - a one-tap opt-in that
+  never gates play; an app-side `subscribed:{user}` flag stops re-prompting), and
+  logged-out players get a "Sign in to save your streak / progress" CTA via
+  `showLoginPrompt`. A failed puzzle load shows Try again + Menu recovery instead
+  of hanging on the loader.
+- **Expanded `GameScene` only:** returning to a solved Daily shows a recap (moves,
+  stars, and "a fresh puzzle drops tomorrow") that funnels toward Endless /
+  Community, with a quiet "Play today's again" replay. The inline feed post always
+  remains a playable board, even after a prior solve.
+- **Expanded `GameScene` only:** the board hides behind "Getting the penguins
+  ready..." until the puzzle is fetched and rendered, so no half-built frame
+  flashes. Exact V2 inline boards paint immediately; inline loading/recovery is
+  reserved for legacy hydration or verification.
 - Scene transitions: a shared camera fade (`fadeToScene` / `fadeInScene` in
   `theme.ts`) between every scene. Always pass a fresh data object to
   `scene.start` - Phaser keeps the previous scene data when started with

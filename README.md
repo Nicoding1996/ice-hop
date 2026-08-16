@@ -104,9 +104,10 @@ Open the **Build** screen from the game to design a board:
 
 A valid submission is a 4-6 wide/tall board with 1-4 penguins, an equal number of
 water holes, a real solution, and a par of at least 2. You can submit up to 5
-puzzles a day and exact duplicates are rejected. When you play the community
-stream it skips puzzles you've already solved and mixes popular picks with fresh
-new ones, so there's always something new and every creator gets a fair shot.
+puzzles a day and exact duplicates are rejected. For signed-in players, the
+community stream skips puzzles in the durable solved ledger and mixes popular
+picks with fresh new ones; verified guest solves remain unsaved. That keeps the
+stream varied and gives every creator a fair shot.
 
 ---
 
@@ -114,10 +115,11 @@ new ones, so there's always something new and every creator gets a fair shot.
 
 - **[Devvit Web](https://developers.reddit.com/docs)** (`devvit` / `@devvit/web`
   `0.12.24`) - runs the app inside a Reddit post.
-- **[Phaser](https://phaser.io) 4** - the interactive board (expanded view).
+- **[Phaser](https://phaser.io) 4** - powers the expanded `game.html` app; the
+  playable feed board is a separate Phaser-free DOM/SVG surface.
 - **[Hono](https://hono.dev) 4** - the serverless API on Devvit's Node runtime.
 - **TypeScript** + **Vite** (via `@devvit/start/vite`), with a pure, framework-free
-  game engine and solver shared between client and server.
+  game engine and solver shared between both clients and the server.
 - **Redis** (Devvit's managed store) for the daily puzzle, solves, streaks,
   leaderboards, and community submissions.
 
@@ -135,12 +137,14 @@ src/
     solver/   # BFS solver (par), puzzle generator, difficulty, UGC validation
     scoring.ts share.ts date.ts api.ts
   server/   # Hono app on Devvit (Node 22)
-    routes/   # /api (init, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
+    routes/   # /api (preview, init, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
     core/     # daily puzzle, endless pool, leaderboard + streaks, UGC, post creation, Redis keys
   client/   # runs in the post iframe
-    splash.*  # fast inline feed view
-    game.*    # expanded Phaser view
-    scenes/   # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene, MyPuzzlesScene
+    splash.*        # lightweight Phaser-free playable Daily/Community feed surface
+    inlineDaily.ts  # shared inline board controller and verification/recovery UX
+    dailyHandoff.ts # bounded Daily attempt continuation into expanded play
+    game.*          # expanded Phaser view
+    scenes/         # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene, MyPuzzlesScene
 ```
 
 See `.kiro/steering/` for the full design, tech, and structure notes.
@@ -172,21 +176,61 @@ npm run deploy       # type-check + devvit upload
 npm run launch       # deploy + devvit publish
 ```
 
-### How the daily post is created
+### How puzzle posts are created
 
-- **Automatically:** a Devvit scheduler task (`scheduler.tasks.daily-puzzle` in
-  `devvit.json`, cron `0 12 * * *`) posts a fresh puzzle to the feed every day at
-  12:00 UTC.
-- **Manually:** moderators can use the subreddit menu action **"Post today's
-  puzzle"** any time.
+- **Daily, automatically:** `scheduler.tasks.daily-puzzle` in `devvit.json` posts
+  a fresh puzzle every day at 12:00 UTC (`0 12 * * *`).
+- **Daily, manually:** moderators can use **"Post today's puzzle"** at any time.
+- **Community:** each accepted creator submission is published as its own custom
+  post after structural, solver, duplicate, rate-limit, and creator-proof checks.
+
+### Playable feed-post contract
+
+Daily and Community custom posts share the lightweight default entrypoint: a real
+DOM/SVG board using the pure game engine, not a static launcher or reveal teaser.
+It stays Phaser-free; Phaser remains in expanded `game.html` only.
+
+- New posts JSON-encode an exact immutable version-2 snapshot under
+  `postData.splash`. Daily stores `puzzleId`, `date`, the ordered `board`, `par`,
+  and `difficulty`; Community stores `id`, the ordered `board`, `par`,
+  `difficulty`, and `creator`. The order of `board.pieces` is identity-bearing
+  because move transcripts address pieces by index; it must never be reordered.
+- An exact V2 board paints immediately. On the first deliberate board interaction,
+  `GET /api/init` reconciles it with the authoritative host puzzle; Daily receives
+  its `playId` only then. Current-bundle historical posts with a valid host mapping
+  automatically upgrade through read-only `GET /api/post-preview`, which issues no
+  play capability and never returns personalized Daily solved state.
+- Daily completion posts to `/api/solve`. Community completion posts one frozen
+  canonical `{id,moves}` transcript to `/api/ugc/played`; retries resend those
+  exact moves. Both paths replay the transcript against the server-known board.
+  Signed success persists. Guest success is still verified, but guests never share
+  a Redis identity or receive durable progression: Daily gets no rank or streak,
+  and Community returns `saved:false` without entering the played ledger or
+  increasing persistent creator solve totals.
+- Snapshot, preview, or init disagreement fails closed: stale work is aborted, the
+  visible board freezes, move controls disappear, and Retry/Open-full-game recovery
+  remains. A pending expansion also locks controllers created or upgraded late.
+- A prior Daily solve never replaces the inline board with a recap. The exact
+  expanded-view "Getting the penguins ready..." loader and solved-Daily recap
+  belong only to `GameScene`.
+- Compact feed layout preserves board aspect ratio and limits it by both card width
+  and available height while retaining the HUD, footer, and touch targets. Do not
+  restore short-height `height: auto` or unconstrained grid-row overrides that
+  collapse size-container rows.
+
+Local source or build changes do not alter clients already live on Reddit.
+Historical upgrade requires both the current bundle and a valid host mapping.
+Devvit asset-retrofit/version-pinning behavior is not confirmed; if an old post
+remains pinned to an older uploaded bundle, it may need recreation after a
+confirmed upload.
 
 ---
 
 ## Community and progression
 
-- **Start anywhere:** open a daily or Community post, then use **‹ Menu** for
-  Endless, Build, My Puzzles, and the Community stream. Wins always route to a
-  useful next action instead of leaving the player at a dead end.
+- **Start anywhere:** Daily and Community posts are directly playable in the feed.
+  Use **Open full game** for the expanded hub, Endless, Build, My Puzzles, and the
+  Community stream. Wins always route to a useful next action.
 - **Return tomorrow:** the daily, streak, daily leaderboard, weekly difficulty
   ramp, and subreddit flair provide a shared recurring challenge.
 - **Keep playing today:** Endless is always available, even before a community has
@@ -197,9 +241,9 @@ npm run launch       # deploy + devvit publish
   submitted board. My Puzzles reports live solves and votes afterward.
 - **Use the thread:** every puzzle post seeds a pinned prompt, spoiler-free results
   are shareable, and signed-in players can post a verified score beneath it.
-- **Protect progress:** server-side transcript replay verifies persistent Daily,
-  Endless, and Community completions. Guests can play freely, but their progress
-  remains local to the current session until they sign in.
+- **Protect progress:** server-side transcript replay verifies Daily, Endless, and
+  Community completions. Daily and Community guest solves may still be verified,
+  but guest progression is never durable or migrated after sign-in.
 - **Keep the identity original:** the mechanic draws from classic peg-solitaire
   and sliding-logic genres; Ice Hop's name, art, generated boards, and community
   boards are its own.
@@ -210,6 +254,15 @@ npm run launch       # deploy + devvit publish
 
 Repository release numbers describe this source tree; Devvit assigns its own app
 version to each uploaded build.
+
+### Unreleased
+
+- Unified new Daily and Community posts on a directly playable, Phaser-free
+  DOM/SVG feed board backed by exact immutable V2 snapshots.
+- Added lazy authority reconciliation, read-only historical post preview upgrade,
+  frozen server-replayed solve transcripts, and fail-closed mismatch recovery.
+- Preserved expanded Daily recap/loading behavior while making verified guest
+  completion explicitly non-durable.
 
 ### 0.1.0 - 2026-08-05
 

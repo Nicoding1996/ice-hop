@@ -22,13 +22,18 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 
 ## Client architecture
 
-- Phaser 4 game (the `game.html` expanded view) with scenes: `Boot` (loads the
-  sound pref, launches `GameScene`), `HomeScene` (the hub), `GameScene` (daily /
-  endless / community / test play), `EditorScene` (build), `CommunityScene` (loads
-  the stream and hands off to GameScene), `EndlessScene` (Easy/Medium/Hard tier
-  select), and `MyPuzzlesScene` (a creator dashboard of your puzzles + their
-  solve/upvote counts). A shared "How to play" overlay (`src/client/howToPlay.ts`)
-  is opened from both the hub and the play screen.
+- Phaser 4 is confined to the `game.html` expanded view, with scenes: `Boot`
+  (loads the sound pref, launches `GameScene`), `HomeScene` (the hub), `GameScene`
+  (daily / endless / community / test play), `EditorScene` (build),
+  `CommunityScene` (loads the stream and hands off to GameScene), `EndlessScene`
+  (Easy/Medium/Hard tier select), and `MyPuzzlesScene` (creator dashboard). The
+  shared "How to play" overlay (`src/client/howToPlay.ts`) opens from the hub and
+  expanded play screen.
+- The default `splash.html` entrypoint is a real Phaser-free DOM/SVG game shared
+  by Daily and Community. `splash.ts` paints exact V2 boards immediately, while
+  `inlineDaily.ts` owns interaction, lazy authority hydration, verification, and
+  recovery. `dailyHandoff.ts` can carry a bounded Daily attempt into expanded
+  play; Community has no transcript handoff after a move.
 - All art is drawn in code as vector graphics - no image/sprite assets. One
   palette + helper module, `src/client/art/theme.ts`, holds the penguin / seal /
   rock / water, the connected ice sheet, the backdrop, win FX, and the scene
@@ -36,14 +41,48 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 - Sound is synthesized at runtime with the Web Audio API
   (`src/client/audio.ts`) - no audio files. It unlocks on the first tap and has
   a mute toggle persisted to `localStorage`.
-- The splash (`splash.html`, inline feed view) stays light: an inline SVG penguin
-  + CSS, no Phaser, and it opens the expanded view via `requestExpandedMode`.
+
+## Unified custom-post contract
+
+- New Daily and Community custom posts JSON-encode exact immutable version-2
+  snapshots under `postData.splash`. Daily includes `puzzleId`, `date`, ordered
+  `board`, `par`, and `difficulty`; Community includes `id`, ordered `board`,
+  `par`, `difficulty`, and `creator`. `board.pieces` order is identity-bearing
+  because move transcripts use piece indexes; validation must not reorder it.
+- Exact V2 boards paint before a server round trip. On the first deliberate board
+  interaction, inline play calls `GET /api/init` to reconcile the snapshot with
+  the authoritative host puzzle; Daily receives its `playId` then.
+- Current-bundle historical posts with valid host mappings automatically upgrade
+  to exact snapshots through read-only `GET /api/post-preview`. It never issues a
+  Daily `playId` or any other play capability, and Daily preview never returns
+  personalized solved state.
+- Daily submits `{puzzleId,playId,moves}` to `POST /api/solve`. Community submits
+  one frozen canonical `{id,moves}` transcript to `POST /api/ugc/played`; retries
+  reuse it. Both are server-replayed. Signed success persists; guest Daily is
+  verified without rank/streak persistence, and guest Community returns
+  `saved:false` without durable played-ledger or creator-total writes.
+- Snapshot/preview/init disagreement aborts stale work, freezes the visible board,
+  removes move controls, and exposes Retry/Open-full-game recovery. Expansion
+  pending state also locks controllers created or upgraded after the request.
+  A prior Daily solve does not replace the inline board; the expanded-view
+  "Getting the penguins ready..." loader and solved-Daily recap are `GameScene`
+  behavior only.
+- Compact feed sizing preserves board aspect ratio and constrains it by both card
+  width and available height while keeping HUD, footer, and touch targets. Do not
+  restore short-height `height: auto` or unconstrained grid-row overrides that
+  collapse size-container rows.
 
 ## Server routing
 
 - One Hono app. Mount public routes at `/api` (called by the client) and
   internal routes at `/internal` (menu, form, triggers, scheduler).
-- Post creation: `reddit.submitCustomPost({ title, ... })`.
+- Post creation uses `reddit.submitCustomPost({ title, ... })`; Daily and
+  Community publication both write V2 splash snapshots plus authoritative host
+  mappings.
+- `GET /api/post-preview` is read-only host reconciliation/legacy upgrade.
+  `GET /api/init` returns the authoritative host puzzle and lazily issues the
+  Daily play capability. `POST /api/solve` verifies Daily transcripts;
+  `POST /api/ugc/played` verifies Community transcripts.
 - User-attributed Reddit actions run server-side via `reddit`, using the `asUser`
   scopes declared in devvit.json: `reddit.subscribeToCurrentSubreddit()` (the
   win-screen "Join" -> `/api/subscribe`) and `reddit.submitComment({ ..., runAs:
@@ -60,14 +99,20 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 
 ## devvit.json (config, schema v1)
 
-Key sections: `post.entrypoints` (default = `splash.html` inline feed view,
-`game` = `game.html` expanded view), `server` (dir/entry), `permissions`
-(`redis: true`, plus `reddit.enable` with `asUser` scopes `SUBSCRIBE_TO_SUBREDDIT`
-+ `SUBMIT_COMMENT` that back the win-screen Join and Comment-my-score actions),
-`menu.items`, `triggers` (e.g. `onAppInstall`), `scheduler.tasks` (cron - the
-`daily-puzzle` and `endless-refill` jobs), `scripts` (`dev`: `vite build --watch`,
-`build`: `vite build`), and `dev.subreddit` (the playtest subreddit, currently
-`ice_hop_dev`). (No `forms` are declared today.)
+Key sections: `post.entrypoints` (default = `splash.html` tall inline playable
+view, `game` = `game.html` expanded Phaser view), `server` (dir/entry),
+`permissions` (`redis: true`, plus `reddit.enable` with `asUser` scopes
+`SUBSCRIBE_TO_SUBREDDIT` + `SUBMIT_COMMENT` that back the win-screen Join and
+Comment-my-score actions), `menu.items`, `triggers` (e.g. `onAppInstall`),
+`scheduler.tasks` (cron - the `daily-puzzle` and `endless-refill` jobs), `scripts`
+(`dev`: `vite build --watch`, `build`: `vite build`), and `dev.subreddit` (the
+playtest subreddit, currently `ice_hop_dev`). (No `forms` are declared today.)
+
+Local source/build changes do not alter already-live Reddit clients. Historical
+upgrade works only when the post runs the current bundle and still has a valid
+host mapping. Devvit asset-retrofit/version-pinning behavior is unconfirmed; an
+old post pinned to an older uploaded bundle may need recreation after a confirmed
+upload.
 
 ## Commands
 

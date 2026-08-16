@@ -3,7 +3,9 @@
 ## What we are building
 
 **Ice Hop** is a live daily logic-puzzle game that runs inside Reddit posts via
-Devvit Web. Display name: "Ice Hop". App slug and package name: `ice-hop`.
+Devvit Web. New Daily and creator Community posts are directly playable in the
+feed through one lightweight DOM/SVG surface; opening the full Phaser app is
+optional. Display name: "Ice Hop". App slug and package name: `ice-hop`.
 
 The board combines peg-solitaire and sliding-block ideas: `HOPPER` pieces jump
 over contiguous occupied cells, `SLIDER` pieces move along one axis, and fixed
@@ -27,13 +29,21 @@ One pure TypeScript solver supports the product's core systems:
 4. **Progressive help:** Endless hints recompute a valid next move from the current
    position without weakening daily competition.
 
-Server completion is authoritative. Daily, Endless, and Community progress is
-recorded only after legal transcript replay against the exact board. Guest
-progress remains session-local, and retries cannot increment persistent progress
-more than once.
+Server completion is authoritative. Daily, Endless, and Community completions are
+accepted only after legal transcript replay against the exact board, and retries
+cannot increment persistent progress more than once. Guest Daily and Community
+solves can therefore be explicitly server-verified, but guests never share a
+Redis identity or receive durable progression: no Daily rank/streak, and
+Community returns `saved:false` without ledger or creator-total writes. Signing
+in later does not migrate a guest solve.
 
 ## Player loops
 
+- **Inline posts:** each new Daily or Community post embeds an exact immutable V2
+  snapshot and paints the board immediately. The first deliberate interaction
+  reconciles it with the authoritative host puzzle; Daily obtains a play capability
+  then. Snapshot/preview/init disagreement freezes the visible board and offers
+  Retry/Open-full-game recovery instead of silently switching puzzles.
 - **Daily:** one shared solver-generated puzzle is posted each day. Difficulty
   ramps from par 4 on Monday/Tuesday to Medium on Wednesday-Friday and Hard on
   weekends. Community submissions never silently become the daily.
@@ -43,9 +53,9 @@ more than once.
 - **Awards:** quantity milestones reward 10, 25, 50, 100, and 250 Endless solves.
   Tier awards recognize Easy, Medium, first/ten Hard solves, a Hard solve at par,
   and ten solves in every tier.
-- **Daily return:** consecutive daily solves build a streak and update subreddit
-  flair. A solved-daily recap routes returning players toward Endless or
-  Community rather than silently replaying completed content.
+- **Daily return:** consecutive Daily solves build a streak and update subreddit
+  flair. In expanded `GameScene` only, a solved-Daily recap routes returning
+  players toward Endless or Community. The inline post remains a playable board.
 - **Competition:** each immutable daily puzzle has its own leaderboard, ranked by
   fewest moves with server-derived elapsed time only as a tiebreaker.
 - **Discussion:** each puzzle post seeds a pinned prompt. Sharing and the
@@ -53,14 +63,16 @@ more than once.
   post thread under the player's account.
 - **Creation:** the editor provides live solver feedback, Undo, Random, and Test.
   Submit stays locked until the creator legally solves that exact board. Accepted
-  puzzles become playable posts and enter the Community stream.
-- **Community discovery:** solved puzzles are filtered per player; skips may
-  resurface. Top-voted, recent, and discovery candidates are interleaved so both
-  established and new creators receive exposure.
+  puzzles use the same playable inline-post surface and enter the Community stream.
+- **Community discovery:** authenticated solved puzzles are filtered through the
+  durable played ledger; skips may resurface. Guest verification is non-durable.
+  Top-voted, recent, and discovery candidates are interleaved so both established
+  and new creators receive exposure.
 - **Creator payoff:** My Puzzles reports per-board and aggregate solve/upvote
   counts, giving makers a concrete reason to return.
-- **Low-friction conversion:** guests can play before signing in. Win screens are
-  the natural point to offer sign-in and an optional community subscription.
+- **Low-friction conversion:** guests can play and receive an authoritative solve
+  result before signing in. Win screens naturally offer sign-in and an optional
+  community subscription without implying that guest progression was saved.
 
 ## Product health
 
