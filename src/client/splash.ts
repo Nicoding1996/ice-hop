@@ -4,6 +4,18 @@ import {
   createInlineDaily,
   type InlinePuzzleController,
 } from './inlineDaily';
+import {
+  initAudioPrefs,
+  installAudioVisibilityLifecycle,
+  isAudioViewActive,
+  isMusicOn,
+  isSoundOn,
+  playHop,
+  setMusicOn,
+  setSoundOn,
+  startMusic,
+  stopMusicForTransition,
+} from './audio';
 import type {
   DailySplashSnapshotV2,
   PostPreviewResponse,
@@ -19,14 +31,55 @@ import { isSolved } from '../shared/game/rules';
 import { validateBoardStructure } from '../shared/game/validation';
 import { difficultyFromPar, type Difficulty } from '../shared/solver/difficulty';
 
-// --- Launch actions ----------------------------------------------------------
+// --- Launch and audio actions ------------------------------------------------
 
 const startElement = document.getElementById('start-button');
 const startButton = startElement instanceof HTMLButtonElement ? startElement : null;
 const exploreElement = document.getElementById('explore-button');
 const exploreButton = exploreElement instanceof HTMLButtonElement ? exploreElement : null;
+const soundElement = document.getElementById('inline-sound-button');
+const soundButton = soundElement instanceof HTMLButtonElement ? soundElement : null;
+const musicElement = document.getElementById('inline-music-button');
+const musicButton = musicElement instanceof HTMLButtonElement ? musicElement : null;
 type ExpandedModeEvent = Parameters<typeof requestExpandedMode>[0];
 type LaunchIntent = 'play' | 'home' | 'endless';
+
+const updateAudioButton = (
+  button: HTMLButtonElement | null,
+  label: 'SFX' | 'Music',
+  on: boolean
+): void => {
+  if (!button) return;
+  const state = on ? 'on' : 'off';
+  const fullLabel = label === 'SFX' ? 'Sound effects' : 'Music';
+  button.textContent = `${label} ${state}`;
+  button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  button.setAttribute(
+    'aria-label',
+    `${fullLabel} ${state}. ${on ? `Turn ${fullLabel.toLowerCase()} off` : `Turn ${fullLabel.toLowerCase()} on`}`
+  );
+};
+
+const refreshAudioControls = (): void => {
+  updateAudioButton(soundButton, 'SFX', isSoundOn());
+  updateAudioButton(musicButton, 'Music', isMusicOn());
+};
+
+initAudioPrefs();
+installAudioVisibilityLifecycle();
+refreshAudioControls();
+
+soundButton?.addEventListener('click', () => {
+  const on = !isSoundOn();
+  setSoundOn(on);
+  refreshAudioControls();
+  if (on) playHop();
+});
+
+musicButton?.addEventListener('click', () => {
+  setMusicOn(!isMusicOn());
+  refreshAudioControls();
+});
 
 const launchStorageKey =
   typeof context.postId === 'string' && context.postId.length > 0
@@ -35,6 +88,7 @@ const launchStorageKey =
 
 let launchPending = false;
 let launchResetTimer: number | undefined;
+let restoreMusicAfterLaunch = false;
 let inlinePuzzle: InlinePuzzleController | null = null;
 let inlinePuzzleKind: 'daily' | 'ugc' | null = null;
 let idleStartLabel = startButton?.textContent ?? "Play today's puzzle";
@@ -66,6 +120,21 @@ const resetLaunchState = (clearIntent = false): void => {
     startButton.textContent = idleStartLabel;
   }
   if (exploreButton) exploreButton.disabled = false;
+  if (soundButton) soundButton.disabled = false;
+  if (musicButton) musicButton.disabled = false;
+};
+
+const restoreTransitionMusicIfActive = (): void => {
+  if (
+    !restoreMusicAfterLaunch ||
+    launchPending ||
+    !isAudioViewActive() ||
+    !document.hasFocus()
+  ) {
+    return;
+  }
+  restoreMusicAfterLaunch = false;
+  startMusic();
 };
 
 const openExpanded = (
@@ -77,11 +146,17 @@ const openExpanded = (
   // A continuation may require a durable one-shot transcript. Never navigate
   // when that handoff could not be saved.
   if (beforeRequest && !beforeRequest()) return;
+  // The expanded entrypoint owns a separate AudioContext and starts the same
+  // enabled track on its first gesture. Stop this document first so the two
+  // webviews can never overlap while Reddit switches modes.
+  restoreMusicAfterLaunch = stopMusicForTransition();
   launchPending = true;
   inlinePuzzle?.setExpansionPending(true);
   document.body.classList.add('opening');
   if (startButton) startButton.disabled = true;
   if (exploreButton) exploreButton.disabled = true;
+  if (soundButton) soundButton.disabled = true;
+  if (musicButton) musicButton.disabled = true;
 
   if (intent === 'play') {
     clearLaunchIntent();
@@ -102,10 +177,16 @@ const openExpanded = (
     // If expansion fails silently, restore this card. Keep the one-shot route
     // and handoff until the expanded entrypoint consumes them or a later user
     // action replaces them; its own init timeout is longer than this UI reset.
-    launchResetTimer = window.setTimeout(() => resetLaunchState(false), 4000);
+    launchResetTimer = window.setTimeout(() => {
+      resetLaunchState(false);
+      restoreTransitionMusicIfActive();
+    }, 4000);
   } catch (error) {
     console.error(error);
     resetLaunchState(true);
+    // A synchronous failure is still inside the original trusted click, so the
+    // previous inline track can be restored without violating autoplay policy.
+    restoreTransitionMusicIfActive();
   }
 };
 
@@ -117,7 +198,21 @@ startButton?.addEventListener('click', (event) => {
   openExpanded(event, 'play');
 });
 exploreButton?.addEventListener('click', (event) => openExpanded(event, 'home'));
-window.addEventListener('pageshow', () => resetLaunchState(true));
+window.addEventListener('pageshow', () => {
+  initAudioPrefs();
+  refreshAudioControls();
+  resetLaunchState(true);
+  restoreTransitionMusicIfActive();
+});
+window.addEventListener('focus', () => {
+  initAudioPrefs();
+  refreshAudioControls();
+  restoreTransitionMusicIfActive();
+});
+window.addEventListener('storage', () => {
+  initAudioPrefs();
+  refreshAudioControls();
+});
 
 // --- Meta line (date / hello) ------------------------------------------------
 

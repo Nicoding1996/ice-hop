@@ -13,6 +13,7 @@ import { computeStars } from '../shared/scoring';
 import { buildShareText } from '../shared/share';
 import { difficultyFromPar, type Difficulty } from '../shared/solver/difficulty';
 import { clearDailyHandoff, saveDailyHandoff } from './dailyHandoff';
+import { playHop, playSlide, playSplash, playWin, startMusic } from './audio';
 import { trackClientEvent } from './telemetry';
 
 const CELL = 44;
@@ -21,6 +22,14 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_COUNT = 10_000_000;
 const MAX_STREAK = 100_000;
 const SEAL_TAP_SLOP_PX = 10;
+
+const runInlineAudio = (effect: () => void): void => {
+  try {
+    effect();
+  } catch {
+    // Optional audio must never interrupt authoritative puzzle state.
+  }
+};
 
 export type InlinePuzzleKind = 'daily' | 'ugc';
 
@@ -1149,19 +1158,21 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       const topLabel =
         this.state === 'verified-win'
           ? '‹ Menu'
-          : this.state === 'animating'
-            ? 'Moving…'
-            : this.options.kind === 'ugc' &&
-                this.state === 'playing' &&
-                this.history.length > 0
-              ? 'Restart to open full game'
-              : this.state === 'playing' && this.history.length > 0 && !this.session
-                ? 'Connecting progress…'
-                : this.state === 'playing' && this.history.length > 0
-                  ? 'Continue full game'
-                  : 'Open full game';
+          : this.playOpenButtonLabel();
       this.prepareOpenButton(this.topOpenButton, topLabel);
     }
+  }
+
+  private playOpenButtonLabel(): string {
+    if (this.options.kind === 'ugc' && this.history.length > 0) {
+      return 'Restart to open full game';
+    }
+    if (this.history.length > 0 && !this.session) {
+      return 'Connecting progress…';
+    }
+    return this.history.length > 0
+      ? 'Continue full game'
+      : 'Open full game';
   }
 
   private expansionIsLocked(): boolean {
@@ -1930,11 +1941,18 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       return;
     }
     const canonical = cloneMove(move);
+    // A legal destination click/pointer release is the deliberate gesture that
+    // unlocks inline Web Audio. Preferences still gate each channel.
+    runInlineAudio(() => {
+      startMusic();
+      if (canonical.kind === 'HOPPER') playHop();
+      else playSlide();
+    });
     this.state = 'animating';
     this.selected = null;
     this.options.root.dataset.state = this.state;
     this.options.root.setAttribute('aria-busy', 'true');
-    this.prepareOpenButton(this.topOpenButton, 'Moving…');
+    this.prepareOpenButton(this.topOpenButton, this.playOpenButtonLabel());
     const instruction = this.stage.querySelector('.inline-instructions');
     if (instruction) instruction.textContent = canonical.kind === 'HOPPER' ? 'Penguin hopping…' : 'Seal sliding…';
     const buttons = this.stage.querySelectorAll('button');
@@ -1992,8 +2010,12 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
   private commitMove(move: Move, restoreKeyboardFocus: boolean): void {
     const puzzle = this.currentPuzzle();
     if (!puzzle || this.state !== 'animating') return;
+    const landsInWater =
+      move.kind === 'HOPPER' &&
+      move.to.every((cell) => puzzle.board.holes.includes(cell));
     this.pieces = applyMove(this.pieces, move).map(clonePiece);
     this.history.push(cloneMove(move));
+    if (landsInWater) runInlineAudio(playSplash);
     if (!this.startTracked) {
       this.startTracked = true;
       trackClientEvent(
@@ -2224,6 +2246,9 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       this.renderVerificationError();
       return;
     }
+    // The server has replayed and accepted the exact transcript. Celebrate only
+    // now so a local solved board never produces a false authoritative win cue.
+    runInlineAudio(playWin);
     if (session.kind === 'ugc' && result.kind === 'ugc') {
       this.renderCommunityVerifiedWin(session, result);
       return;

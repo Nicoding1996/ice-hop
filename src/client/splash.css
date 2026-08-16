@@ -552,13 +552,15 @@ body.inline-daily-active .wrap {
 .inline-topbar {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .inline-brand {
-  min-width: 0;
+  min-width: 78px;
+  flex: 1 1 auto;
+  padding-top: 3px;
   text-align: left;
 }
 
@@ -583,7 +585,19 @@ body.inline-daily-active .wrap {
   opacity: 0.82;
 }
 
+.inline-top-actions {
+  display: flex;
+  max-width: calc(100% - 78px);
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .inline-top-open,
+.inline-audio-toggle,
 .inline-button {
   display: inline-flex;
   min-height: 44px;
@@ -602,11 +616,25 @@ body.inline-daily-active .wrap {
   transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
-.inline-top-open {
+.inline-top-open,
+.inline-audio-toggle {
   flex: 0 0 auto;
   border: 1px solid rgba(127, 224, 255, 0.38);
   color: #eaf6fb;
   background: rgba(6, 32, 51, 0.48);
+}
+
+.inline-audio-toggle {
+  padding-inline: 10px;
+  font-size: clamp(0.7rem, 2.5vw, 0.78rem);
+  white-space: nowrap;
+}
+
+.inline-audio-toggle[aria-pressed='false'] {
+  border-color: rgba(127, 180, 212, 0.28);
+  color: #b9d5e2;
+  background: rgba(6, 32, 51, 0.3);
+  opacity: 0.78;
 }
 
 .inline-top-open[hidden] {
@@ -614,12 +642,14 @@ body.inline-daily-active .wrap {
 }
 
 .inline-top-open:hover,
+.inline-audio-toggle:hover,
 .inline-button--secondary:hover,
 .inline-button--quiet:hover {
   background: rgba(255, 255, 255, 0.12);
 }
 
 .inline-top-open:focus-visible,
+.inline-audio-toggle:focus-visible,
 .inline-button:focus-visible,
 .inline-target:focus-visible {
   outline: 3px solid #7fe0ff;
@@ -627,9 +657,17 @@ body.inline-daily-active .wrap {
 }
 
 .inline-top-open:disabled,
+.inline-audio-toggle:disabled,
 .inline-button:disabled {
   cursor: wait;
   opacity: 0.62;
+}
+
+/* A board move already supplies its own motion/status feedback. Keep the
+   unrelated full-game action visually steady while its click is briefly locked. */
+.inline-daily[data-state='animating'] .inline-top-open:disabled:not([aria-busy='true']) {
+  cursor: default;
+  opacity: 1;
 }
 
 .inline-stage {
@@ -1214,10 +1252,40 @@ body.inline-daily-active .wrap {
 }
 
 @media (max-width: 480px) {
+  .inline-topbar {
+    gap: 6px;
+  }
+
+  .inline-brand {
+    min-width: 60px;
+    padding-top: 4px;
+  }
+
+  .inline-brand h1 {
+    font-size: 0.95rem;
+    letter-spacing: 1.2px;
+  }
+
+  .inline-brand p {
+    max-width: 64px;
+    font-size: 0.64rem;
+  }
+
+  .inline-top-actions {
+    max-width: calc(100% - 66px);
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .inline-audio-toggle {
+    padding-inline: 6px;
+    font-size: 0.65rem;
+  }
+
   .inline-top-open {
-    max-width: 45vw;
-    padding-inline: 12px;
-    font-size: 0.76rem;
+    max-width: 100px;
+    padding-inline: 8px;
+    font-size: 0.68rem;
   }
 
   .inline-card-actions {
@@ -1325,6 +1393,7 @@ body.inline-daily-active .wrap {
   }
 
   .inline-top-open,
+  .inline-audio-toggle,
   .inline-button,
   .inline-piece-control,
   .inline-target,

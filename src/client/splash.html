@@ -96,9 +96,27 @@
           <h1 id="inline-title">ICE HOP</h1>
           <p id="inline-context">Daily puzzle</p>
         </div>
-        <button class="inline-top-open" id="inline-open-button" type="button">
-          Open full game
-        </button>
+        <div class="inline-top-actions" aria-label="Game and audio controls">
+          <button
+            class="inline-audio-toggle"
+            id="inline-sound-button"
+            type="button"
+            aria-pressed="true"
+          >
+            SFX on
+          </button>
+          <button
+            class="inline-audio-toggle"
+            id="inline-music-button"
+            type="button"
+            aria-pressed="true"
+          >
+            Music on
+          </button>
+          <button class="inline-top-open" id="inline-open-button" type="button">
+            Open full game
+          </button>
+        </div>
       </header>
       <div class="inline-stage" id="inline-stage"></div>
       <p class="visually-hidden" id="inline-live" aria-live="polite" aria-atomic="true"></p>
