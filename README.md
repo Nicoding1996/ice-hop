@@ -376,7 +376,7 @@ confirmed upload.
 The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
 source/package hardening milestone that preceded those later platform builds.
 
-### Unreleased
+### 0.0.27 - 2026-10-31
 
 Puzzle generation. Numbers below are from `npm run bench:gen` on one PC, before
 and after: 28 Daily dates, and 300 Easy, 150 Medium and 60 Hard Endless boards.
