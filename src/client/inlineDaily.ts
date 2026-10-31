@@ -8,9 +8,16 @@ import { parseDailyPuzzleId } from '../shared/daily';
 import { legalMoves } from '../shared/game/moves';
 import { applyMove, isSolved } from '../shared/game/rules';
 import { slideStop } from '../shared/game/slide';
-import { MAX_REPLAY_MOVES } from '../shared/game/replay';
+import {
+  WIN_CELEBRATION_MS,
+  WIN_CELEBRATION_REDUCED_MS,
+  keepSelectedAfterMove,
+  moveDurationMs,
+  sealBlockedByWater,
+} from '../shared/game/motion';
+import { MAX_REPLAY_MOVES, replayMoves } from '../shared/game/replay';
 import { validateBoardStructure } from '../shared/game/validation';
-import { computeStars } from '../shared/scoring';
+import { computeStars, starGoal, starGoalLabel } from '../shared/scoring';
 import { buildShareText } from '../shared/share';
 import { difficultyFromPar, type Difficulty } from '../shared/solver/difficulty';
 import { clearDailyHandoff, saveDailyHandoff } from './dailyHandoff';
@@ -23,6 +30,10 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_COUNT = 10_000_000;
 const MAX_STREAK = 100_000;
 const SEAL_TAP_SLOP_PX = 10;
+/** Literal-typed so createElementNS returns specific SVG element types. */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** How far past its last stop a seal must be pushed before it refuses water. */
+const SEAL_REFUSE_PX = 14;
 
 const runInlineAudio = (effect: () => void): void => {
   try {
@@ -170,6 +181,25 @@ type DragTarget = {
   readonly move: Move;
   readonly delta: number;
 };
+
+/** One short-lived board effect (a splash ripple or a puff of snow). */
+type BoardEffect = {
+  readonly kind: 'splash' | 'spray';
+  readonly cell: number;
+  /** Direction the snow drifts (opposite to the slide); 0,0 for splashes. */
+  readonly dx: number;
+  readonly dy: number;
+  readonly at: number;
+};
+
+/** Effects keep animating across re-renders until they finish. */
+const EFFECT_LIFETIME_MS = 700;
+/** Shared period of the idle animations (LCM of 2.6s breathe, 3.4s shimmer). */
+const IDLE_CLOCK_PERIOD_MS = 44_200;
+
+const prefersReducedMotion = (): boolean =>
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 type SealDrag = {
   readonly pointerId: number;
@@ -662,6 +692,16 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
   private announcementSequence = 0;
   private requestController: AbortController | null = null;
   private drag: SealDrag | null = null;
+  /** The last splash or snow puff, drawn until it finishes animating. */
+  private boardEffect: BoardEffect | null = null;
+  /** The ~1s win beat (final splash, penguins cheer) before the result card. */
+  private celebrating = false;
+  private celebrationRendered = false;
+  private celebrationTimer: number | undefined;
+  /** One flipper bump per drag when a seal is pushed toward open water. */
+  private sealRefused = false;
+  /** The current selection was kept automatically after a hop. */
+  private keptSelection = false;
   private suppressedClickPiece: number | null = null;
   private suppressedClickUntil = 0;
   private readonly handleActiveSealPointerMove = (event: PointerEvent): void => {
@@ -921,7 +961,58 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     this.verificationExpired = false;
     this.suppressedClickPiece = null;
     this.suppressedClickUntil = 0;
+    this.endCelebration();
+    this.boardEffect = null;
     return this.generation;
+  }
+
+  /** Cancel a running win beat without rendering (a new generation took over). */
+  private endCelebration(): void {
+    if (this.celebrationTimer !== undefined) window.clearTimeout(this.celebrationTimer);
+    this.celebrationTimer = undefined;
+    this.celebrating = false;
+    this.celebrationRendered = false;
+  }
+
+  /**
+   * The win beat: the board stays up for about a second so the last penguin
+   * visibly dives in and everyone cheers. Verification runs during it, and
+   * the result card (with the verified win cue) appears when both are done.
+   */
+  private startCelebration(): void {
+    this.endCelebration();
+    this.celebrating = true;
+    const generation = this.generation;
+    this.celebrationTimer = window.setTimeout(
+      () => {
+        this.celebrationTimer = undefined;
+        if (generation !== this.generation) return;
+        this.celebrating = false;
+        this.celebrationRendered = false;
+        this.render();
+      },
+      prefersReducedMotion() ? WIN_CELEBRATION_REDUCED_MS : WIN_CELEBRATION_MS
+    );
+  }
+
+  private isCompletionState(): boolean {
+    return (
+      this.state === 'awaiting-session' ||
+      this.state === 'verifying' ||
+      this.state === 'verified-win' ||
+      this.state === 'verification-error'
+    );
+  }
+
+  private renderCelebration(): void {
+    const footer = document.createElement('div');
+    footer.className = 'inline-play-footer';
+    footer.append(makeParagraph('inline-instructions inline-celebration-note', 'Everyone made it in!'));
+    const surface = this.buildPlaySurface(false, footer);
+    if (!surface) return;
+    surface.classList.add('inline-play--celebrating');
+    this.stage.replaceChildren(surface);
+    this.celebrationRendered = true;
   }
 
   private beginRequest(): { readonly id: number; readonly controller: AbortController } {
@@ -1096,7 +1187,11 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       this.contextText.textContent = `${this.modeLabel()} puzzle`;
     }
 
-    if (this.state === 'loading') this.renderSessionLoading();
+    if (this.celebrating && this.isCompletionState()) {
+      // Hold the solved board during the win beat; draw it only once so the
+      // cheer never restarts when verification finishes mid-celebration.
+      if (!this.celebrationRendered) this.renderCelebration();
+    } else if (this.state === 'loading') this.renderSessionLoading();
     else if (this.state === 'load-error') this.renderLoadError();
     else if (this.state === 'playing') this.renderPlaying(null);
     else if (this.state === 'awaiting-session') this.renderAwaitingSession();
@@ -1414,7 +1509,21 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     // wedged between two unrelated pills.
     const hud = document.createElement('div');
     hud.className = 'inline-hud';
-    hud.setAttribute('aria-label', `Moves ${this.history.length}, par ${puzzle.par}`);
+    // Live star goal, same wording as the full game. On a solved board it shows
+    // the stars earned instead of a goal for a move that will never happen.
+    const solvedNow = isSolved(puzzle.board, this.pieces);
+    const goal = starGoal(this.history.length, puzzle.par);
+    const earned = computeStars(this.history.length, puzzle.par);
+    const goalLabel = solvedNow ? `${'\u2605'.repeat(earned)} earned` : starGoalLabel(goal);
+    const spokenGoal = solvedNow
+      ? `${earned} ${earned === 1 ? 'star' : 'stars'} earned`
+      : goal.maxMoves === null
+        ? '1 star for any solve'
+        : `${goal.stars} stars up to ${goal.maxMoves} moves`;
+    hud.setAttribute(
+      'aria-label',
+      `Moves ${this.history.length}, par ${puzzle.par}. ${spokenGoal}.`
+    );
     const moves = document.createElement('span');
     moves.className = 'inline-stat';
     moves.append('Moves ');
@@ -1427,7 +1536,11 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     const parValue = document.createElement('strong');
     parValue.textContent = puzzle.par.toString();
     par.append(parValue);
-    hud.append(moves, par);
+    const goalStat = document.createElement('span');
+    goalStat.className = 'inline-stat inline-stat--goal';
+    goalStat.setAttribute('aria-hidden', 'true');
+    goalStat.textContent = goalLabel;
+    hud.append(moves, par, goalStat);
 
     footer.id = 'inline-board-instructions';
     footer.classList.add('inline-bottom-strip');
@@ -1483,6 +1596,11 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       if (this.history.length > 0) {
         actions.append(
           makeButton(
+            '↶ Undo',
+            'inline-button inline-button--quiet inline-button--compact',
+            (event) => this.undoMove(event.detail === 0)
+          ),
+          makeButton(
             '↺ Restart',
             'inline-button inline-button--quiet inline-button--compact',
             (event) => this.restartAttempt(event.detail === 0)
@@ -1495,12 +1613,22 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     }
 
     if (this.history.length > 0) {
+      const actions = document.createElement('div');
+      actions.className = 'inline-play-actions';
+      actions.setAttribute('role', 'group');
+      actions.setAttribute('aria-label', 'Move controls');
+      const undo = makeButton(
+        '↶ Undo',
+        'inline-button inline-button--quiet',
+        (event) => this.undoMove(event.detail === 0)
+      );
       const restart = makeButton(
         '↺ Restart',
         'inline-button inline-button--quiet',
         (event) => this.restartAttempt(event.detail === 0)
       );
-      footer.append(restart);
+      actions.append(undo, restart);
+      footer.append(actions);
     } else {
       const instructions = makeParagraph('inline-instructions', '');
       this.populateFirstMoveInstructions(instructions);
@@ -1558,8 +1686,18 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     description.className = 'visually-hidden';
     description.textContent = describeBoardState(board, this.pieces);
     shell.append(visual, description);
+    // Phase-lock the idle animations to one clock: the board is rebuilt after
+    // every tap, and a shared negative delay resumes each breath and shimmer
+    // exactly where it was instead of restarting it.
+    shell.style.setProperty(
+      '--idle-clock',
+      `${-Math.round(performance.now() % IDLE_CLOCK_PERIOD_MS)}ms`
+    );
 
-    if (!interactive) return shell;
+    if (!interactive) {
+      if (this.celebrating) shell.append(this.buildBoardEffects(board, size, []));
+      return shell;
+    }
 
     const allMoves = legalMoves(board, this.pieces);
     const effects = this.buildBoardEffects(board, size, allMoves);
@@ -1729,6 +1867,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     effects.setAttribute('viewBox', `0 0 ${size.x} ${size.y}`);
     effects.setAttribute('preserveAspectRatio', 'xMidYMid meet');
     effects.setAttribute('aria-hidden', 'true');
+    this.appendTransientEffects(effects, board);
 
     if (this.selected === null) return effects;
     const selectedPiece = this.pieces[this.selected];
@@ -1822,6 +1961,82 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     return effects;
   }
 
+  /**
+   * The last splash ripple or snow puff, plus win sparkles while celebrating.
+   * A negative animation-delay of the effect's age lets it keep playing
+   * smoothly when the board is rebuilt (for example by a quick follow-up tap).
+   */
+  private appendTransientEffects(effects: SVGSVGElement, board: Board): void {
+    if (prefersReducedMotion()) return;
+    const now = performance.now();
+    const effect = this.boardEffect;
+    if (effect && now - effect.at < EFFECT_LIFETIME_MS) {
+      const age = Math.round(now - effect.at);
+      const at = centerOfCells(board, [effect.cell]);
+      if (effect.kind === 'splash') {
+        for (let ring = 0; ring < 2; ring++) {
+          const circle = document.createElementNS(SVG_NS, 'circle');
+          circle.classList.add('inline-fx-ripple');
+          circle.setAttribute('cx', at.x.toString());
+          circle.setAttribute('cy', at.y.toString());
+          circle.setAttribute('r', (CELL * 0.3).toString());
+          circle.style.animationDelay = `${ring * 130 - age}ms`;
+          effects.append(circle);
+        }
+        for (let drop = 0; drop < 6; drop++) {
+          const angle = (Math.PI * 2 * drop) / 6 - Math.PI / 2;
+          effects.append(
+            this.makeParticle('inline-fx-drop', at, Math.cos(angle) * CELL * 0.5, Math.sin(angle) * CELL * 0.42 - CELL * 0.12, CELL * 0.06, -age)
+          );
+        }
+      } else {
+        for (let flake = 0; flake < 5; flake++) {
+          const spread = (flake - 2) * 0.32;
+          const px = effect.dx - effect.dy * spread;
+          const py = effect.dy + effect.dx * spread;
+          const reach = CELL * (0.28 + (flake % 3) * 0.08);
+          // Start at the tail's outer edge (the drift side) of the tail cell.
+          const origin = { x: at.x + effect.dx * CELL * 0.45, y: at.y + effect.dy * CELL * 0.45 + CELL * 0.2 };
+          effects.append(
+            this.makeParticle('inline-fx-snow', origin, px * reach, py * reach - CELL * 0.06, CELL * (0.035 + (flake % 2) * 0.02), -age)
+          );
+        }
+      }
+    } else if (effect) {
+      this.boardEffect = null;
+    }
+    if (!this.celebrating) return;
+    // Win sparkles over every hole, timed with the CSS cheer (splash.css).
+    board.holes.forEach((hole, order) => {
+      const at = centerOfCells(board, [hole]);
+      for (let spark = 0; spark < 6; spark++) {
+        const angle = (Math.PI * 2 * spark) / 6 + order;
+        effects.append(
+          this.makeParticle('inline-fx-spark', { x: at.x, y: at.y - CELL * 0.08 }, Math.cos(angle) * CELL * 0.48, Math.sin(angle) * CELL * 0.48, CELL * 0.055, 320 + order * 90)
+        );
+      }
+    });
+  }
+
+  private makeParticle(
+    className: string,
+    at: Point,
+    dx: number,
+    dy: number,
+    radius: number,
+    delayMs: number
+  ): SVGCircleElement {
+    const particle = document.createElementNS(SVG_NS, 'circle');
+    particle.classList.add(className);
+    particle.setAttribute('cx', at.x.toString());
+    particle.setAttribute('cy', at.y.toString());
+    particle.setAttribute('r', radius.toString());
+    particle.style.setProperty('--dx', `${Math.round(dx * 10) / 10}px`);
+    particle.style.setProperty('--dy', `${Math.round(dy * 10) / 10}px`);
+    particle.style.animationDelay = `${delayMs}ms`;
+    return particle;
+  }
+
   private positionControl(
     control: HTMLElement,
     center: Point,
@@ -1877,6 +2092,13 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     const destinations = legalMoves(puzzle.board, this.pieces).filter(
       (move) => move.pieceIndex === pieceIndex
     );
+    if (this.selected === pieceIndex && this.keptSelection) {
+      // The penguin stayed selected after its hop; a habitual tap on it keeps
+      // it selected instead of hiding its moves.
+      this.keptSelection = false;
+      return;
+    }
+    this.keptSelection = false;
     this.selected = this.selected === pieceIndex ? null : pieceIndex;
     if (this.selected === null) {
       this.announce('Selection cleared.');
@@ -1939,13 +2161,31 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
   }
 
   private animateMove(move: Move, restoreKeyboardFocus: boolean): void {
+    this.animatePiece(move.pieceIndex, move.to, move.kind, 1, () =>
+      this.commitMove(move, restoreKeyboardFocus)
+    );
+  }
+
+  /**
+   * Glide one piece to `toCells`, then run `onDone`. Penguins also hop: the
+   * inner art arcs up with a squash on take-off and landing (splash.css
+   * .is-hopping), the same feel as the full game. `speed` scales the shared
+   * distance-based duration (Undo plays a little faster).
+   */
+  private animatePiece(
+    pieceIndex: number,
+    toCells: readonly number[],
+    kind: Move['kind'],
+    speed: number,
+    onDone: () => void
+  ): void {
     const puzzle = this.currentPuzzle();
     if (!puzzle) return;
     const transition = ++this.transitionSequence;
-    const piece = this.pieces[move.pieceIndex];
+    const piece = this.pieces[pieceIndex];
     if (!piece) return;
     const from = centerOfCells(puzzle.board, piece.cells);
-    const to = centerOfCells(puzzle.board, move.to);
+    const to = centerOfCells(puzzle.board, toCells);
     const size = viewSize(puzzle.board);
     const boardElement = this.stage.querySelector('.inline-board');
     const rect = boardElement?.getBoundingClientRect();
@@ -1953,10 +2193,19 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     const viewDy = to.y - from.y;
     const cssDx = rect ? (viewDx / size.x) * rect.width : 0;
     const cssDy = rect ? (viewDy / size.y) * rect.height : 0;
-    const art = this.stage.querySelector(`[data-inline-piece-art="${move.pieceIndex}"]`);
-    const control = this.stage.querySelector(`[data-piece-control="${move.pieceIndex}"]`);
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const duration = reducedMotion ? 0 : move.kind === 'HOPPER' ? 220 : 180;
+    const art = this.stage.querySelector(`[data-inline-piece-art="${pieceIndex}"]`);
+    const control = this.stage.querySelector(`[data-piece-control="${pieceIndex}"]`);
+    const duration = prefersReducedMotion()
+      ? 0
+      : Math.round(moveDurationMs(puzzle.board, piece, { pieceIndex, kind, to: toCells }) * speed);
+    if (kind === 'HOPPER' && duration > 0) {
+      const inner = this.stage.querySelector(`[data-inline-piece-inner="${pieceIndex}"]`);
+      if (inner instanceof SVGElement) {
+        inner.classList.remove('is-selected');
+        inner.style.setProperty('--move-ms', `${duration}ms`);
+        inner.classList.add('is-hopping');
+      }
+    }
 
     if (art instanceof HTMLElement || art instanceof SVGElement) {
       art.classList.add('is-moving');
@@ -1979,8 +2228,64 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
 
     window.setTimeout(() => {
       if (transition !== this.transitionSequence || this.state !== 'animating') return;
-      this.commitMove(move, restoreKeyboardFocus);
+      onDone();
     }, duration + 20);
+  }
+
+  /** A puff of snow behind a seal's tail, drifting opposite to its slide. */
+  private sprayEffect(board: Board, before: Piece, move: Move): BoardEffect | null {
+    const stop = slideStop(before, move, board.width);
+    if (!stop) return null;
+    const dx = stop.direction === 'right' ? 1 : stop.direction === 'left' ? -1 : 0;
+    const dy = stop.direction === 'down' ? 1 : stop.direction === 'up' ? -1 : 0;
+    const sorted = [...move.to].sort((a, b) => a - b);
+    const tail = dx + dy > 0 ? sorted[0] : sorted[sorted.length - 1];
+    if (tail === undefined) return null;
+    return { kind: 'spray', cell: tail, dx: -dx, dy: -dy, at: performance.now() };
+  }
+
+  /**
+   * Step back one move. Every legal move has an exact reverse and the server
+   * scores only the final transcript, so Undo is the same as replaying the
+   * earlier moves from the start: it never changes how a solve counts.
+   */
+  private undoMove(restoreKeyboardFocus = false): void {
+    const puzzle = this.currentPuzzle();
+    if (
+      this.expansionPending ||
+      this.state !== 'playing' ||
+      !puzzle ||
+      this.history.length === 0
+    ) {
+      return;
+    }
+    const last = this.history[this.history.length - 1];
+    const remaining = this.history.slice(0, -1).map(cloneMove);
+    const replay = replayMoves(puzzle.board, remaining);
+    if (!last || !replay.ok) return;
+    const before = replay.pieces[last.pieceIndex];
+    if (!before) return;
+    runInlineAudio(() => (last.kind === 'HOPPER' ? playHop() : playSlide()));
+    this.state = 'animating';
+    this.selected = null;
+    this.options.root.dataset.state = this.state;
+    this.options.root.setAttribute('aria-busy', 'true');
+    this.prepareOpenButton(this.topOpenButton, this.playOpenButtonLabel());
+    for (const element of Array.from(this.stage.querySelectorAll('button'))) {
+      if (element instanceof HTMLButtonElement) element.disabled = true;
+    }
+    this.animatePiece(last.pieceIndex, before.cells, last.kind, 0.8, () => {
+      if (this.state !== 'animating') return;
+      this.pieces = replay.pieces.map(clonePiece);
+      this.history = remaining;
+      this.boardEffect = null;
+      this.state = 'playing';
+      this.render();
+      if (restoreKeyboardFocus) this.focusPieceControl(last.pieceIndex);
+      this.announce(
+        `Move undone. ${this.history.length} ${this.history.length === 1 ? 'move' : 'moves'}.`
+      );
+    });
   }
 
   private commitMove(move: Move, restoreKeyboardFocus: boolean): void {
@@ -1989,27 +2294,44 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     const landsInWater =
       move.kind === 'HOPPER' &&
       move.to.every((cell) => puzzle.board.holes.includes(cell));
+    const before = this.pieces[move.pieceIndex];
     this.pieces = applyMove(this.pieces, move).map(clonePiece);
     this.history.push(cloneMove(move));
     if (landsInWater) runInlineAudio(playSplash);
+    this.boardEffect = landsInWater
+      ? { kind: 'splash', cell: move.to[0] ?? 0, dx: 0, dy: 0, at: performance.now() }
+      : move.kind === 'SLIDER' && before
+        ? this.sprayEffect(puzzle.board, before, move)
+        : null;
     if (!this.startTracked) {
       this.startTracked = true;
       trackClientEvent(
         this.options.kind === 'daily' ? 'daily_started' : 'community_started'
       );
     }
-    this.selected = null;
-    if (isSolved(puzzle.board, this.pieces)) {
+    const solved = isSolved(puzzle.board, this.pieces);
+    const canContinue = legalMoves(puzzle.board, this.pieces).some(
+      (candidate) => candidate.pieceIndex === move.pieceIndex
+    );
+    // A penguin that can keep hopping stays selected (one tap per hop).
+    this.selected =
+      !solved && keepSelectedAfterMove(puzzle.board, move, canContinue) ? move.pieceIndex : null;
+    this.keptSelection = this.selected !== null;
+    if (solved) {
+      // Hold the solved board for the win beat while verification runs.
+      this.startCelebration();
       this.beginVerification(restoreKeyboardFocus);
       return;
     }
     this.state = 'playing';
     this.render();
     if (restoreKeyboardFocus) this.focusPieceControl(move.pieceIndex);
+    const count = `${this.history.length} ${this.history.length === 1 ? 'move' : 'moves'}`;
+    const still = this.selected === move.pieceIndex ? ' Still selected.' : '';
     this.announce(
       move.kind === 'HOPPER'
-        ? `Penguin moved. ${this.history.length} ${this.history.length === 1 ? 'move' : 'moves'}.`
-        : `Seal moved. ${this.history.length} ${this.history.length === 1 ? 'move' : 'moves'}.`
+        ? `Penguin moved. ${count}.${still}`
+        : `Seal moved. ${count}.`
     );
   }
 
@@ -2319,7 +2641,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     }
 
     const again = makeButton(
-      'Play again',
+      attemptStars === 3 ? 'Play again' : 'Try for ★★★',
       'inline-button inline-button--secondary',
       (event) => this.restartAttempt(event.detail === 0)
     );
@@ -2395,7 +2717,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     }
 
     const again = makeButton(
-      'Play again',
+      attemptStars === 3 ? 'Play again' : 'Try for ★★★',
       'inline-button inline-button--secondary',
       (event) => this.restartAttempt(event.detail === 0)
     );
@@ -2659,6 +2981,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     const values = [0, ...targets.map((target) => target.delta)];
     const art = this.stage.querySelector(`[data-inline-piece-art="${pieceIndex}"]`);
     const startCoordinate = orient === 'H' ? clientX : clientY;
+    this.sealRefused = false;
     const drag: SealDrag = {
       pointerId,
       pieceIndex,
@@ -2701,6 +3024,44 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       drag.clearSelection();
     }
     this.paintDrag(drag, drag.current);
+    // Pushed past the last stop toward open water: the seal refuses with a
+    // flipper bump (once per drag), the same cue as the full game.
+    const overshoot = displacement - drag.current;
+    if (!this.sealRefused && drag.moved && Math.abs(overshoot) > SEAL_REFUSE_PX) {
+      const direction = overshoot > 0 ? 1 : -1;
+      if (this.sealDragFacesWater(drag, direction)) {
+        this.sealRefused = true;
+        this.bumpInlineSeal(drag, direction);
+      }
+    }
+  }
+
+  private sealDragFacesWater(drag: SealDrag, direction: 1 | -1): boolean {
+    const puzzle = this.currentPuzzle();
+    const piece = this.pieces[drag.pieceIndex];
+    if (!puzzle || !piece) return false;
+    let farthest: Piece = piece;
+    let best = 0;
+    for (const target of drag.targets) {
+      const offset = target.delta * direction;
+      if (offset > best) {
+        best = offset;
+        farthest = { ...piece, cells: target.move.to };
+      }
+    }
+    return sealBlockedByWater(puzzle.board, farthest, direction);
+  }
+
+  private bumpInlineSeal(drag: SealDrag, direction: 1 | -1): void {
+    const inner = this.stage.querySelector(`[data-inline-piece-inner="${drag.pieceIndex}"]`);
+    if (!(inner instanceof SVGElement)) return;
+    const nudge = `${-direction * 4}px`;
+    inner.style.setProperty('--refuse-x', drag.orient === 'H' ? nudge : '0px');
+    inner.style.setProperty('--refuse-y', drag.orient === 'V' ? nudge : '0px');
+    inner.classList.remove('is-refusing');
+    void inner.getBoundingClientRect();
+    inner.classList.add('is-refusing');
+    window.setTimeout(() => inner.classList.remove('is-refusing'), 340);
   }
 
   private endSealPointerDrag(event: PointerEvent): void {

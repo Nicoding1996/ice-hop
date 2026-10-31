@@ -61,8 +61,19 @@ import {
   drawSpeakerIcon,
   armTap,
   useCrispText,
+  snowSpray,
+  prefersReducedMotion,
 } from '../art/theme';
 import { slideStop } from '../../shared/game/slide';
+import {
+  WIN_CELEBRATION_MS,
+  WIN_CELEBRATION_REDUCED_MS,
+  keepSelectedAfterMove,
+  moveDurationMs,
+  sealBlockedByWater,
+} from '../../shared/game/motion';
+import { starGoal, starGoalLabel } from '../../shared/scoring';
+import { TUTORIAL_STEPS } from '../../shared/tutorial';
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { consumeDailyHandoff } from '../dailyHandoff';
@@ -326,6 +337,25 @@ export class GameScene extends Scene {
   private hintUsed = false;
   private hintRequestPending = false;
   private dragState: DragState | null = null;
+  /** One flipper bump per drag when a seal is pushed toward open water. */
+  private sealRefused = false;
+  /** The current selection was kept automatically after a hop. */
+  private keptSelection = false;
+  /** The ~1s win beat (splash, dive, cheer) before the result card appears. */
+  private celebrating = false;
+  /**
+   * Verified-completion requests started at the moment of the win, so leaving
+   * during the celebration can never lose a solve. The result card's code
+   * consumes each one exactly once (a later manual retry sends a fresh request).
+   */
+  private prefetchedCompletions = new Map<string, Promise<Response>>();
+  /** Hands-on practice step (null outside the tutorial). */
+  private tutorialStep: number | null = null;
+  private undoButton!: PillButton;
+  private goalText!: Phaser.GameObjects.Text;
+  private tutorialText?: Phaser.GameObjects.Text;
+  /** Transient splash / snow / cheer effects; never cleared by highlights. */
+  private effectsLayer!: Phaser.GameObjects.Container;
   /** True once the current press turned into a seal drag (so it is not a tap). */
   private dragMoved = false;
   /** Whether the current press began on bare ice (tap-to-deselect on release). */
@@ -364,7 +394,18 @@ export class GameScene extends Scene {
     test?: { board: Board; par: number };
     endless?: { tier: EndlessTier };
     daily?: boolean;
+    tutorial?: { step: number };
   }): void {
+    const step = data?.tutorial?.step;
+    this.tutorialStep =
+      typeof step === 'number' && Number.isSafeInteger(step) && step >= 0 && step < TUTORIAL_STEPS.length
+        ? step
+        : null;
+    this.celebrating = false;
+    this.sealRefused = false;
+    this.keptSelection = false;
+    this.prefetchedCompletions = new Map();
+    this.tutorialText = undefined;
     this.communityPuzzle = data?.community;
     this.isCommunity = Boolean(data?.community);
     this.testBoard = data?.test?.board;
@@ -418,6 +459,7 @@ export class GameScene extends Scene {
     paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
     this.boardLayer = this.add.container(0, 0);
     this.pieceLayer = this.add.container(0, 0);
+    this.effectsLayer = this.add.container(0, 0);
     this.fxLayer = this.add.container(0, 0);
     this.hintLayer = this.add.container(0, 0);
     this.uiLayer = this.add.container(0, 0);
@@ -437,7 +479,11 @@ export class GameScene extends Scene {
       })
       .setOrigin(0.5)
       .setAlpha(0.7);
-    this.uiLayer.add([this.hudText, this.hintText]);
+    // Live "★★★ up to N" goal beside Moves/Par (same wording as the feed post).
+    this.goalText = this.add
+      .text(0, 0, '', { fontFamily: FONT.ui, fontSize: '20px', fontStyle: '800', color: '#ffd166' })
+      .setOrigin(0.5);
+    this.uiLayer.add([this.hudText, this.hintText, this.goalText]);
 
     this.menuButton = makePill(this, {
       label: this.isTest ? '\u2039 Edit' : '\u2039 Menu',
@@ -458,6 +504,17 @@ export class GameScene extends Scene {
     // Endless progression banner (top-right): lifetime puzzles solved.
     this.endlessBanner = makeBadge(this, 'Solved: 0', 'gold', 'sm');
     this.uiLayer.add(this.endlessBanner);
+
+    // Undo the last move (bottom strip, left of Restart). Every move has an
+    // exact reverse and only the final move list is scored, so stepping back
+    // is a convenience that never changes how a solve counts.
+    this.undoButton = makePill(this, {
+      label: '\u21B6 Undo',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.undoMove(),
+    });
+    this.uiLayer.add(this.undoButton);
 
     // Restart the current board (bottom strip). Only relevant once a move has
     // been made, so it stays hidden on a fresh board and swaps in for the hint.
@@ -490,6 +547,10 @@ export class GameScene extends Scene {
       onClick: () => this.openHowTo(),
     });
     this.uiLayer.add(this.helpButton);
+    if (this.tutorialStep !== null) {
+      // Practice shows its progress where Endless shows "Solved".
+      this.endlessBanner.setLabelText(`Practice ${this.tutorialStep + 1} of ${TUTORIAL_STEPS.length}`);
+    }
 
     // Master mute (top-left, beside Menu). Feed-first players land straight on
     // the board and never see the hub's sound/music toggles, so this compact
@@ -556,6 +617,7 @@ export class GameScene extends Scene {
       this.layout();
       this.renderBoard();
       this.updateHud();
+      if (this.tutorialStep !== null) this.showTutorialGuide();
     };
     this.scale.on('resize', onResize);
     // The ScaleManager is global and outlives the scene, so a listener left
@@ -598,6 +660,19 @@ export class GameScene extends Scene {
     const generation = this.playGeneration;
     this.clearLoadError();
     this.moveHistory = [];
+    if (this.tutorialStep !== null) {
+      const step = TUTORIAL_STEPS[this.tutorialStep];
+      this.board = step.board;
+      this.pieces = step.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+      this.par = solve(step.board).par;
+      this.date = '';
+      this.moves = 0;
+      this.layout();
+      this.renderBoard();
+      this.updateHud();
+      this.showTutorialGuide();
+      return;
+    }
     if (this.isTest && this.testBoard) {
       this.board = this.testBoard;
       this.pieces = this.testBoard.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
@@ -798,9 +873,15 @@ export class GameScene extends Scene {
   /** Open the shared How-to-play overlay (guarded against stacking). */
   private openHowTo(): void {
     if (this.howTo) return;
-    this.howTo = showHowToPlay(this, () => {
-      this.howTo = undefined;
-    });
+    this.howTo = showHowToPlay(
+      this,
+      () => {
+        this.howTo = undefined;
+      },
+      this.tutorialStep === null
+        ? () => fadeToScene(this, 'GameScene', { tutorial: { step: 0 } })
+        : undefined
+    );
   }
 
   /** Show the rules once for a first-time player. They land on the daily (Boot
@@ -851,8 +932,22 @@ export class GameScene extends Scene {
     }
   }
 
+  /**
+   * Send a verified completion, reusing the request already started at the
+   * win (consumed once, so a later manual retry always sends a fresh one).
+   */
+  private postCompletionWithRetries(url: string, body: string): Promise<Response> {
+    const key = `${url}\n${body}`;
+    const prefetched = this.prefetchedCompletions.get(key);
+    if (prefetched) {
+      this.prefetchedCompletions.delete(key);
+      return prefetched;
+    }
+    return this.sendCompletionWithRetries(url, body);
+  }
+
   /** Retry idempotent verified-completion POSTs with the exact same transcript. */
-  private async postCompletionWithRetries(url: string, body: string): Promise<Response> {
+  private async sendCompletionWithRetries(url: string, body: string): Promise<Response> {
     let lastError: Error = new Error('completion request failed');
     for (let attempt = 0; attempt < 3; attempt++) {
       const controller = new AbortController();
@@ -1118,6 +1213,13 @@ export class GameScene extends Scene {
         if (this.dragMoved || this.busy || this.won || this.dailyRecapOpen || this.dragState) {
           return;
         }
+        if (this.selected === idx && this.keptSelection) {
+          // The penguin stayed selected after its hop; a habitual tap on it
+          // keeps it selected instead of hiding its moves.
+          this.keptSelection = false;
+          return;
+        }
+        this.keptSelection = false;
         this.selected = this.selected === idx ? null : idx;
         this.renderHighlights();
       },
@@ -1244,6 +1346,7 @@ export class GameScene extends Scene {
     // Phaser only reports a drag after the pointer moves past the threshold,
     // so the release that ends it must not also count as a tap.
     this.dragMoved = true;
+    this.sealRefused = false;
     const pieceIndex: number = obj.getData('pieceIndex');
     const piece = this.pieces[pieceIndex];
     if (!piece) return;
@@ -1278,12 +1381,56 @@ export class GameScene extends Scene {
     if (!ds) return;
     const view = this.pieceViews[ds.pieceIndex];
     if (!view) return;
+    const raw = ds.orient === 'H' ? dragX : dragY;
+    const clamped = Phaser.Math.Clamp(raw, ds.min, ds.max);
     if (ds.orient === 'H') {
-      view.x = Phaser.Math.Clamp(dragX, ds.min, ds.max);
+      view.x = clamped;
       view.y = ds.originY;
     } else {
-      view.y = Phaser.Math.Clamp(dragY, ds.min, ds.max);
+      view.y = clamped;
       view.x = ds.originX;
+    }
+    // Pushing past the last stop toward open water: the seal refuses with a
+    // flipper bump (once per drag), which teaches "seals won't enter water".
+    const overshoot = raw - clamped;
+    if (!this.sealRefused && Math.abs(overshoot) > this.cell * 0.25) {
+      const direction = overshoot > 0 ? 1 : -1;
+      if (this.sealStopsAtWater(ds, direction)) {
+        this.sealRefused = true;
+        this.bumpSeal(view, ds.orient, direction);
+      }
+    }
+  }
+
+  /** Whether the seal's farthest reachable stop in `direction` faces water. */
+  private sealStopsAtWater(ds: DragState, direction: 1 | -1): boolean {
+    const piece = this.pieces[ds.pieceIndex];
+    if (!this.board || !piece) return false;
+    const originCoord = ds.orient === 'H' ? ds.originX : ds.originY;
+    let farthest: Piece = piece;
+    let best = 0;
+    for (const target of ds.targets) {
+      const offset = (target.coord - originCoord) * direction;
+      if (offset > best) {
+        best = offset;
+        farthest = { ...piece, cells: target.move.to };
+      }
+    }
+    return sealBlockedByWater(this.board, farthest, direction);
+  }
+
+  private bumpSeal(view: Phaser.GameObjects.Container, orient: 'H' | 'V', direction: 1 | -1): void {
+    const art: Phaser.GameObjects.Container | undefined = view.getData('art');
+    if (!art) return;
+    const distance = -direction * this.cell * 0.08;
+    const done = (): void => {
+      art.x = 0;
+      art.y = 0;
+    };
+    if (orient === 'H') {
+      this.tweens.add({ targets: art, x: distance, duration: 70, yoyo: true, repeat: 1, ease: 'Sine.easeInOut', onComplete: done });
+    } else {
+      this.tweens.add({ targets: art, y: distance, duration: 70, yoyo: true, repeat: 1, ease: 'Sine.easeInOut', onComplete: done });
     }
   }
 
@@ -1324,14 +1471,22 @@ export class GameScene extends Scene {
     if (!this.board || this.busy || this.won || this.dailyRecapOpen) return;
     this.busy = true;
     this.fxLayer.removeAll(true);
+    this.clearHint();
+    const board = this.board;
+    const piece = this.pieces[move.pieceIndex];
     const view = this.pieceViews[move.pieceIndex];
     const target = this.pieceCenterPx(move.to);
-    const landsInWater = move.to.every((cell) => this.board?.holes.includes(cell));
+    const landsInWater = move.to.every((cell) => board.holes.includes(cell));
+    const reduced = prefersReducedMotion();
+    // Longer hops take a little longer (shared with the feed post).
+    const duration = piece ? moveDurationMs(board, piece, move) : 240;
 
     const commit = (): void => {
       if (!this.board) return;
       if (landsInWater) {
-        splashBurst(this, this.fxLayer, target.x, target.y, this.cell);
+        // Effects get their own layer: renderHighlights() clears fxLayer,
+        // which used to delete every splash in the same frame it was drawn.
+        splashBurst(this, this.effectsLayer, target.x, target.y, this.cell);
         playSplash();
       }
       this.pieces = applyMove(this.pieces, move);
@@ -1341,12 +1496,20 @@ export class GameScene extends Scene {
         !this.isTest &&
         !this.isEndless &&
         !this.isCommunity &&
+        this.tutorialStep === null &&
         !this.dailyStartTracked
       ) {
         this.dailyStartTracked = true;
         trackClientEvent('daily_started');
       }
-      this.selected = null;
+      const solved = isSolved(this.board, this.pieces);
+      const canContinue = legalMoves(this.board, this.pieces).some(
+        (candidate) => candidate.pieceIndex === move.pieceIndex
+      );
+      // A penguin that can keep hopping stays selected (one tap per hop).
+      this.selected =
+        !solved && keepSelectedAfterMove(this.board, move, canContinue) ? move.pieceIndex : null;
+      this.keptSelection = this.selected !== null;
       this.busy = false;
       // Rebuild only the moved piece's art (its outer view is already tweened to
       // the destination); every other piece keeps its idle animation running.
@@ -1354,16 +1517,21 @@ export class GameScene extends Scene {
       if (movedView) this.buildPieceArt(movedView, this.pieces[move.pieceIndex], move.pieceIndex);
       this.updateHud();
       this.renderHighlights();
-      // Dive-pop after highlights (which resets scales), so a penguin that just
-      // entered the water bobs up from below.
-      if (landsInWater && move.kind === 'HOPPER' && movedView) {
-        const movedArt: Phaser.GameObjects.Container | undefined = movedView.getData('art');
-        if (movedArt) {
+      const movedArt: Phaser.GameObjects.Container | undefined = movedView?.getData('art');
+      if (movedArt && move.kind === 'HOPPER' && !reduced) {
+        if (landsInWater) {
+          // Dive-pop: a penguin that just entered the water bobs up from below.
           movedArt.setScale(1.12, 0.6);
           this.tweens.add({ targets: movedArt, scaleX: 1, scaleY: 1, duration: 300, ease: 'Back.easeOut' });
+        } else {
+          // Landing squash, settling back to the selection emphasis if any.
+          const rest = this.selected === move.pieceIndex ? 1.1 : 1;
+          movedArt.setScale(rest * 1.1, rest * 0.86);
+          this.tweens.add({ targets: movedArt, scaleX: rest, scaleY: rest, duration: 170, ease: 'Back.easeOut' });
         }
       }
-      if (isSolved(this.board, this.pieces)) this.onWin();
+      if (solved) this.celebrateWin();
+      else if (this.tutorialStep !== null) this.showTutorialGuide();
     };
 
     if (!view) {
@@ -1374,7 +1542,6 @@ export class GameScene extends Scene {
     const art: Phaser.GameObjects.Container | undefined = view.getData('art');
     if (art) this.tweens.killTweensOf(art);
 
-    const duration = move.kind === 'HOPPER' ? 240 : 200;
     if (move.kind === 'HOPPER') playHop();
     else playSlide();
     this.tweens.add({ targets: view, x: target.x, y: target.y, duration, ease: 'Quad.easeOut', onComplete: commit });
@@ -1384,9 +1551,233 @@ export class GameScene extends Scene {
       this.tweens.add({ targets: art, y: -this.cell * 0.45, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
       this.tweens.add({ targets: art, scaleX: 0.86, scaleY: 1.2, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
     } else if (art) {
-      // Seal slide: a brief squash in the direction of travel.
+      // Seal slide: a brief squash in the direction of travel, plus a puff of
+      // snow kicked up behind its tail.
       this.tweens.add({ targets: art, scaleX: 1.12, scaleY: 0.9, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
+      if (piece && !reduced) this.spraySnowBehind(view, piece, move);
     }
+  }
+
+  private spraySnowBehind(view: Phaser.GameObjects.Container, piece: Piece, move: Move): void {
+    const from = this.pieceCenterPx(piece.cells);
+    const to = this.pieceCenterPx(move.to);
+    const dx = Math.sign(to.x - from.x);
+    const dy = Math.sign(to.y - from.y);
+    if (dx === 0 && dy === 0) return;
+    snowSpray(
+      this,
+      this.effectsLayer,
+      view.x - dx * this.cell * 0.9,
+      view.y - dy * this.cell * 0.9 + this.cell * 0.2,
+      -dx,
+      -dy,
+      this.cell
+    );
+  }
+
+  /**
+   * Step back one move. Every legal move has an exact reverse, and servers
+   * score only the final transcript, so Undo is the same as replaying the
+   * earlier moves from the start: it never changes how a solve counts.
+   */
+  private undoMove(): void {
+    if (!this.board || this.busy || this.won || this.celebrating || this.dailyRecapOpen) return;
+    const last = this.moveHistory[this.moveHistory.length - 1];
+    if (!last) return;
+    const remaining = this.moveHistory.slice(0, -1);
+    const replay = replayMoves(this.board, remaining);
+    if (!replay.ok) return;
+    this.busy = true;
+    this.selected = null;
+    this.fxLayer.removeAll(true);
+    this.clearHint();
+    const before = replay.pieces[last.pieceIndex];
+    const view = this.pieceViews[last.pieceIndex];
+    const commit = (): void => {
+      this.pieces = replay.pieces.map((piece) => ({ ...piece, cells: [...piece.cells] }));
+      this.moveHistory = remaining.map((move) => ({ ...move, to: [...move.to] }));
+      this.moves = this.moveHistory.length;
+      this.busy = false;
+      if (view && before) this.buildPieceArt(view, before, last.pieceIndex);
+      this.updateHud();
+      this.renderHighlights();
+      if (this.tutorialStep !== null) this.showTutorialGuide();
+    };
+    if (!view || !before) {
+      commit();
+      return;
+    }
+    const art: Phaser.GameObjects.Container | undefined = view.getData('art');
+    if (art) this.tweens.killTweensOf(art);
+    const target = this.pieceCenterPx(before.cells);
+    const duration = Math.round(moveDurationMs(this.board, before, last) * 0.8);
+    if (last.kind === 'HOPPER') playHop();
+    else playSlide();
+    this.tweens.add({ targets: view, x: target.x, y: target.y, duration, ease: 'Quad.easeOut', onComplete: commit });
+    if (art && last.kind === 'HOPPER') {
+      this.tweens.add({ targets: art, y: -this.cell * 0.3, duration: duration / 2, yoyo: true, ease: 'Sine.easeOut' });
+    }
+  }
+
+  /**
+   * The win beat: the last splash and dive play out, every penguin cheers with
+   * a sparkle, the win cue sounds, and only then does the result card fade in.
+   * The verified-completion request starts immediately, so even leaving during
+   * this second cannot lose the solve.
+   */
+  private celebrateWin(): void {
+    if (this.celebrating || this.won) return;
+    this.celebrating = true;
+    this.busy = true;
+    this.selected = null;
+    this.fxLayer.removeAll(true);
+    this.clearHint();
+    this.tutorialText?.destroy();
+    this.tutorialText = undefined;
+    this.prefetchCompletion();
+    this.updateHud();
+    const reduced = prefersReducedMotion();
+    const generation = this.playGeneration;
+    this.time.delayedCall(reduced ? 0 : 320, () => {
+      if (!this.isCurrentPlay(generation) || !this.celebrating) return;
+      playWin();
+      if (!reduced) this.cheerPenguins();
+    });
+    this.time.delayedCall(reduced ? WIN_CELEBRATION_REDUCED_MS : WIN_CELEBRATION_MS, () => {
+      if (!this.isCurrentPlay(generation) || !this.celebrating) return;
+      this.celebrating = false;
+      this.busy = false;
+      this.onWin();
+      if (!reduced) {
+        this.fxLayer.setAlpha(0);
+        this.tweens.add({ targets: this.fxLayer, alpha: 1, duration: 220, ease: 'Quad.easeOut' });
+      }
+    });
+  }
+
+  /** Every penguin pops with a sparkle, one after another. */
+  private cheerPenguins(): void {
+    let order = 0;
+    this.pieces.forEach((piece, index) => {
+      if (piece.kind !== 'HOPPER') return;
+      const view = this.pieceViews[index];
+      const art: Phaser.GameObjects.Container | undefined = view?.getData('art');
+      if (!view || !art) return;
+      const delay = order * 90;
+      order += 1;
+      // Scale only: the idle bob keeps animating y, so the two never fight.
+      this.tweens.add({ targets: art, scaleX: 1.16, scaleY: 1.16, duration: 150, delay, yoyo: true, repeat: 1, ease: 'Sine.easeOut' });
+      this.time.delayedCall(delay, () => {
+        if (view.active) sparkleBurst(this, this.effectsLayer, view.x, view.y - this.cell * 0.1, this.cell * 0.9);
+      });
+    });
+  }
+
+  private transcript(): Move[] {
+    return this.moveHistory.map((move) => ({
+      pieceIndex: move.pieceIndex,
+      kind: move.kind,
+      to: [...move.to],
+    }));
+  }
+
+  // Completion bodies are built in one place, so the request started at the
+  // win and the result card's request are byte-identical.
+  private dailyCompletionBody(): string {
+    return JSON.stringify({
+      puzzleId: this.dailyPuzzleId,
+      playId: this.dailyPlayId,
+      moves: this.transcript(),
+    });
+  }
+
+  private communityCompletionBody(): string {
+    return JSON.stringify({ id: this.communityPuzzle?.id ?? '', moves: this.transcript() });
+  }
+
+  private endlessCompletionBody(): string {
+    return JSON.stringify({ issueId: this.endlessIssueId, moves: this.transcript() });
+  }
+
+  private prefetchCompletion(): void {
+    if (this.isTest || this.tutorialStep !== null) return;
+    if (this.isCommunity) {
+      this.prefetchCompletionRequest('/api/ugc/played', this.communityCompletionBody());
+      return;
+    }
+    if (this.isEndless) {
+      if (!this.hintUsed && context.username && this.endlessIssueId) {
+        this.prefetchCompletionRequest('/api/endless/solved', this.endlessCompletionBody());
+      }
+      return;
+    }
+    if (this.dailyPuzzleId) this.prefetchCompletionRequest('/api/solve', this.dailyCompletionBody());
+  }
+
+  private prefetchCompletionRequest(url: string, body: string): void {
+    const key = `${url}\n${body}`;
+    if (this.prefetchedCompletions.has(key)) return;
+    const request = this.sendCompletionWithRetries(url, body);
+    // Observed here as well; whoever consumes it reports the failure.
+    request.catch(() => undefined);
+    this.prefetchedCompletions.set(key, request);
+  }
+
+  /**
+   * Play the same puzzle again from the start (Daily/Community win screens and
+   * the solved-Daily recap). The server keeps the best verified score.
+   */
+  private replayPuzzle(): void {
+    if (!this.board) return;
+    this.won = false;
+    this.celebrating = false;
+    this.busy = false;
+    this.dailyRecapOpen = false;
+    this.resetFxTransform();
+    this.fxLayer.removeAll(true);
+    this.fxLayer.setAlpha(1);
+    this.effectsLayer.removeAll(true);
+    this.blockingShield = undefined;
+    this.pieces = this.board.pieces.map((p) => ({ ...p, cells: [...p.cells] }));
+    this.moves = 0;
+    this.moveHistory = [];
+    this.selected = null;
+    this.hintStage = 0;
+    this.layout();
+    this.renderBoard();
+    this.updateHud();
+  }
+
+  /** Practice guidance: the step's caption and a glow on the piece to touch. */
+  private showTutorialGuide(): void {
+    if (this.tutorialStep === null || !this.board || this.won || this.celebrating) return;
+    const step = TUTORIAL_STEPS[this.tutorialStep];
+    const w = this.scale.width;
+    this.tutorialText?.destroy();
+    this.tutorialText = undefined;
+    const text = this.add
+      .text(0, 0, step.caption, {
+        fontFamily: FONT.ui,
+        fontSize: '16px',
+        fontStyle: '700',
+        color: COLORS.text,
+        align: 'center',
+        lineSpacing: 4,
+        wordWrap: { width: Math.min(360, w - 48) },
+      })
+      .setOrigin(0.5);
+    // Prefer the empty band above the board; fall back to just above the
+    // action strip on short (landscape/desktop) screens.
+    const bandTop = this.hudHeight + SPACE.sm;
+    const bandBottom = this.originY - this.cell * 0.16 - SPACE.md;
+    const y =
+      bandBottom - bandTop >= text.height + SPACE.sm
+        ? (bandTop + bandBottom) / 2
+        : this.scale.height - 76;
+    text.setPosition(w / 2, y);
+    this.uiLayer.add(text);
+    this.tutorialText = text;
+    if (this.moves === 0 && this.selected === null) this.glowHintPiece(step.focusPiece);
   }
 
   /**
@@ -1551,59 +1942,87 @@ export class GameScene extends Scene {
     // old single-row centre to an unreadable sliver on narrow widths).
     const midY = 22;
     const statsMidY = this.hudHeight - 18;
+    // During the ~1s win beat the board is the whole show: no chrome.
+    const playing = !this.won && !this.celebrating;
     this.menuButton.setPosition(SPACE.md + this.menuButton.width / 2, midY);
-    this.menuButton.setVisible(!this.won);
+    this.menuButton.setVisible(playing);
     // Master mute sits just right of Menu; always available during play so a
     // feed-first player can silence audio without a trip back to the hub.
     this.muteButton.setPosition(
       this.menuButton.x + this.menuButton.width / 2 + SPACE.sm + this.muteButton.width / 2,
       midY
     );
-    this.muteButton.setVisible(!this.won);
-    const skipVisible = this.isCommunity && !this.won;
+    this.muteButton.setVisible(playing);
+    const skipVisible = this.isCommunity && playing;
     this.skipButton.setPosition(w - SPACE.md - this.skipButton.width / 2, midY);
     this.skipButton.setVisible(skipVisible);
-    const bannerVisible = this.isEndless && !this.won;
-    this.endlessBanner.setLabelText(`Solved: ${this.endlessSolved}`);
+    const practicing = this.tutorialStep !== null;
+    const bannerVisible = (this.isEndless || practicing) && playing;
+    this.endlessBanner.setLabelText(
+      practicing
+        ? `Practice ${(this.tutorialStep ?? 0) + 1} of ${TUTORIAL_STEPS.length}`
+        : `Solved: ${this.endlessSolved}`
+    );
     this.endlessBanner.setPosition(w - SPACE.md - this.endlessBanner.width / 2, midY);
     this.endlessBanner.setVisible(bannerVisible);
     // "?" help chip (top-right), shown on the daily/test screen where the corner
-    // is free. Endless owns that corner with the Solved banner and community
-    // with Skip, and players reach those via the hub (which has its own "?").
-    const helpVisible = !this.isEndless && !this.isCommunity && !this.won;
+    // is free. Endless owns that corner with the Solved banner, community with
+    // Skip, and practice with its progress badge.
+    const helpVisible = !this.isEndless && !this.isCommunity && !practicing && playing;
     this.helpButton.setPosition(w - SPACE.md - this.helpButton.width / 2, midY);
     this.helpButton.setVisible(helpVisible);
 
-    // Moves / Par: its own centred row beneath the chrome, using the full width,
-    // so the chrome chips can't crush it. Shrink only if it truly overflows the
-    // row, and never below a readable floor, so a bad width measurement can't
-    // collapse it to an invisible sliver.
+    // Moves / Par plus the live star goal: their own centred row beneath the
+    // chrome, using the full width. Shrink both together only if they truly
+    // overflow, never below a readable floor.
     this.hudText.setScale(1);
+    this.goalText.setScale(1);
     this.hudText.setText(`Moves ${this.moves}    Par ${this.par}`);
+    const showGoal = this.par > 0;
+    // A solved board shows the stars earned, not a goal for a move that will
+    // never happen (same as the feed post).
+    const solvedNow = this.board ? isSolved(this.board, this.pieces) : false;
+    this.goalText.setText(
+      !showGoal
+        ? ''
+        : solvedNow
+          ? `${'\u2605'.repeat(computeStars(this.moves, this.par))} earned`
+          : starGoalLabel(starGoal(this.moves, this.par))
+    );
+    const statsGap = showGoal ? SPACE.lg + SPACE.sm : 0;
+    const naturalW = this.hudText.width + statsGap + (showGoal ? this.goalText.width : 0);
     const maxStatsW = w - SPACE.lg * 2;
-    if (this.hudText.width > maxStatsW) {
-      this.hudText.setScale(Math.max(0.6, maxStatsW / this.hudText.width));
-    }
-    this.hudText.setPosition(w / 2, statsMidY);
+    const statsScale = naturalW > maxStatsW ? Math.max(0.6, maxStatsW / naturalW) : 1;
+    this.hudText.setScale(statsScale);
+    this.goalText.setScale(statsScale);
+    const statsLeft = w / 2 - (naturalW * statsScale) / 2;
+    this.hudText.setPosition(statsLeft + (this.hudText.width * statsScale) / 2, statsMidY);
+    this.goalText.setPosition(
+      statsLeft + naturalW * statsScale - (this.goalText.width * statsScale) / 2,
+      statsMidY
+    );
+    // Visible again after a replay from the win screen or solved-Daily recap.
+    const statsVisible = !this.won && !this.dailyRecapOpen;
+    this.hudText.setVisible(statsVisible);
+    this.goalText.setVisible(statsVisible && showGoal);
     this.hintText.setPosition(w / 2, this.scale.height - 26);
-    this.hintText.setVisible(this.moves === 0 && !this.won && !this.isCommunity);
-    // Restart sits in the bottom strip and only appears once a move is made
-    // (swaps in for the first-move hint, which hides as soon as moves > 0). In
-    // Endless it's paired with the Hint button; otherwise it stays centered.
+    this.hintText.setVisible(this.moves === 0 && playing && !this.isCommunity && !practicing);
+    // Undo + Restart (+ Hint in Endless) share the bottom strip once a move is
+    // made; they swap in for the first-move hint.
     const bottomY = this.scale.height - 26;
-    const showReset = this.moves > 0 && !this.won;
-    const showHint = this.isEndless && this.moves > 0 && !this.won;
-    if (showHint) {
-      const pairGap = SPACE.md;
-      const total = this.resetButton.width + pairGap + this.hintButton.width;
-      const left = w / 2 - total / 2;
-      this.resetButton.setPosition(left + this.resetButton.width / 2, bottomY);
-      this.hintButton.setPosition(left + this.resetButton.width + pairGap + this.hintButton.width / 2, bottomY);
-    } else {
-      this.resetButton.setPosition(w / 2, bottomY);
+    const showActions = this.moves > 0 && playing;
+    const strip: PillButton[] = [this.undoButton, this.resetButton];
+    if (this.isEndless) strip.push(this.hintButton);
+    const stripGap = SPACE.md;
+    const stripW = strip.reduce((sum, button) => sum + button.width, 0) + stripGap * (strip.length - 1);
+    let stripX = w / 2 - stripW / 2;
+    for (const button of strip) {
+      button.setPosition(stripX + button.width / 2, bottomY);
+      stripX += button.width + stripGap;
     }
-    this.resetButton.setVisible(showReset);
-    this.hintButton.setVisible(showHint);
+    this.undoButton.setVisible(showActions);
+    this.resetButton.setVisible(showActions);
+    this.hintButton.setVisible(showActions && this.isEndless);
     // The board is ready: drop the loading state and reveal the UI.
     if (this.loadingText) this.loadingText.setVisible(false);
     this.clearLoadError();
@@ -1753,15 +2172,9 @@ export class GameScene extends Scene {
       label: "Play today's again",
       variant: 'ghost',
       size: 'sm',
-      onClick: () => {
-        this.dailyRecapOpen = false;
-        this.resetFxTransform();
-        this.fxLayer.removeAll(true);
-        this.blockingShield = undefined;
-        this.layout();
-        this.renderBoard();
-        this.updateHud();
-      },
+      // Shared replay path, which also restores the Moves/Par readout (it
+      // used to stay hidden after leaving the recap).
+      onClick: () => this.replayPuzzle(),
     });
     // Even-gap column for the three onward actions, centred below the subtext.
     stackColumn([endlessBtn, communityBtn, replayBtn], w / 2, h * 0.53, SPACE.md);
@@ -1780,14 +2193,23 @@ export class GameScene extends Scene {
     this.skipButton.setVisible(false);
     this.endlessBanner.setVisible(false);
     this.resetButton.setVisible(false);
+    this.undoButton.setVisible(false);
     this.hintButton.setVisible(false);
     this.helpButton.setVisible(false);
     // Hide the play HUD readout too: it lives in uiLayer, which renders above
     // the win card (in fxLayer), so it would otherwise float over the win
     // screen. (Every win type funnels through here, so this covers all of them.)
+    // The win cue already played during celebrateWin().
     this.hudText.setVisible(false);
+    this.goalText.setVisible(false);
     this.hintText.setVisible(false);
+    this.tutorialText?.destroy();
+    this.tutorialText = undefined;
     this.clearHint();
+    if (this.tutorialStep !== null) {
+      this.onWinTutorial();
+      return;
+    }
     if (this.isTest) {
       this.onWinTest();
       return;
@@ -1800,7 +2222,6 @@ export class GameScene extends Scene {
       this.onWinEndless();
       return;
     }
-    playWin();
     const stars = computeStars(this.moves, this.par);
     const blurb = stars === 3 ? 'A clean run!' : stars === 2 ? 'Nicely done!' : 'Can you do it in fewer?';
     const w = this.scale.width;
@@ -1966,12 +2387,23 @@ export class GameScene extends Scene {
     });
     homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
 
+    // Replay right here: "Try for ★★★" when there's room to improve. The
+    // server keeps the best verified score, so trying again never hurts.
+    const replayButton = makePill(this, {
+      label: stars === 3 ? '\u21BA Play again' : '\u21BA Try for \u2605\u2605\u2605',
+      variant: 'ghost',
+      size: 'sm',
+      x: w / 2,
+      onClick: () => this.replayPuzzle(),
+    });
+
     const winButtons: Phaser.GameObjects.GameObject[] = [
       status,
       compareButton,
       copyButton,
       morePuzzlesButton,
       homeButton,
+      replayButton,
     ];
     if (postScoreButton) winButtons.push(postScoreButton);
     this.fxLayer.add(winButtons);
@@ -1991,7 +2423,7 @@ export class GameScene extends Scene {
     // score), then the quieter outward Share, then the opt-in nudge on top.
     const stack: PillButton[] = [morePuzzlesButton];
     if (postScoreButton) stack.push(postScoreButton);
-    stack.push(copyButton);
+    stack.push(copyButton, replayButton);
     if (cta) stack.push(cta);
     const stackTop = this.stackFromBottom(stack);
 
@@ -2047,17 +2479,10 @@ export class GameScene extends Scene {
   private onWinCommunity(): void {
     const playedId = this.communityPuzzle?.id ?? '';
     // Serialize the solved transcript once. Internal transport retries and the
-    // visible manual retry must submit this identical immutable request body.
-    const completionBody = JSON.stringify({
-      id: playedId,
-      moves: this.moveHistory.map((move) => ({
-        pieceIndex: move.pieceIndex,
-        kind: move.kind,
-        to: [...move.to],
-      })),
-    });
+    // visible manual retry must submit this identical immutable request body
+    // (also identical to the request celebrateWin() already started).
+    const completionBody = this.communityCompletionBody();
     const generation = this.playGeneration;
-    playWin();
     const w = this.scale.width;
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
@@ -2137,7 +2562,15 @@ export class GameScene extends Scene {
       size: 'sm',
       onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
-    buttons.push(moreButton, dailyButton);
+    // Same replay offer as the Daily and the feed post.
+    const communityStars = computeStars(this.moves, this.par);
+    const replayButton = makePill(this, {
+      label: communityStars === 3 ? '\u21BA Play again' : '\u21BA Try for \u2605\u2605\u2605',
+      variant: 'ghost',
+      size: 'sm',
+      onClick: () => this.replayPuzzle(),
+    });
+    buttons.push(moreButton, replayButton, dailyButton);
 
     const extras: Phaser.GameObjects.GameObject[] = [];
     // Social proof from the stream-load snapshot: how this puzzle is doing.
@@ -2207,7 +2640,6 @@ export class GameScene extends Scene {
   }
 
   private onWinEndless(): void {
-    playWin();
     const counts = !this.hintUsed;
     if (!counts && this.endlessIssueId) {
       this.releaseEndlessIssue(this.endlessIssueId);
@@ -2417,16 +2849,12 @@ export class GameScene extends Scene {
 
     const generation = this.endlessSaveGeneration;
     const issueId = this.endlessIssueId;
-    const transcript = this.moveHistory.map((move) => ({
-      pieceIndex: move.pieceIndex,
-      kind: move.kind,
-      to: [...move.to],
-    }));
     try {
       if (!issueId) throw new Error('missing Endless issue id');
+      // Identical to the request celebrateWin() already started.
       const response = await this.postCompletionWithRetries(
         '/api/endless/solved',
-        JSON.stringify({ issueId, moves: transcript })
+        this.endlessCompletionBody()
       );
       const result: EndlessSolveResponse = await response.json();
       const knownValue = this.registry.get('endless.solved');
@@ -2509,7 +2937,6 @@ export class GameScene extends Scene {
       });
     }
     trackClientEvent('creator_test_solved');
-    playWin();
     const w = this.scale.width;
     const h = this.scale.height;
     this.fxLayer.removeAll(true);
@@ -2540,6 +2967,55 @@ export class GameScene extends Scene {
     panel.setScale(0.92).setAlpha(0);
     this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
     this.time.delayedCall(150, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.4, Math.min(48, w * 0.13)));
+  }
+
+  /** Practice step solved: on to the next rule, or off to the real puzzle. */
+  private onWinTutorial(): void {
+    const step = this.tutorialStep ?? 0;
+    const last = step >= TUTORIAL_STEPS.length - 1;
+    const w = this.scale.width;
+    const h = this.scale.height;
+    this.fxLayer.removeAll(true);
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(420, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const contentW = cardW - SPACE.xl * 2;
+    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+    const headline = this.add
+      .text(
+        w / 2,
+        h * 0.36,
+        last
+          ? "You're ready!\nEvery puzzle uses just these moves."
+          : `Nice!\nPractice ${step + 2} of ${TUTORIAL_STEPS.length} is next.`,
+        {
+          fontFamily: FONT.display,
+          fontSize: '23px',
+          fontStyle: '700',
+          color: COLORS.text,
+          align: 'center',
+          lineSpacing: 8,
+          wordWrap: { width: contentW },
+        }
+      )
+      .setOrigin(0.5);
+    const primary = makePill(this, {
+      label: last ? 'Play today\u2019s puzzle' : 'Next \u25B6',
+      variant: 'primary',
+      minWidth: Math.min(240, contentW),
+      onClick: () =>
+        fadeToScene(this, 'GameScene', last ? { daily: true } : { tutorial: { step: step + 1 } }),
+    });
+    const secondary = makePill(this, {
+      label: last ? '\u2039 Menu' : 'Skip practice',
+      variant: 'ghost',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
+    stackColumn([primary, secondary], w / 2, h * 0.52, SPACE.md);
+    this.fxLayer.add([overlay, card, headline, primary, secondary]);
+    headline.setScale(0.92).setAlpha(0);
+    this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
   }
 
   private async markPlayed(id: string, body: string): Promise<void> {
@@ -2733,15 +3209,8 @@ export class GameScene extends Scene {
   ): Promise<void> {
     const generation = this.playGeneration;
     const puzzleId = this.dailyPuzzleId;
-    const body = JSON.stringify({
-      puzzleId,
-      playId: this.dailyPlayId,
-      moves: this.moveHistory.map((move) => ({
-        pieceIndex: move.pieceIndex,
-        kind: move.kind,
-        to: [...move.to],
-      })),
-    });
+    // Identical to the request celebrateWin() already started.
+    const body = this.dailyCompletionBody();
     try {
       const response = await this.postCompletionWithRetries('/api/solve', body);
       const result: SolveResultDTO = await response.json();

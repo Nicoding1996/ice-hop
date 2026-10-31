@@ -862,7 +862,7 @@ body.inline-daily-active .wrap {
   min-height: 28px;
   align-items: center;
   justify-content: center;
-  gap: clamp(24px, 8vw, 48px);
+  gap: clamp(14px, 5vw, 36px);
   color: #eaf6fb;
   font-size: clamp(0.9rem, 3.5vw, 1.08rem);
   font-weight: 800;
@@ -884,6 +884,23 @@ body.inline-daily-active .wrap {
   color: inherit;
   font: inherit;
   font-weight: 800;
+}
+
+/* Live "★★★ up to N" goal, gold like the full game's. */
+.inline-stat--goal {
+  color: #ffd166;
+}
+
+/* Undo + Restart share the strip under the board once a move is made. */
+.inline-play-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.inline-play-actions .inline-button--quiet {
+  min-width: 112px;
 }
 
 .inline-board-frame {
@@ -1134,6 +1151,160 @@ body.inline-daily-active .wrap {
 [data-inline-piece-art].is-dragging,
 .inline-piece-control.is-dragging {
   transition: none;
+}
+
+/* ---- Game feel (shared timing with the full game: src/shared/game/motion.ts) */
+
+/* Hop: the outer group glides; the inner art arcs up with a squash on
+   take-off and landing. 19 board units is about 0.45 of a 44-unit cell. */
+[data-inline-piece-inner].is-hopping {
+  animation: inline-hop var(--move-ms, 260ms) ease-out both;
+}
+
+@keyframes inline-hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  14% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  50% {
+    transform: translateY(-19px) scale(0.93, 1.1);
+  }
+  86% {
+    transform: translateY(0) scale(1.1, 0.88);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+/* Idle life: penguins breathe, water shimmers. --idle-clock (set on every
+   render) is a shared negative delay, so rebuilding the board after a tap
+   resumes each animation where it was instead of restarting it. */
+[data-inline-kind='hopper'] .inline-idle {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: inline-breathe 2.6s ease-in-out infinite;
+  animation-delay: calc(var(--idle-clock, 0ms) - var(--i, 0) * 310ms);
+}
+
+@keyframes inline-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-1.4px) scale(1.01, 0.995);
+  }
+}
+
+.inline-shimmer {
+  animation: inline-shimmer 3.4s ease-in-out infinite;
+  animation-delay: var(--idle-clock, 0ms);
+}
+
+@keyframes inline-shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A seal pushed toward open water shies back with a quick flipper bump. */
+[data-inline-piece-inner].is-refusing {
+  animation: inline-refuse 300ms ease-in-out;
+}
+
+@keyframes inline-refuse {
+  0%,
+  50%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25%,
+  75% {
+    transform: translate(var(--refuse-x, 0px), var(--refuse-y, 0px));
+  }
+}
+
+/* Transient effects: splash ripples and droplets on water landings, snow
+   behind sliding seals, and gold sparkles over the holes on a win. */
+.inline-fx-ripple,
+.inline-fx-drop,
+.inline-fx-snow,
+.inline-fx-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.inline-fx-ripple {
+  fill: none;
+  stroke: #7fe0ff;
+  stroke-width: 2.5;
+  animation: inline-ripple 620ms ease-out both;
+}
+
+@keyframes inline-ripple {
+  from {
+    opacity: 0.95;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+.inline-fx-drop {
+  fill: #7fe0ff;
+  animation: inline-particle 480ms ease-out both;
+}
+
+.inline-fx-snow {
+  fill: #e8f7ff;
+  animation: inline-particle 380ms ease-out both;
+}
+
+.inline-fx-spark {
+  fill: #ffd166;
+  animation: inline-particle 620ms ease-out both;
+}
+
+@keyframes inline-particle {
+  from {
+    opacity: 0.95;
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(0.35);
+  }
+}
+
+/* Win beat: every penguin pops twice in turn before the result card. */
+.inline-play--celebrating [data-inline-kind='hopper'] [data-inline-piece-inner] {
+  animation: inline-cheer 160ms ease-in-out calc(320ms + var(--i, 0) * 90ms) 4 alternate both;
+}
+
+@keyframes inline-cheer {
+  from {
+    transform: translateY(0) scale(1);
+  }
+  to {
+    transform: translateY(-5px) scale(1.14);
+  }
+}
+
+.inline-celebration-note {
+  color: #ffd166;
+  font-size: clamp(0.84rem, 3.4vw, 1rem);
+  font-weight: 800;
+  opacity: 1;
 }
 
 [data-inline-piece-art].is-snapping,
@@ -1476,5 +1647,15 @@ body.inline-daily-active .wrap {
   [data-inline-piece-art],
   [data-inline-piece-inner] {
     transition: none !important;
+  }
+
+  [data-inline-piece-inner],
+  .inline-idle,
+  .inline-shimmer,
+  .inline-fx-ripple,
+  .inline-fx-drop,
+  .inline-fx-snow,
+  .inline-fx-spark {
+    animation: none !important;
   }
 }

@@ -10,6 +10,30 @@ export const computeStars = (moves: number, par: number): number => {
   return 1;
 };
 
+export type StarGoal = {
+  /** Most stars still reachable from the current move count. */
+  readonly stars: number;
+  /** Highest final move count that still earns `stars` (null for 1 star: any solve). */
+  readonly maxMoves: number | null;
+};
+
+/**
+ * The live "★★★ up to N" goal shown while playing. An unsolved board needs at
+ * least one more move, so the best reachable final count is `moves + 1`.
+ */
+export const starGoal = (moves: number, par: number): StarGoal => {
+  const next = moves + 1;
+  if (next <= par + 1) return { stars: 3, maxMoves: par + 1 };
+  if (next <= par * 2) return { stars: 2, maxMoves: par * 2 };
+  return { stars: 1, maxMoves: null };
+};
+
+/** Short HUD label for a star goal, identical on the feed post and full game. */
+export const starGoalLabel = (goal: StarGoal): string => {
+  const stars = '\u2605'.repeat(goal.stars);
+  return goal.maxMoves === null ? `${stars} any solve` : `${stars} up to ${goal.maxMoves}`;
+};
+
 /**
  * Encode "fewest moves, then fastest time" into ONE ascending score for a Redis
  * sorted set (lower = better). Time is capped so it can never overflow into the

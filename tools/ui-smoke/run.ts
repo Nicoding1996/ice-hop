@@ -75,13 +75,20 @@ const tapSelector = async (page: Page, selector: string, settleMs = 500): Promis
   return true;
 };
 
-const solveInFeed = async (page: Page, board: Board): Promise<boolean> => {
+const solveInFeed = async (page: Page, board: Board, celebrationShot?: string): Promise<boolean> => {
   let pieces: Piece[] = board.pieces.map((piece) => ({ ...piece, cells: [...piece.cells] }));
   for (const move of solve(board).solution) {
     if (!(await tapSelector(page, `[data-piece-control='${move.pieceIndex}']`, 450))) return false;
     const label = feedMoveLabel(board, pieces, move.pieceIndex, move.to);
     if (!(await tapSelector(page, `[aria-label='${label}']`, 650))) return false;
     pieces = applyMove(pieces, move);
+  }
+  if (celebrationShot) {
+    // The solved board stays up for the win beat before the result card.
+    const celebrating = await page.evaluate(`Boolean(document.querySelector('.inline-play--celebrating'))`);
+    check('feed: the solved board stays up for the win celebration', celebrating === true);
+    await sleep(150);
+    await page.screenshot(celebrationShot);
   }
   await sleep(1400);
   return true;
@@ -104,6 +111,10 @@ const feedScenarios = async (page: Page, server: SmokeServer): Promise<void> => 
     await page.setViewport(width, height, 2);
     await page.navigate(`${server.origin}/splash.html?post=daily&user=${user}`, 2000);
     check(`${name}: board fits`, (await page.evaluate(STAGE_FIT)) === 'fits');
+    const hudRowFits = await page.evaluate(
+      `(() => { const hud = document.querySelector('.inline-hud'); return hud ? hud.scrollWidth <= hud.clientWidth + 1 : false; })()`
+    );
+    check(`${name}: Moves, Par and the star goal fit on one row`, hudRowFits === true);
     if (width >= 360) {
       const context = await page.evaluate(CONTEXT_FIT);
       check(`${name}: difficulty/date line not truncated`, context === 'fits', String(context));
@@ -113,7 +124,11 @@ const feedScenarios = async (page: Page, server: SmokeServer): Promise<void> => 
     check(`${name}: tapping a seal shows its lane stops`, typeof stops === 'number' && stops > 0);
     check(`${name}: selected seal fits`, (await page.evaluate(STAGE_FIT)) === 'fits');
     await tapSelector(page, "[data-piece-control='0']");
-    const solved = await solveInFeed(page, FIXTURES.daily.board);
+    const solved = await solveInFeed(
+      page,
+      FIXTURES.daily.board,
+      width === 390 && height === 512 ? join(OUT_DIR, 'feed-daily-celebration-390x512.png') : undefined
+    );
     const completion = lastCompletion(server, '/api/solve');
     check(
       `${name}: solved by taps and replay-verified at par`,
@@ -161,7 +176,15 @@ const feedScenarios = async (page: Page, server: SmokeServer): Promise<void> => 
     await page.swipe(horizontal.x, horizontal.y, horizontal.x - cellWidth, horizontal.y);
     await sleep(800);
   }
-  check('feed: dragging a horizontal seal by touch slides it', (await hudLabel(page)) === 'Moves 1, par 6');
+  check('feed: dragging a horizontal seal by touch slides it', String(await hudLabel(page)).startsWith('Moves 1, par 6'));
+  const goal = await page.evaluate(`document.querySelector('.inline-stat--goal')?.textContent ?? ''`);
+  check('feed: the live star goal shows next to Moves/Par', goal === '\u2605\u2605\u2605 up to 7', String(goal));
+  const hudFits = await page.evaluate(
+    `(() => { const hud = document.querySelector('.inline-hud'); return hud ? hud.scrollWidth <= hud.clientWidth + 1 : false; })()`
+  );
+  check('feed: Moves, Par and the star goal fit on one row', hudFits === true);
+  await tapSelector(page, '.inline-play-actions button:first-child', 700);
+  check('feed: Undo steps back one move', String(await hudLabel(page)).startsWith('Moves 0, par 6'));
 
   await page.navigate(`${server.origin}/splash.html?post=ugc&user=snowfan`, 2000);
   const vertical = await page.centerOf("[data-piece-control='1']");
@@ -171,7 +194,7 @@ const feedScenarios = async (page: Page, server: SmokeServer): Promise<void> => 
   }
   check(
     'feed: an up/down swipe on an unselected vertical seal is left to the feed',
-    (await hudLabel(page)) === 'Moves 0, par 7'
+    String(await hudLabel(page)).startsWith('Moves 0, par 7')
   );
   await tapSelector(page, "[data-piece-control='1']");
   const touchAction = await page.evaluate(
@@ -208,7 +231,25 @@ const expandedScenario = async (page: Page, server: SmokeServer): Promise<void> 
   };
 
   let pieces: Piece[] = board.pieces.map((piece) => ({ ...piece, cells: [...piece.cells] }));
-  for (const move of solve(board).solution) {
+  const solution = solve(board).solution;
+
+  // Make the first move, then Undo it: the verified transcript below must
+  // still be exactly par, proving Undo removed the move.
+  const first = solution[0];
+  if (first) {
+    const firstFrom = centre(pieces[first.pieceIndex].cells);
+    await page.tap(firstFrom.x, firstFrom.y);
+    await sleep(450);
+    const stop = first.kind === 'SLIDER' ? slideStop(pieces[first.pieceIndex], first, board.width) : null;
+    const firstTo = centre(stop ? [stop.leadingCell] : first.to);
+    await page.tap(firstTo.x, firstTo.y);
+    await sleep(700);
+    // Undo is the left button of the bottom strip (Undo | Restart).
+    await page.tap(width / 2 - 52, height - 26);
+    await sleep(700);
+  }
+
+  for (const move of solution) {
     const from = centre(pieces[move.pieceIndex].cells);
     await page.tap(from.x, from.y);
     await sleep(450);
@@ -226,14 +267,55 @@ const expandedScenario = async (page: Page, server: SmokeServer): Promise<void> 
     await sleep(700);
     pieces = applyMove(pieces, move);
   }
-  await sleep(2500);
+  // Mid-celebration: the board is still up (the card comes after ~1.1s).
+  await sleep(150);
+  await page.screenshot(join(OUT_DIR, 'full-game-daily-celebration.png'));
+  await sleep(2350);
   const completion = lastCompletion(server, '/api/solve');
   check(
-    `${name}: seal stop taps + off-centre hop taps reach a replay-verified win`,
+    `${name}: Undo, seal stop taps and off-centre hop taps reach a replay-verified win at par`,
     completion?.ok === true && completion.moves === FIXTURES.daily.par,
     completion?.reason ?? 'no verified completion'
   );
   await page.screenshot(join(OUT_DIR, 'full-game-daily-win.png'));
+};
+
+/** Practice: "?" -> Practice, then solve the three lessons by taps. */
+const tutorialScenario = async (page: Page, server: SmokeServer): Promise<void> => {
+  const width = 390;
+  const height = 844;
+  console.log('full game practice tutorial');
+  await page.setViewport(width, height, 2);
+  await page.navigate(`${server.origin}/game.html?post=daily&user=snowfan`, 3500);
+  await page.tap(width - 32, 22); // "?" help chip
+  await sleep(700);
+  await page.tap(140, 614); // "Practice" beside "Got it"
+  await sleep(1300);
+
+  // Lessons are 5x3 boards: GameScene.layout() gives 71px cells from
+  // x=17.5, y=332.5 at this size.
+  const col = (c: number): number => 17.5 + c * 71 + 35.5;
+  const row = (r: number): number => 332.5 + r * 71 + 35.5;
+  const taps: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
+    [[col(0), row(1)], [col(2), row(1)]],
+    [[col(3.5), row(1)], [col(2), row(1)], [col(2), row(0)], [col(2), row(2)]],
+    [[col(1), row(1)], [col(3), row(1)], [col(4), row(1)], [col(1), row(1)]],
+  ];
+  for (let lesson = 0; lesson < taps.length; lesson++) {
+    for (const [x, y] of taps[lesson]) {
+      await page.tap(x, y);
+      await sleep(550);
+    }
+    await sleep(1600);
+    if (lesson === taps.length - 1) await page.screenshot(join(OUT_DIR, 'full-game-practice-done.png'));
+    const initsBefore = server.requests.filter((path) => path === '/api/init').length;
+    await page.tap(width / 2, 460); // "Next" / "Play today's puzzle"
+    await sleep(1400);
+    if (lesson === taps.length - 1) {
+      const initsAfter = server.requests.filter((path) => path === '/api/init').length;
+      check('practice: three lessons solved by taps lead into the Daily', initsAfter > initsBefore);
+    }
+  }
 };
 
 const main = async (): Promise<void> => {
@@ -248,6 +330,7 @@ const main = async (): Promise<void> => {
   try {
     await feedScenarios(browser.page, server);
     await expandedScenario(browser.page, server);
+    await tutorialScenario(browser.page, server);
     check(
       'no page exceptions or console errors',
       browser.page.problems.length === 0,

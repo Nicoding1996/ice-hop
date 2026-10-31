@@ -204,8 +204,12 @@ export class HomeScene extends Scene {
    *  Guarded so the "?" chip can't stack duplicates. */
   private showRules(): void {
     if (this.rules) return; // already open
-    this.rules = showHowToPlay(this, () => {
-      this.rules = undefined;
-    });
+    this.rules = showHowToPlay(
+      this,
+      () => {
+        this.rules = undefined;
+      },
+      () => fadeToScene(this, 'GameScene', { tutorial: { step: 0 } })
+    );
   }
 }

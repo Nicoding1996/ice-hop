@@ -461,7 +461,8 @@ const holeArt = (x: number, y: number, s: number): string =>
   cir(x, y, 0.36 * s, C.waterRim) +
   cir(x, y, 0.3 * s, C.water) +
   ell(x, y - 0.07 * s, 0.25 * s, 0.17 * s, C.holeRim, { opacity: 0.5 }) +
-  ell(x + 0.04 * s, y + 0.1 * s, 0.07 * s, 0.035 * s, C.shimmer, { opacity: 0.5 });
+  // The reflection shimmers gently (splash.css .inline-shimmer).
+  `<g class="inline-shimmer">${ell(x + 0.04 * s, y + 0.1 * s, 0.07 * s, 0.035 * s, C.shimmer, { opacity: 0.5 })}</g>`;
 
 /** Chubby outlined penguin with webbed feet, flippers, big eyes (drawPenguinInto). */
 const penguinArt = (x: number, y: number, s: number): string => {
@@ -627,8 +628,12 @@ const renderBoardPreview = (
         ? swimmingPenguinArt(cx(piece.cells[0]), cy(piece.cells[0]), S)
         : penguinArt(cx(piece.cells[0]), cy(piece.cells[0]), S);
     }
+    // Three nested groups: the outer one moves/drags, the inner one carries
+    // selection, hop, and cheer motion, and the innermost one breathes. Each
+    // layer owns one transform, so the animations never fight.
+    const kind = piece.kind === 'HOPPER' ? 'hopper' : piece.kind === 'SLIDER' ? 'slider' : 'blocker';
     parts.push(
-      `<g data-inline-piece-art="${pieceIndex}"><g data-inline-piece-inner="${pieceIndex}">${art}</g></g>`
+      `<g data-inline-piece-art="${pieceIndex}" data-inline-kind="${kind}" style="--i:${pieceIndex}"><g data-inline-piece-inner="${pieceIndex}"><g class="inline-idle">${art}</g></g></g>`
     );
   });
 

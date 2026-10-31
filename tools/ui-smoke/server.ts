@@ -112,6 +112,8 @@ export type VerifiedCompletion = {
 export type SmokeServer = {
   readonly origin: string;
   readonly completions: VerifiedCompletion[];
+  /** Every /api/* path requested, in order. */
+  readonly requests: string[];
   close(): Promise<void>;
 };
 
@@ -129,9 +131,11 @@ export const startServer = async (): Promise<SmokeServer> => {
     throw new Error('dist/client is missing. Run `npm run build` first.');
   }
   const completions: VerifiedCompletion[] = [];
+  const requests: string[] = [];
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
+    if (url.pathname.startsWith('/api/')) requests.push(url.pathname);
     let body = '';
     request.on('data', (chunk) => {
       body += String(chunk);
@@ -261,6 +265,7 @@ export const startServer = async (): Promise<SmokeServer> => {
   return {
     origin: `http://127.0.0.1:${port}`,
     completions,
+    requests,
     close: () => new Promise<void>((done) => server.close(() => done())),
   };
 };

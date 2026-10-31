@@ -25,6 +25,7 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   │   ├── validation.ts # strict runtime board parser/normalizer
     │   │   ├── replay.ts     # canonical legal transcript replay
     │   │   ├── slide.ts      # seal lane stops shared by feed post and full game
+    │   │   ├── motion.ts     # shared move timing, win beat, seal water check
     │   │   └── proof.ts      # exact-board creator solve proof
     │   ├── solver/
     │   │   ├── solver.ts     # BFS optimal solution/par and solution count
@@ -34,6 +35,7 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   │   └── validate.ts   # user-board policy and solvability
     │   ├── __tests__/        # pure engine, policy, scoring, sharing, proof tests
     │   ├── achievements.ts   # pure quantity/tier award evaluation
+    │   ├── tutorial.ts       # three Practice lessons (boards + captions)
     │   ├── telemetry.ts      # bounded client telemetry event allowlist
     │   ├── api.ts            # V2 splash/preview/init/solve DTOs
     │   ├── daily.ts          # immutable Daily puzzle identities/migration parser

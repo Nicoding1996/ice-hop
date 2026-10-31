@@ -297,6 +297,42 @@ export const splashBurst = (
   }
 };
 
+/** A brief puff of snow kicked up behind a sliding seal. (dx, dy) points the
+ *  way the puff drifts (opposite to the slide). Self-destroying, texture-free. */
+export const snowSpray = (
+  scene: Phaser.Scene,
+  layer: Phaser.GameObjects.Container,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  s: number
+): void => {
+  for (let i = 0; i < 5; i++) {
+    const spread = (i - 2) * 0.32;
+    // Perpendicular scatter so the puff fans out instead of a single line.
+    const px = dx - dy * spread;
+    const py = dy + dx * spread;
+    const flake = scene.add.circle(x, y, s * (0.035 + (i % 2) * 0.02), PALETTE.iceHi, 0.95);
+    layer.add(flake);
+    scene.tweens.add({
+      targets: flake,
+      x: x + px * s * (0.28 + (i % 3) * 0.08),
+      y: y + py * s * (0.28 + (i % 3) * 0.08) - s * 0.06,
+      alpha: 0,
+      scale: 0.4,
+      duration: 340 + i * 25,
+      ease: 'Quad.easeOut',
+      onComplete: () => flake.destroy(),
+    });
+  }
+};
+
+/** Players who ask the OS for less motion get short, bounce-free transitions. */
+export const prefersReducedMotion = (): boolean =>
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 /** Fade the camera out, then start another scene (pair with fadeIn on create).
  *
  *  Hardened so a transition can NEVER strand the player on a dimmed screen:

@@ -13,7 +13,9 @@ import { PALETTE, FONT, armTap, drawPenguinInto, drawSealInto, drawRockInto, mak
  */
 export const showHowToPlay = (
   scene: Phaser.Scene,
-  onClose?: () => void
+  onClose?: () => void,
+  /** When given, the card also offers three hands-on practice puzzles. */
+  onPractice?: () => void
 ): Phaser.GameObjects.Container => {
   const w = scene.scale.width;
   const h = scene.scale.height;
@@ -113,6 +115,24 @@ export const showHowToPlay = (
     onClick: () => dismiss(),
   });
   card.add(close);
+  if (onPractice) {
+    // Practice sits beside "Got it": an offer, never a gate.
+    const practice = makePill(scene, {
+      label: 'Practice',
+      variant: 'secondary',
+      x: 0,
+      y: panelH / 2 - 34,
+      onClick: () => {
+        dismiss();
+        onPractice();
+      },
+    });
+    const gap = 10;
+    const total = practice.width + gap + close.width;
+    practice.setX(-total / 2 + practice.width / 2);
+    close.setX(total / 2 - close.width / 2);
+    card.add(practice);
+  }
 
   let closed = false;
   const dismiss = (): void => {

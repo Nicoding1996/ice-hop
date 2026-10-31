@@ -53,8 +53,18 @@ insight matters more than speed.
 
 ### While you play
 
-- **Restart** the board any time from the bottom bar to take a fresh run at par.
-  A wrong move is never a dead end.
+- **Undo** steps back one move and **Restart** returns to the start, both from
+  the bar under the board. Every move can be reversed, so a wrong move is never
+  a dead end, and only your final move list is scored.
+- A gold **star goal** beside Moves/Par shows the best stars you can still get,
+  for example "★★★ up to 7".
+- A penguin that can hop again stays selected after its hop, so chains of hops
+  take one tap each.
+- When the last penguin dives in, everyone cheers for a moment before the result
+  card. **Try for ★★★** on the win screen replays the same puzzle; your best
+  verified score is the one that counts.
+- New players can open **Practice** from the How-to card: three tiny lessons for
+  hopping, sliding a seal, and hopping back out of the water.
 - **Endless mode** has an optional **Hint** that glows the next good move when
   you're stuck, so you keep learning. A hinted solve doesn't count toward your
   Endless total, so the number stays honest.
@@ -347,6 +357,22 @@ Touch, fit, and generation fixes from a phone-sized audit.
   entries are validated, and refill runs have a time budget.
 - Copy fixes (Endless banner, Test win, feed instructions), a Retry on Community
   load errors, and a new `npm run test:ui` phone smoke test.
+
+Game feel and play, on both the feed post and the full game:
+
+- The win moment plays out: the last penguin's splash and dive stay on screen,
+  every penguin cheers with sparkles, and then the result card fades in. In the
+  full game the splash never showed at all, because highlight redraws deleted it
+  in the same frame. Completion requests now start at the moment of the win.
+- Smoother movement: feed penguins hop in an arc with a landing squash instead
+  of gliding, water landings ripple, sliding seals kick up snow, a seal pushed
+  toward water shies back, longer hops take a little longer (shared timing in
+  `src/shared/game/motion.ts`), and the feed board breathes and shimmers without
+  restarting its animations on every tap. Reduced-motion settings are respected.
+- Undo, a live "★★★ up to N" goal, "Try for ★★★" replays, a penguin that stays
+  selected while it can keep hopping, and a three-lesson Practice tutorial.
+- Fixed the full game's Moves/Par readout staying hidden after "Play today's
+  again" on the solved-Daily recap.
 
 ### 0.0.25 - 2026-08-16
 

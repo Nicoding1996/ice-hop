@@ -70,6 +70,15 @@ Layer feedback; keep it synced and tasteful (not constant motion).
 
 Respect calm: no screen shake except meaningful moments; prefer ease-out curves.
 
+Motion is shared between the feed post (CSS on the SVG board) and the full game
+(Phaser tweens) through `src/shared/game/motion.ts`: hop and slide durations grow
+with distance (capped), and the win beat is `WIN_CELEBRATION_MS`. In Phaser,
+splashes, snow, and sparkles live on their own effects layer, because the
+highlight layer is cleared on every selection change. In the feed, each SVG
+piece has three nested groups (move/drag, then hop/select/cheer, then idle
+breathing), and a shared `--idle-clock` delay keeps idle motion continuous when
+the board is rebuilt. Honour `prefers-reduced-motion` on both surfaces.
+
 ## Layout / UI
 
 - Mobile-first, fit the viewport (Devvit rule). Touch targets ~44-48px.

@@ -196,6 +196,22 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 - Submit turns active (coral) only after the board validates and the creator has
   solved that exact board in Test mode. Placement, erase, undo, random, and clear
   all invalidate the proof.
+- Undo (one move) and Restart share the strip under the board on both surfaces.
+  Every move has an exact reverse and the server scores only the final
+  transcript, so Undo never changes how a solve counts. A gold "★★★ up to N" star
+  goal (`starGoal` in `src/shared/scoring.ts`) sits beside Moves/Par; a solved
+  board shows the stars earned. A penguin that can hop again stays selected after
+  a dry hop (`keepSelectedAfterMove`), and a tap on that kept selection does not
+  toggle it off.
+- The win beat lasts about 1.1s (0.45s with reduced motion) on both surfaces:
+  the final splash and dive, every penguin cheers with sparkles, then the result
+  card. The full game starts its completion request at the win so leaving early
+  cannot lose a solve; the feed post verifies during the beat and plays the win
+  cue only with the verified card. Win screens offer "Try for ★★★" (or "Play
+  again" at three stars), which replays the same puzzle.
+- Practice (`src/shared/tutorial.ts`): three 5x3 lessons opened from the How-to
+  card's Practice button, teaching a hop, a seal slide, and hopping out of the
+  water. Each lesson has exactly one useful first move, which glows.
 - Play controls are identical in the feed post and the full game: tap a penguin,
   then tap its destination (the whole destination cell is the target, the gold
   dot is only the cue). Slide a seal by dragging it along its lane, or tap it and
