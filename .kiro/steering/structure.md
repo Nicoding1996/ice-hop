@@ -9,7 +9,8 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json            # project references -> tools/*
-├── tools/                   # tsconfig.{base,client,server,shared,vite}.json
+├── tools/                   # tsconfig.{base,client,server,shared,vite,ui-smoke}.json
+│   └── ui-smoke/            # npm run test:ui: CDP driver, mock API server, scenarios
 ├── brand/                   # active app art: icon.png, icon.svg, banner.svg
 ├── docs/archive/            # dated historical material; not active product guidance
 ├── README.md                # player overview, development guide, release history
@@ -23,6 +24,7 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   │   ├── rules.ts      # applyMove and isSolved
     │   │   ├── validation.ts # strict runtime board parser/normalizer
     │   │   ├── replay.ts     # canonical legal transcript replay
+    │   │   ├── slide.ts      # seal lane stops shared by feed post and full game
     │   │   └── proof.ts      # exact-board creator solve proof
     │   ├── solver/
     │   │   ├── solver.ts     # BFS optimal solution/par and solution count
@@ -54,7 +56,8 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │       ├── post.ts        # V2 Daily/Community posts, mappings, pinned comments
     │       ├── daily.ts       # bounded daily generation and storage
     │       ├── dailyPolicy.ts # pure weekday bands and verified fallbacks
-    │       ├── endless.ts     # tiered pool, fallback generation, stats
+    │       ├── endless.ts     # tiered pool, refill budget, stats
+    │       ├── endlessPolicy.ts # pure tier shapes, bands, fallbacks, generators
     │       ├── leaderboard.ts # sorted sets, streaks, flair
     │       ├── ugc.ts         # validation, storage, voting, stream queries
     │       ├── keys.ts        # single source of truth for Redis keys

@@ -600,11 +600,19 @@ export const installAudioLifecycle = (): void => {
   installAudioVisibilityLifecycle();
   if (gestureLifecycleArmed) return;
   gestureLifecycleArmed = true;
+  // Browsers grant touch "user activation" on release (pointerup/touchend),
+  // not on press, so a touch pointerdown alone may not be allowed to resume the
+  // AudioContext. Try on press (enough for mouse) and finish on release or key.
+  const onFirstPress = (): void => {
+    startMusic(); // no-op when music is off or already playing
+  };
   const onFirstGesture = (): void => {
-    startMusic(); // no-op when music is off
-    window.removeEventListener('pointerdown', onFirstGesture);
+    startMusic();
+    window.removeEventListener('pointerdown', onFirstPress);
+    window.removeEventListener('pointerup', onFirstGesture);
     window.removeEventListener('keydown', onFirstGesture);
   };
-  window.addEventListener('pointerdown', onFirstGesture);
+  window.addEventListener('pointerdown', onFirstPress);
+  window.addEventListener('pointerup', onFirstGesture);
   window.addEventListener('keydown', onFirstGesture);
 };

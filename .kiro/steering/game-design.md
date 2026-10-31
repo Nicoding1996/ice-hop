@@ -196,7 +196,13 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 - Submit turns active (coral) only after the board validates and the creator has
   solved that exact board in Test mode. Placement, erase, undo, random, and clear
   all invalidate the proof.
-- Play controls: tap a penguin to hop it; drag a seal along its axis to slide it.
+- Play controls are identical in the feed post and the full game: tap a penguin,
+  then tap its destination (the whole destination cell is the target, the gold
+  dot is only the cue). Slide a seal by dragging it along its lane, or tap it and
+  tap one of its one-cell lane stops (shared `slideStop` in
+  `src/shared/game/slide.ts`). Taps act on release, like native buttons. The
+  one feed exception is Reddit's scroll rule: a vertical seal's drag axis is the
+  feed's scroll axis, so in the feed it drags only after a tap selects it.
 
 ## Inline Daily and Community posts
 
@@ -220,6 +226,13 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   width and available height, retaining HUD/footer/touch targets. Never restore
   short-height `height: auto` or unconstrained grid-row overrides that collapse
   size-container rows.
+- No feed state may need inner scrolling: `.inline-stage` is `overflow: hidden`
+  with no overscroll containment (Reddit rejects scroll traps), so every card is
+  laid out to fit. Win cards use one primary action and secondary actions two per
+  row; short cards drop decoration (eyebrow, small stars, the Join extra) first.
+  `npm run test:ui` asserts the fit at 320-700px wide and 320/512px tall.
+- The feed header leads with difficulty (then date or creator) and uses icon
+  SFX/Music toggles, so truncation never hides the difficulty or credit.
 
 ## Expanded navigation & flow
 

@@ -1,5 +1,5 @@
 import * as Phaser from 'phaser';
-import { PALETTE, FONT, drawPenguinInto, drawSealInto, drawRockInto, makePill } from './art/theme';
+import { PALETTE, FONT, armTap, drawPenguinInto, drawSealInto, drawRockInto, makePill } from './art/theme';
 
 /**
  * Shared "How to play" overlay, used by both the hub and the play screen so a
@@ -83,7 +83,7 @@ export const showHowToPlay = (
   addLabel(rowsTop, 'Tap a penguin to hop over one or more pieces in a row, into the empty space beyond. It only moves by jumping, and can hop out of the water again.');
 
   addPieceIcon(rowsTop + rowGap, (s, c, size) => drawSealInto(s, c, size, 'H'), 22);
-  addLabel(rowsTop + rowGap, 'Drag a seal to slide it along its lane. It blocks the way but won\u2019t slide into the water.');
+  addLabel(rowsTop + rowGap, 'Drag a seal along its lane, or tap it and tap where it should stop. It blocks the way but won\u2019t slide into the water.');
 
   addPieceIcon(rowsTop + rowGap * 2, drawRockInto, 30);
   addLabel(rowsTop + rowGap * 2, 'Ice rocks never move. Penguins hop over them; seals can\u2019t pass.');
@@ -129,7 +129,8 @@ export const showHowToPlay = (
       },
     });
   };
-  dim.on('pointerdown', dismiss);
+  // Dismiss on a completed tap of the backdrop (release), like the buttons.
+  armTap(dim, { onTap: dismiss });
 
   layer.add([dim, card]);
   layer.setAlpha(0);

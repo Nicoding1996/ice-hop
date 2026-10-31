@@ -9,7 +9,7 @@ import {
   type DailyPuzzleRef,
 } from '../../shared/daily';
 import { computeStars, decodeScore, leaderboardScore } from '../../shared/scoring';
-import { previousDate, todayUtc } from '../../shared/date';
+import { dailyPuzzleDate, isStreakCurrent, previousDate } from '../../shared/date';
 import { keys } from './keys';
 
 export type SolveOutcome = {
@@ -289,9 +289,7 @@ export const setPlayerFlair = async (username: string, streak?: number): Promise
     let days = streak;
     if (days === undefined) {
       const rec = parseStreak(await redis.get(keys.streak(username)));
-      const today = todayUtc();
-      const alive = rec.lastDate === today || rec.lastDate === previousDate(today);
-      days = alive ? rec.count : 0;
+      days = isStreakCurrent(rec.lastDate, dailyPuzzleDate()) ? rec.count : 0;
     }
     const built = await redis.zCard(keys.ugcByCreator(username));
     const base = days >= 2 ? `\uD83D\uDD25 ${days}-day streak` : '\uD83D\uDC27 Ice Hopper';

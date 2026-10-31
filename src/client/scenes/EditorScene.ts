@@ -23,6 +23,8 @@ import {
   PillButton,
   type PillVariant,
   type PillSize,
+  useCrispText,
+  armTap,
 } from '../art/theme';
 import { context, showLoginPrompt } from '@devvit/web/client';
 import { trackClientEvent } from '../telemetry';
@@ -160,6 +162,7 @@ export class EditorScene extends Scene {
   }
 
   create(): void {
+    useCrispText(this);
     this.holes = new Set<number>();
     this.pieces = [];
     this.history = [];
@@ -253,7 +256,8 @@ export class EditorScene extends Scene {
       .text(0, 17, label, { fontFamily: FONT.ui, fontSize: '12px', fontStyle: '600', color: UI.toolLabelIdle })
       .setOrigin(0.5);
     cont.add([bg, icon, text]);
-    cont.on('pointerdown', () => (tool === 'SEAL' ? this.onSealToolTap() : this.setTool(tool)));
+    // Release-to-activate, like every other button (sliding off cancels).
+    armTap(cont, { onTap: () => (tool === 'SEAL' ? this.onSealToolTap() : this.setTool(tool)) });
     const chip: ToolChip = { tool, cont, bg, label: text, w: 64, h: 52, active: false };
     this.drawChip(chip);
     return chip;
@@ -287,11 +291,14 @@ export class EditorScene extends Scene {
   private layoutAll(): void {
     const w = this.scale.width;
     const h = this.scale.height;
-    const topBar = 74;
+    // Room for the title plus a two-line status message (long validation
+    // reasons wrap) so the status never overlaps the title or Back button.
+    const topBar = 88;
     const bottomBar = 120;
 
     this.titleText.setPosition(w / 2, 22);
-    this.statusText.setPosition(w / 2, 50);
+    this.statusText.setOrigin(0.5, 0);
+    this.statusText.setPosition(w / 2, 43);
     this.statusText.setWordWrapWidth(w - 40);
     this.backButton.setPosition(SPACE.md + this.backButton.width / 2, 24);
 

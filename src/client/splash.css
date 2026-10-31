@@ -573,7 +573,8 @@ body.inline-daily-active .wrap {
 }
 
 .inline-brand p {
-  max-width: min(52vw, 360px);
+  /* Difficulty comes first in this line, so truncation only trims the tail. */
+  max-width: 100%;
   margin: 3px 0 0;
   overflow: hidden;
   color: #bfe3f2;
@@ -624,10 +625,24 @@ body.inline-daily-active .wrap {
   background: rgba(6, 32, 51, 0.48);
 }
 
+/* Square 44px icon toggles (speaker / music note) leave the header room for
+   the difficulty and creator credit. */
 .inline-audio-toggle {
-  padding-inline: 10px;
-  font-size: clamp(0.7rem, 2.5vw, 0.78rem);
-  white-space: nowrap;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+}
+
+.inline-audio-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+
+.inline-audio-toggle[aria-pressed='true'] .inline-audio-off,
+.inline-audio-toggle[aria-pressed='false'] .inline-audio-on {
+  display: none;
 }
 
 .inline-audio-toggle[aria-pressed='false'] {
@@ -669,6 +684,9 @@ body.inline-daily-active .wrap {
   cursor: default;
 }
 
+/* Never an inner scroller: Reddit rejects inline posts that must be scrolled
+   inside or that trap feed scrolling. Every state is laid out to fit instead
+   (the UI smoke test asserts scrollHeight <= clientHeight at phone sizes). */
 .inline-stage {
   display: grid;
   width: 100%;
@@ -676,8 +694,7 @@ body.inline-daily-active .wrap {
   min-height: 0;
   align-items: center;
   justify-items: center;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
 }
 
 .inline-message-card {
@@ -782,8 +799,25 @@ body.inline-daily-active .wrap {
   font-size: 0.76rem;
 }
 
-.inline-card-actions--win .inline-button--primary {
-  flex-basis: 100%;
+/* Win actions: one full-width primary, then secondary actions two per row so
+   the whole card fits a tall feed card without inner scrolling. A lone last
+   secondary spans the row. */
+.inline-card-actions.inline-card-actions--win {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.inline-card-actions--win .inline-button {
+  width: 100%;
+  min-width: 0;
+  padding-inline: 8px;
+  font-size: clamp(0.74rem, 2.9vw, 0.86rem);
+}
+
+.inline-card-actions--win .inline-button--primary,
+.inline-card-actions--win > .inline-button:last-child:nth-child(even) {
+  grid-column: 1 / -1;
 }
 
 .inline-stars {
@@ -944,13 +978,26 @@ body.inline-daily-active .wrap {
 }
 
 .inline-piece--slider {
-  /* Reddit owns feed-pan gestures on mobile. A tap selects the seal and opens
-     visible destination buttons; mouse and pen can still drag directly. */
+  /* Seals slide by drag or by tap-then-stop, matching the full game. Reddit
+     owns vertical feed-pan gestures, so touch-action stays bounded per seal. */
   cursor: grab;
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+/* A horizontal seal drags sideways at once; an up/down swipe on it still
+   scrolls the feed (the browser cancels the drag and the seal snaps home). */
+.inline-piece--slider-h {
+  touch-action: pan-y;
+}
+
+/* A vertical seal's drag axis is the feed's scroll axis, so it only captures
+   touch after the player taps it (selected). Every other surface keeps
+   native feed scrolling. */
+.inline-piece--slider-v.is-selected {
+  touch-action: none;
 }
 
 .inline-piece--slider:active,
@@ -1266,8 +1313,7 @@ body.inline-daily-active .wrap {
   }
 
   .inline-brand p {
-    max-width: 64px;
-    font-size: 0.64rem;
+    font-size: 0.66rem;
   }
 
   .inline-top-actions {
@@ -1276,18 +1322,13 @@ body.inline-daily-active .wrap {
     gap: 4px;
   }
 
-  .inline-audio-toggle {
-    padding-inline: 6px;
-    font-size: 0.65rem;
-  }
-
   .inline-top-open {
     max-width: 100px;
-    padding-inline: 8px;
-    font-size: 0.68rem;
+    padding-inline: 10px;
+    font-size: 0.7rem;
   }
 
-  .inline-card-actions {
+  .inline-card-actions:not(.inline-card-actions--win) {
     flex-direction: column;
   }
 
@@ -1302,7 +1343,7 @@ body.inline-daily-active .wrap {
     justify-content: center;
   }
 
-  .inline-card-actions .inline-button {
+  .inline-card-actions:not(.inline-card-actions--win) .inline-button {
     width: min(100%, 280px);
   }
 
@@ -1369,8 +1410,42 @@ body.inline-daily-active .wrap {
   }
 
   .inline-message-card {
+    gap: 4px;
+    padding: 10px 14px;
+  }
+
+  /* Short (regular-height) cards: drop decoration before any action, so
+     result cards still fit without inner scrolling. */
+  .inline-message-card .inline-eyebrow,
+  .inline-message-card--pending .inline-stars {
+    display: none;
+  }
+
+  .inline-message-card h2 {
+    font-size: 1.15rem;
+  }
+
+  .inline-stars {
+    min-height: 20px;
+    font-size: 1.2rem;
+  }
+
+  .inline-card-actions.inline-card-actions--win {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
-    padding: 12px 18px;
+  }
+
+  .inline-card-actions--win .inline-join-button {
+    display: none;
+  }
+
+  .inline-card-actions--win > .inline-button:last-child:nth-child(even) {
+    grid-column: auto;
+  }
+
+  .inline-card-actions--win .inline-button {
+    padding-inline: 5px;
+    font-size: 0.7rem;
   }
 }
 

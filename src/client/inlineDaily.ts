@@ -7,6 +7,7 @@ import type { Board, Move, Piece } from '../shared/game/types';
 import { parseDailyPuzzleId } from '../shared/daily';
 import { legalMoves } from '../shared/game/moves';
 import { applyMove, isSolved } from '../shared/game/rules';
+import { slideStop } from '../shared/game/slide';
 import { MAX_REPLAY_MOVES } from '../shared/game/replay';
 import { validateBoardStructure } from '../shared/game/validation';
 import { computeStars } from '../shared/scoring';
@@ -164,14 +165,6 @@ type CommunityVerifiedSolve = {
 type VerifiedSolve = DailyVerifiedSolve | CommunityVerifiedSolve;
 
 type Point = { readonly x: number; readonly y: number };
-
-type SliderDirection = 'left' | 'right' | 'up' | 'down';
-
-type SliderMoveVisual = {
-  readonly direction: SliderDirection;
-  readonly leadingCell: number;
-  readonly distance: number;
-};
 
 type DragTarget = {
   readonly move: Move;
@@ -575,35 +568,6 @@ const centerOfCells = (board: Board, cells: readonly number[]): Point => {
   return { x: x / cells.length, y: y / cells.length };
 };
 
-const sliderMoveVisual = (
-  board: Board,
-  piece: Piece,
-  move: Move
-): SliderMoveVisual | null => {
-  if (piece.kind !== 'SLIDER' || move.kind !== 'SLIDER') return null;
-  const origin = centerOfCells(board, piece.cells);
-  const destination = centerOfCells(board, move.to);
-  const orient = piece.orient ?? 'H';
-  const delta = orient === 'H' ? destination.x - origin.x : destination.y - origin.y;
-  if (delta === 0) return null;
-  const movesForward = delta > 0;
-  const leadingCell = movesForward ? move.to[move.to.length - 1] : move.to[0];
-  if (leadingCell === undefined) return null;
-  const direction: SliderDirection =
-    orient === 'H'
-      ? movesForward
-        ? 'right'
-        : 'left'
-      : movesForward
-        ? 'down'
-        : 'up';
-  return {
-    direction,
-    leadingCell,
-    distance: Math.round(Math.abs(delta) / CELL),
-  };
-};
-
 const viewSize = (board: Board): Point => ({
   x: board.width * CELL + PAD * 2,
   y: board.height * CELL + PAD * 2,
@@ -907,7 +871,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       const idleLabel = element.dataset.idleLabel;
       element.disabled = pending || stateLocked;
       if (pending) {
-        if (!idleLabel) element.dataset.idleLabel = element.textContent ?? 'Open full game';
+        if (!idleLabel) element.dataset.idleLabel = element.textContent ?? 'Full game';
         element.textContent = 'Opening…';
         element.setAttribute('aria-busy', 'true');
       } else {
@@ -1056,13 +1020,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
         ) {
           this.render();
         } else {
-          const label =
-            this.options.kind === 'ugc' && this.history.length > 0
-              ? 'Restart to open full game'
-              : this.history.length > 0
-                ? 'Continue full game'
-                : 'Open full game';
-          this.prepareOpenButton(this.topOpenButton, label);
+          this.prepareOpenButton(this.topOpenButton, this.playOpenButtonLabel());
         }
         if (restoreHydrationFocus) this.focusFirstPieceControl();
       })
@@ -1129,9 +1087,11 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
 
     const puzzle = this.currentPuzzle();
     if (puzzle?.kind === 'daily') {
-      this.contextText.textContent = `${formatDailyDate(puzzle.date)} · ${titleDifficulty(puzzle.difficulty)}`;
+      // Difficulty first: if a narrow card truncates the line, the date or the
+      // creator name loses its tail, never the difficulty.
+      this.contextText.textContent = `${titleDifficulty(puzzle.difficulty)} · ${formatDailyDate(puzzle.date)}`;
     } else if (puzzle) {
-      this.contextText.textContent = `Community · by u/${puzzle.creator} · ${titleDifficulty(puzzle.difficulty)}`;
+      this.contextText.textContent = `${titleDifficulty(puzzle.difficulty)} · by u/${puzzle.creator}`;
     } else {
       this.contextText.textContent = `${this.modeLabel()} puzzle`;
     }
@@ -1156,23 +1116,28 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       delete this.topOpenButton.dataset.idleLabel;
     } else {
       const topLabel =
-        this.state === 'verified-win'
-          ? '‹ Menu'
-          : this.playOpenButtonLabel();
+        this.state === 'verified-win' ? 'Full game' : this.playOpenButtonLabel();
       this.prepareOpenButton(this.topOpenButton, topLabel);
     }
   }
 
+  /** One short top-bar label so the header keeps room for difficulty/credit.
+   *  A Daily attempt still continues into the full game through the handoff. */
   private playOpenButtonLabel(): string {
-    if (this.options.kind === 'ugc' && this.history.length > 0) {
-      return 'Restart to open full game';
+    if (this.options.kind === 'daily' && this.history.length > 0 && !this.session) {
+      return 'Connecting…';
     }
-    if (this.history.length > 0 && !this.session) {
-      return 'Connecting progress…';
-    }
-    return this.history.length > 0
-      ? 'Continue full game'
-      : 'Open full game';
+    return 'Full game';
+  }
+
+  /** Why the top button is disabled after a Community move (no transcript
+   *  handoff exists, so expansion would silently drop this attempt). */
+  private openButtonLockReason(): string {
+    return this.options.kind === 'ugc' &&
+      this.state === 'playing' &&
+      this.history.length > 0
+      ? 'Restart this board to open the full game.'
+      : '';
   }
 
   private expansionIsLocked(): boolean {
@@ -1193,6 +1158,14 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     button.classList.add('inline-open-button');
     button.textContent = this.expansionPending ? 'Opening…' : label;
     button.disabled = this.expansionPending || stateLocked;
+    const lockReason = this.openButtonLockReason();
+    if (lockReason) {
+      button.title = lockReason;
+      button.setAttribute('aria-label', `${label}. ${lockReason}`);
+    } else {
+      button.removeAttribute('title');
+      button.removeAttribute('aria-label');
+    }
     if (this.expansionPending) {
       button.dataset.idleLabel = label;
       button.setAttribute('aria-busy', 'true');
@@ -1478,8 +1451,8 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
         (move) => move.pieceIndex === this.selected
       );
     return selectedSealHasMoves
-      ? 'Tap the ice lane where the seal should stop.'
-      : 'Tap an animal, then tap a move marker.';
+      ? 'Drag the seal along its lane, or tap where it should stop.'
+      : 'Tap a penguin, then a gold dot. Drag or tap a seal.';
   }
 
   private populateFirstMoveInstructions(instructions: HTMLElement): void {
@@ -1619,7 +1592,10 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       const center = centerOfCells(board, piece.cells);
       const control = document.createElement('button');
       control.type = 'button';
-      control.className = `inline-piece-control inline-piece--${piece.kind === 'HOPPER' ? 'hopper' : 'slider'}`;
+      control.className =
+        piece.kind === 'HOPPER'
+          ? 'inline-piece-control inline-piece--hopper'
+          : `inline-piece-control inline-piece--slider inline-piece--slider-${(piece.orient ?? 'H') === 'H' ? 'h' : 'v'}`;
       control.dataset.pieceControl = pieceIndex.toString();
       control.setAttribute('aria-pressed', this.selected === pieceIndex ? 'true' : 'false');
       const firstCell = piece.cells[0] ?? 0;
@@ -1672,7 +1648,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
           // direction aligned without overlapping full-footprint controls.
           const sliderVisual =
             selectedPiece.kind === 'SLIDER'
-              ? sliderMoveVisual(board, selectedPiece, move)
+              ? slideStop(selectedPiece, move, board.width)
               : null;
           const targetCells: readonly number[] = sliderVisual
             ? [sliderVisual.leadingCell]
@@ -1792,7 +1768,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       effects.append(lane);
 
       for (const move of destinations) {
-        const visual = sliderMoveVisual(board, selectedPiece, move);
+        const visual = slideStop(selectedPiece, move, board.width);
         if (!visual) continue;
         const stopCenter = centerOfCells(board, [visual.leadingCell]);
         const notch = document.createElementNS(namespace, 'line');
@@ -2279,58 +2255,43 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       'inline-result-score',
       `${result.moves} moves · par ${result.par}`
     );
+    // One compact status line keeps the card inside a tall feed post.
     const details = document.createElement('div');
     details.className = 'inline-verified-details';
     if (session.username === 'anon') {
       details.append(
         makeParagraph(
           'inline-message-copy',
-          'Verified for this play. Guest scores are not saved to the leaderboard or a streak.'
+          'Verified. Sign in to keep your score and streak.'
         )
       );
     } else {
-      details.append(makeParagraph('inline-message-copy', 'Score verified and saved.'));
+      const parts = ['Score saved'];
       if (result.bestMoves < result.moves) {
-        const rankSuffix =
-          result.rank > 0
-            ? ` · rank #${result.rank} of ${result.totalPlayers}`
-            : '';
-        details.append(
-          makeParagraph(
-            'inline-result-detail',
-            `Best today: ${result.bestMoves} moves (${result.stars}★)${rankSuffix}`
-          )
-        );
-      } else if (result.rank > 0) {
-        details.append(
-          makeParagraph(
-            'inline-result-detail',
-            `Rank #${result.rank} of ${result.totalPlayers} today`
-          )
-        );
+        parts.push(`best ${result.bestMoves} moves (${result.stars}★)`);
       }
-      if (result.streak > 0) {
-        details.append(
-          makeParagraph('inline-result-detail', `${result.streak}-day streak`)
-        );
-      }
+      if (result.rank > 0) parts.push(`#${result.rank} of ${result.totalPlayers} today`);
+      if (result.streak > 0) parts.push(`${result.streak}-day streak`);
+      details.append(makeParagraph('inline-result-detail', parts.join(' · ')));
     }
 
+    // Primary action, then two secondary actions per row (see splash.css).
     const actions = document.createElement('div');
     actions.className = 'inline-card-actions inline-card-actions--win';
     const more = this.makeOpenButton('More puzzles', 'endless');
     more.classList.remove('inline-button--secondary');
     more.classList.add('inline-button--primary');
     const share = makeButton(
-      'Share result',
+      'Share',
       'inline-button inline-button--secondary',
       () => void this.shareVerifiedResult(share)
     );
     actions.append(more, share);
 
+    let join: HTMLButtonElement | null = null;
     if (session.username === 'anon') {
       const signIn = makeButton(
-        'Sign in to save progress',
+        'Sign in to save',
         'inline-button inline-button--secondary',
         () => showLoginPrompt()
       );
@@ -2348,12 +2309,12 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
         const joinLabel = session.subredditName
           ? `Join r/${session.subredditName}`
           : 'Join the community';
-        const join = makeButton(
+        const joinButton = makeButton(
           joinLabel,
-          'inline-button inline-button--quiet inline-button--compact',
-          () => void this.joinCommunity(join, joinLabel)
+          'inline-button inline-button--quiet inline-join-button',
+          () => void this.joinCommunity(joinButton, joinLabel)
         );
-        actions.append(join);
+        join = joinButton;
       }
     }
 
@@ -2363,6 +2324,8 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       (event) => this.restartAttempt(event.detail === 0)
     );
     actions.append(again);
+    // Join is the optional extra: last, and the first thing a short card drops.
+    if (join) actions.append(join);
     card.append(eyebrow, heading, stars, score, details, actions);
     this.stage.replaceChildren(card);
     if (this.completionKeyboardFocus) this.focusStageHeading();
@@ -2399,9 +2362,9 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
       makeParagraph(
         'inline-message-copy',
         session.username === 'anon'
-          ? 'Solve verified for this play. Guest progress is not saved.'
+          ? 'Verified. Sign in to save your progress.'
           : result.saved
-            ? 'Solve verified and saved to your Community progress.'
+            ? 'Solve verified and saved.'
             : 'Solve verified for this play.'
       )
     );
@@ -2415,7 +2378,7 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
 
     if (!isCreator) {
       const upvote = makeButton(
-        'Upvote this puzzle',
+        'Upvote',
         'inline-button inline-button--secondary',
         () => void this.upvoteCommunity(upvote, session)
       );
@@ -2624,9 +2587,17 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     pieceIndex: number,
     clearSelection: () => void
   ): void {
-    // A touch swipe belongs to Reddit's feed. Touch taps continue to the
-    // button's native click handler, which opens the destination controls.
-    if (event.pointerType === 'touch' || event.button !== 0) return;
+    if (event.button !== 0 || !event.isPrimary) return;
+    if (event.pointerType === 'touch') {
+      // Vertical swipes belong to Reddit's feed. A horizontal seal's control
+      // uses `touch-action: pan-y`, so a sideways drag reaches this handler
+      // while an up/down swipe still scrolls the feed (the browser cancels the
+      // drag and the seal snaps home). A vertical seal is dragged once it is
+      // selected: only its selected control switches to `touch-action: none`,
+      // a bounded state the player entered with a deliberate tap.
+      const piece = this.pieces[pieceIndex];
+      if ((piece?.orient ?? 'H') === 'V' && this.selected !== pieceIndex) return;
+    }
     const drag = this.startSealDrag(
       control,
       pieceIndex,
@@ -2789,7 +2760,8 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
     this.releaseSealInput(drag);
     this.suppressNextClick(drag.pieceIndex);
     this.snapDragBack(drag);
-    if (announce) this.announce('Seal returned to its starting place.');
+    // A touch that turned into a feed scroll never moved the seal; stay quiet.
+    if (announce && drag.moved) this.announce('Seal returned to its starting place.');
   }
 
   private paintDrag(drag: SealDrag, value: number): void {

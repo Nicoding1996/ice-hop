@@ -207,13 +207,24 @@ export const drawPenguinSwimmingInto = (
   c.add(scene.add.triangle(0, s * 0.02, -s * 0.055, -s * 0.02, s * 0.055, -s * 0.02, 0, s * 0.06, PALETTE.beak));
 };
 
+/**
+ * Seal art fit inside its exact 1x2 footprint: drawn at 92% and nudged 0.1 cell
+ * toward the tail, so the head and whiskers never spill into the next cell or
+ * past the board edge (that read as "this cell is blocked"). splash.ts applies
+ * the same transform to the feed board's SVG seal.
+ */
+export const SEAL_ART_SCALE = 0.92;
+export const SEAL_ART_SHIFT = -0.1;
+
 /** A recognizable seal lying on the ice: body, raised head, flipper, tail. */
 export const drawSealInto = (
   scene: Phaser.Scene,
-  c: Phaser.GameObjects.Container,
+  outer: Phaser.GameObjects.Container,
   s: number,
   orient: 'H' | 'V'
 ): void => {
+  const c = scene.add.container(s * SEAL_ART_SHIFT, 0).setScale(SEAL_ART_SCALE);
+  outer.add(c);
   const OUT = PALETTE.sealOutline;
   const BODY = PALETTE.seal;
   const sw = Math.max(1.5, s * 0.04);
@@ -237,11 +248,11 @@ export const drawSealInto = (
   c.add(scene.add.circle(s * 0.74, -s * 0.26, s * 0.055, PALETTE.eye));
   c.add(scene.add.circle(s * 0.58, -s * 0.28, s * 0.02, PALETTE.eyeWhite));
   c.add(scene.add.circle(s * 0.76, -s * 0.28, s * 0.02, PALETTE.eyeWhite));
-  // Whiskers.
-  c.add(scene.add.rectangle(s * 0.95, -s * 0.06, s * 0.22, Math.max(1, s * 0.012), OUT).setOrigin(0, 0.5).setRotation(-0.12));
-  c.add(scene.add.rectangle(s * 0.95, -s * 0.03, s * 0.22, Math.max(1, s * 0.012), OUT).setOrigin(0, 0.5));
+  // Whiskers (short enough to stay inside the footprint).
+  c.add(scene.add.rectangle(s * 0.95, -s * 0.06, s * 0.16, Math.max(1, s * 0.012), OUT).setOrigin(0, 0.5).setRotation(-0.12));
+  c.add(scene.add.rectangle(s * 0.95, -s * 0.03, s * 0.16, Math.max(1, s * 0.012), OUT).setOrigin(0, 0.5));
   // Vertical seals are the horizontal drawing rotated a quarter turn.
-  if (orient === 'V') c.setRotation(Math.PI / 2);
+  if (orient === 'V') outer.setRotation(Math.PI / 2);
 };
 
 /** A solid, outlined ice block with a top facet and snow cap. */
@@ -497,21 +508,19 @@ export class PillButton extends Phaser.GameObjects.Container {
       // Input lives on the Zone (sized in redraw), never on the scaled visual,
       // so hover/press can't shift the hit area out from under the pointer.
       this.hit.setInteractive({ useHandCursor: true });
-      this.hit.on('pointerover', () => {
-        if (this.enabled) this.visual.setScale(1.03);
+      // Like a native button: press shows feedback, release over the same
+      // button activates, and sliding off cancels a mis-tap.
+      armTap(this.hit, {
+        canPress: () => this.enabled,
+        onPress: () => this.visual.setScale(0.95),
+        onCancel: () => this.visual.setScale(1),
+        onTap: () => {
+          this.visual.setScale(1);
+          this.onClick?.();
+        },
       });
-      this.hit.on('pointerout', () => this.visual.setScale(1));
-      this.hit.on('pointerdown', () => {
-        if (!this.enabled) return;
-        this.scene.tweens.add({
-          targets: this.visual,
-          scaleX: 0.95,
-          scaleY: 0.95,
-          duration: 80,
-          yoyo: true,
-          ease: 'Quad.easeOut',
-        });
-        this.onClick?.();
+      this.hit.on('pointerover', () => {
+        if (this.enabled && !this.hit.getData('pressed')) this.visual.setScale(1.03);
       });
     }
 
@@ -570,6 +579,65 @@ export class PillButton extends Phaser.GameObjects.Container {
     return this;
   }
 }
+
+export type TapHandlers = {
+  /** Return false to ignore a press (e.g. a disabled button). */
+  canPress?: () => boolean;
+  onPress?: () => void;
+  onCancel?: () => void;
+  onTap: () => void;
+};
+
+/**
+ * Give an interactive object native-button tap semantics: it activates on
+ * release only when the press also started on it. Sliding off or a cancelled
+ * touch does nothing, and the release is an activation-triggering gesture, so
+ * audio unlock, sharing, and clipboard calls are allowed on touch devices.
+ */
+export const armTap = (target: Phaser.GameObjects.GameObject, handlers: TapHandlers): void => {
+  const cancel = (): void => {
+    if (!target.getData('pressed')) return;
+    target.setData('pressed', false);
+    handlers.onCancel?.();
+  };
+  target.on('pointerdown', () => {
+    if (handlers.canPress && !handlers.canPress()) return;
+    target.setData('pressed', true);
+    handlers.onPress?.();
+  });
+  target.on('pointerup', () => {
+    if (!target.getData('pressed')) return;
+    target.setData('pressed', false);
+    handlers.onTap();
+  });
+  target.on('pointerout', cancel);
+  target.on('pointerupoutside', cancel);
+};
+
+/** Device-pixel resolution for Phaser Text, capped to bound texture memory. */
+export const textResolution = (): number =>
+  Math.min(3, Math.max(1, Math.round((window.devicePixelRatio || 1) * 100) / 100));
+
+const crispScenes = new WeakSet<Phaser.Scene>();
+
+/**
+ * Render every Text this scene creates at the device pixel ratio. Phaser 4 has
+ * no game-level DPR option, so on a 3x phone the canvas (and plain 1x Text) is
+ * upscaled and looks soft. Call at the top of create(); it registers once per
+ * scene instance and the listener survives scene restarts.
+ */
+export const useCrispText = (scene: Phaser.Scene): void => {
+  if (crispScenes.has(scene)) return;
+  crispScenes.add(scene);
+  const resolution = textResolution();
+  if (resolution <= 1) return;
+  scene.events.on(
+    Phaser.Scenes.Events.ADDED_TO_SCENE,
+    (object: Phaser.GameObjects.GameObject) => {
+      if (object instanceof Phaser.GameObjects.Text) object.setResolution(resolution);
+    }
+  );
+};
 
 /** Factory for a PillButton (mirrors scene.add.* style). */
 export const makePill = (scene: Phaser.Scene, opts: PillOptions): PillButton =>
@@ -683,18 +751,16 @@ export class IconButton extends Phaser.GameObjects.Container {
 
     // Input on the Zone, never the scaled visual, so the hit area never shifts.
     this.hit.setInteractive({ useHandCursor: true });
-    this.hit.on('pointerover', () => this.visual.setScale(1.06));
-    this.hit.on('pointerout', () => this.visual.setScale(1));
-    this.hit.on('pointerdown', () => {
-      this.scene.tweens.add({
-        targets: this.visual,
-        scaleX: 0.9,
-        scaleY: 0.9,
-        duration: 80,
-        yoyo: true,
-        ease: 'Quad.easeOut',
-      });
-      this.onClick?.();
+    armTap(this.hit, {
+      onPress: () => this.visual.setScale(0.9),
+      onCancel: () => this.visual.setScale(1),
+      onTap: () => {
+        this.visual.setScale(1);
+        this.onClick?.();
+      },
+    });
+    this.hit.on('pointerover', () => {
+      if (!this.hit.getData('pressed')) this.visual.setScale(1.06);
     });
 
     scene.add.existing(this);

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# UI smoke test screenshots (npm run test:ui)
+.ui-smoke/
 *.log
 .env
 .env.*

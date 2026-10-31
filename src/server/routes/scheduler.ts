@@ -1,15 +1,17 @@
 import { Hono } from 'hono';
 import { createDailyPost } from '../core/post';
 import { refillEndlessPools } from '../core/endless';
-import { todayUtc } from '../../shared/date';
+import { dailyPuzzleDate } from '../../shared/date';
 
 export const scheduler = new Hono();
 
 // Cron task (registered in devvit.json as scheduler.tasks.daily-puzzle):
-// posts a fresh puzzle to the feed each day.
+// posts a fresh puzzle to the feed each day at the 12:00 UTC rollover.
 scheduler.post('/daily-puzzle', async (c) => {
   try {
-    const post = await createDailyPost(todayUtc());
+    // Runs at 12:00 UTC, so the puzzle date is also today's UTC calendar date.
+    // A delivery a few seconds early must not re-post the previous puzzle.
+    const post = await createDailyPost(dailyPuzzleDate(new Date(Date.now() + 5 * 60_000)));
     return c.json({ status: 'success', postId: post.id }, 200);
   } catch (error) {
     console.error(`/internal/scheduler/daily-puzzle failed: ${error}`);

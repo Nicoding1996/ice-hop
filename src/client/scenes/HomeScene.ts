@@ -12,6 +12,7 @@ import {
   measureColumn,
   stackColumn,
   PillButton,
+  useCrispText,
 } from '../art/theme';
 import { showHowToPlay } from '../howToPlay';
 import {
@@ -38,6 +39,7 @@ export class HomeScene extends Scene {
   }
 
   create(): void {
+    useCrispText(this);
     // The play HUD's speaker is a scene-local convenience; the hub returns to
     // the player's independently persisted channel choices without authorizing
     // music unless this expanded document already received a valid gesture.

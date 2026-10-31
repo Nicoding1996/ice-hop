@@ -12,6 +12,7 @@ import {
   fadeInScene,
   fadeToScene,
   makePill,
+  useCrispText,
 } from '../art/theme';
 
 const GOLD = '#ffd166';
@@ -106,6 +107,7 @@ export class MyPuzzlesScene extends Scene {
   }
 
   create(): void {
+    useCrispText(this);
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
     this.page = 0;

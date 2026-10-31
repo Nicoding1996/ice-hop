@@ -153,7 +153,7 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
       text: [
         `\uD83D\uDC27 **A community puzzle by u/${submission.creator}!**`,
         'Tap a penguin to hop it over things, drag a seal to slide. Get every penguin into the water in as few moves as you can.',
-        'Solved it? Drop your move count below \uD83D\uDC47 and upvote the puzzle if you liked it. Want to make your own? Tap **Explore Ice Hop**, then choose **Build a puzzle**.',
+        'Solved it? Drop your move count below \uD83D\uDC47 and upvote the puzzle if you liked it. Want to make your own? Tap **Full game**, then choose **Build a puzzle**.',
       ].join('\n\n'),
     });
     await comment.distinguish(true);

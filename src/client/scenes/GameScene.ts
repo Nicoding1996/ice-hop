@@ -59,7 +59,10 @@ import {
   IconButton,
   makeIconButton,
   drawSpeakerIcon,
+  armTap,
+  useCrispText,
 } from '../art/theme';
+import { slideStop } from '../../shared/game/slide';
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { consumeDailyHandoff } from '../dailyHandoff';
@@ -323,6 +326,10 @@ export class GameScene extends Scene {
   private hintUsed = false;
   private hintRequestPending = false;
   private dragState: DragState | null = null;
+  /** True once the current press turned into a seal drag (so it is not a tap). */
+  private dragMoved = false;
+  /** Whether the current press began on bare ice (tap-to-deselect on release). */
+  private emptyPress = false;
 
   private bgLayer!: Phaser.GameObjects.Container;
   private boardLayer!: Phaser.GameObjects.Container;
@@ -402,6 +409,9 @@ export class GameScene extends Scene {
   }
 
   create(): void {
+    useCrispText(this);
+    this.dragMoved = false;
+    this.emptyPress = false;
     this.cameras.main.setBackgroundColor(COLORS.bg);
     fadeInScene(this);
     this.bgLayer = this.add.container(0, 0);
@@ -416,7 +426,7 @@ export class GameScene extends Scene {
       .text(0, 0, 'Moves 0    Par 0', { fontFamily: FONT.ui, fontSize: '20px', fontStyle: '800', color: COLORS.text })
       .setOrigin(0.5);
     this.hintText = this.add
-      .text(0, 0, 'Tap a penguin to hop, drag a seal to slide.\nGet every penguin into the water.', {
+      .text(0, 0, 'Tap a penguin, then a gold dot. Drag or tap a seal.\nGet every penguin into the water.', {
         fontFamily: FONT.ui,
         fontSize: '13px',
         fontStyle: '600',
@@ -492,11 +502,21 @@ export class GameScene extends Scene {
     });
     this.uiLayer.add(this.muteButton);
 
-    // Tapping empty ice clears the current selection.
+    // Tapping empty ice clears the current selection. Like every other tap it
+    // acts on release, and only when the press also began on bare ice.
     this.input.on(
       'pointerdown',
       (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+        this.emptyPress = currentlyOver.length === 0;
+      }
+    );
+    this.input.on(
+      'pointerup',
+      (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+        const pressedEmpty = this.emptyPress;
+        this.emptyPress = false;
         if (
+          pressedEmpty &&
           !this.busy &&
           !this.won &&
           !this.dailyRecapOpen &&
@@ -509,7 +529,9 @@ export class GameScene extends Scene {
       }
     );
 
-    // Seal dragging.
+    // Seal dragging. A small threshold keeps a tap a tap: tapping a seal
+    // selects it and shows its lane stops, exactly like the feed post.
+    this.input.dragDistanceThreshold = 8;
     this.input.on('dragstart', (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.GameObject) =>
       this.onSealDragStart(obj)
     );
@@ -1087,9 +1109,18 @@ export class GameScene extends Scene {
       Phaser.Geom.Rectangle.Contains
     );
     container.on('pointerdown', () => {
-      if (this.busy || this.won || this.dailyRecapOpen || this.dragState) return;
-      this.selected = this.selected === idx ? null : idx;
-      this.renderHighlights();
+      this.dragMoved = false;
+    });
+    armTap(container, {
+      canPress: () => !this.busy && !this.won && !this.dailyRecapOpen,
+      onTap: () => {
+        // A press that became a seal drag is a move attempt, not a selection.
+        if (this.dragMoved || this.busy || this.won || this.dailyRecapOpen || this.dragState) {
+          return;
+        }
+        this.selected = this.selected === idx ? null : idx;
+        this.renderHighlights();
+      },
     });
   }
 
@@ -1110,62 +1141,109 @@ export class GameScene extends Scene {
 
     const sel = this.pieces[this.selected];
     const selCenter = this.pieceCenterPx(sel.cells);
-    const ring = this.add.circle(selCenter.x, selCenter.y, this.cell * 0.46);
-    ring.setFillStyle(0, 0);
-    ring.setStrokeStyle(3, COLORS.select);
-    this.fxLayer.add(ring);
-
     const moves = legalMoves(this.board, this.pieces).filter((m) => m.pieceIndex === this.selected);
 
     if (sel.kind === 'HOPPER') {
+      const ring = this.add.circle(selCenter.x, selCenter.y, this.cell * 0.46);
+      ring.setFillStyle(0, 0);
+      ring.setStrokeStyle(3, COLORS.select);
+      this.fxLayer.add(ring);
       for (const move of moves) {
         const center = this.pieceCenterPx(move.to);
         const dot = this.add.circle(center.x, center.y, this.cell * 0.18, COLORS.hint, 0.9);
         dot.setStrokeStyle(2, 0xffffff);
-        dot.setInteractive();
-        dot.on(
-          'pointerdown',
-          (_p: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-            event.stopPropagation();
-            this.doMove(move);
-          }
-        );
-        this.fxLayer.add(dot);
+        // The whole destination cell is the target (the dot is only the cue),
+        // so a near-miss on a phone still hops instead of clearing the choice.
+        const zone = this.add.zone(center.x, center.y, this.cell, this.cell).setInteractive();
+        armTap(zone, { onTap: () => this.doMove(move) });
+        this.fxLayer.add([dot, zone]);
       }
     } else if (sel.kind === 'SLIDER') {
-      // Seals are dragged; show arrow hints on the directions it can slide.
-      this.drawSealDragHint(sel, selCenter, moves);
+      this.drawSealLane(sel, selCenter, moves);
     }
   }
 
-  private drawSealDragHint(
+  /**
+   * A selected seal shows the same cues as the feed post: a gold outline on its
+   * exact 1x2 footprint, one lane outline spanning every reachable position,
+   * and a one-cell stop (chevron) per legal slide. Pressing a stop previews the
+   * landing footprint; releasing on it commits that slide. Dragging the seal
+   * along its lane still works too.
+   */
+  private drawSealLane(
     piece: Piece,
     center: { x: number; y: number },
     moves: readonly Move[]
   ): void {
-    const orient = piece.orient ?? 'H';
+    if (!this.board) return;
     const s = this.cell;
-    const mk = (x: number, y: number, ch: string): Phaser.GameObjects.Text =>
-      this.add
-        .text(x, y, ch, { fontFamily: FONT.ui, fontSize: `${Math.round(s * 0.4)}px`, color: COLORS.arrow })
-        .setOrigin(0.5);
+    const horizontal = (piece.orient ?? 'H') === 'H';
+    const footW = horizontal ? s * 2 : s;
+    const footH = horizontal ? s : s * 2;
+    const radius = s * 0.24;
 
-    if (orient === 'H') {
-      const canLeft = moves.some((m) => this.pieceCenterPx(m.to).x < center.x - 1);
-      const canRight = moves.some((m) => this.pieceCenterPx(m.to).x > center.x + 1);
-      if (canLeft) this.fxLayer.add(mk(center.x - s, center.y, '\u25C0'));
-      if (canRight) this.fxLayer.add(mk(center.x + s, center.y, '\u25B6'));
-    } else {
-      const canUp = moves.some((m) => this.pieceCenterPx(m.to).y < center.y - 1);
-      const canDown = moves.some((m) => this.pieceCenterPx(m.to).y > center.y + 1);
-      if (canUp) this.fxLayer.add(mk(center.x, center.y - s, '\u25B2'));
-      if (canDown) this.fxLayer.add(mk(center.x, center.y + s, '\u25BC'));
+    if (moves.length > 0) {
+      const axis = [
+        horizontal ? center.x : center.y,
+        ...moves.map((move) => {
+          const destination = this.pieceCenterPx(move.to);
+          return horizontal ? destination.x : destination.y;
+        }),
+      ];
+      const low = Math.min(...axis) - s;
+      const high = Math.max(...axis) + s;
+      const lane = this.add.graphics();
+      lane.lineStyle(3, COLORS.iceHi, 0.82);
+      if (horizontal) lane.strokeRoundedRect(low, center.y - s * 0.42, high - low, s * 0.84, s * 0.28);
+      else lane.strokeRoundedRect(center.x - s * 0.42, low, s * 0.84, high - low, s * 0.28);
+      this.fxLayer.add(lane);
+    }
+
+    const outline = this.add.graphics();
+    outline.lineStyle(3, COLORS.select, 1);
+    outline.strokeRoundedRect(center.x - footW / 2 + 3, center.y - footH / 2 + 3, footW - 6, footH - 6, radius);
+    this.fxLayer.add(outline);
+
+    for (const move of moves) {
+      const stop = slideStop(piece, move, this.board.width);
+      if (!stop) continue;
+      const at = this.cellCenter(stop.leadingCell);
+      const landing = this.pieceCenterPx(move.to);
+
+      const preview = this.add.graphics();
+      preview.fillStyle(COLORS.ice, 0.34);
+      preview.fillRoundedRect(landing.x - footW / 2 + 4, landing.y - footH / 2 + 4, footW - 8, footH - 8, radius);
+      preview.lineStyle(2, COLORS.iceHi, 0.96);
+      preview.strokeRoundedRect(landing.x - footW / 2 + 4, landing.y - footH / 2 + 4, footW - 8, footH - 8, radius);
+      preview.setVisible(false);
+
+      const dx = stop.direction === 'right' ? 1 : stop.direction === 'left' ? -1 : 0;
+      const dy = stop.direction === 'down' ? 1 : stop.direction === 'up' ? -1 : 0;
+      const k = s * 0.12;
+      const chevron = this.add.graphics();
+      chevron.lineStyle(Math.max(3, s * 0.06), COLORS.iceHi, 1);
+      chevron.beginPath();
+      chevron.moveTo(at.x - dx * k - dy * k, at.y - dy * k + dx * k);
+      chevron.lineTo(at.x + dx * k, at.y + dy * k);
+      chevron.lineTo(at.x - dx * k + dy * k, at.y - dy * k - dx * k);
+      chevron.strokePath();
+
+      const zone = this.add.zone(at.x, at.y, s, s).setInteractive();
+      armTap(zone, {
+        onPress: () => preview.setVisible(true),
+        onCancel: () => preview.setVisible(false),
+        onTap: () => this.doMove(move),
+      });
+      this.fxLayer.add([preview, chevron, zone]);
     }
   }
 
   private onSealDragStart(obj: Phaser.GameObjects.GameObject): void {
     if (!this.board || this.busy || this.won || this.dailyRecapOpen) return;
     if (obj.getData('slider') !== true) return;
+    // Phaser only reports a drag after the pointer moves past the threshold,
+    // so the release that ends it must not also count as a tap.
+    this.dragMoved = true;
     const pieceIndex: number = obj.getData('pieceIndex');
     const piece = this.pieces[pieceIndex];
     if (!piece) return;
@@ -1433,7 +1511,9 @@ export class GameScene extends Scene {
   /** When the board is unsolvable from here, point the player at Restart. */
   private showStrandedHint(): void {
     this.clearHintGraphics();
-    const msg = this.addHintCaption('No way through from here \u2014 tap \u21BA Restart');
+    // Every move can be undone by its reverse, so a position is never truly
+    // stuck; a missing hint only means the solver ran out of budget here.
+    const msg = this.addHintCaption('No hint found from here \u2014 try again or \u21BA Restart');
     this.time.delayedCall(2600, () => {
       if (msg.active) {
         this.tweens.add({ targets: msg, alpha: 0, duration: 400, onComplete: () => msg.destroy() });
@@ -2439,7 +2519,7 @@ export class GameScene extends Scene {
     const contentW = cardW - SPACE.xl * 2;
     const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
     const panel = this.add
-      .text(w / 2, h * 0.4, `Your puzzle works!\nSolvable in ${this.moves} moves`, {
+      .text(w / 2, h * 0.4, `Your puzzle works!\nYou solved it in ${this.moves} \u00B7 par ${this.testPar}`, {
         fontFamily: FONT.display,
         fontSize: '23px',
         fontStyle: '700',

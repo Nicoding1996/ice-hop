@@ -26,7 +26,7 @@ import {
 } from '../../shared/daily';
 import { verifySolvedTranscript } from '../../shared/game/replay';
 import { validateBoardStructure } from '../../shared/game/validation';
-import { todayUtc } from '../../shared/date';
+import { dailyPuzzleDate } from '../../shared/date';
 import { buildScoreComment } from '../../shared/share';
 import { computeStars } from '../../shared/scoring';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
@@ -143,7 +143,7 @@ api.get('/post-preview', async (c) => {
       }
       dailyRef = hostRef;
     } else {
-      dailyRef = await getCanonicalDailyRef(todayUtc());
+      dailyRef = await getCanonicalDailyRef(dailyPuzzleDate());
     }
 
     const puzzle = await getDailyPuzzle(dailyRef);
@@ -220,7 +220,7 @@ api.get('/init', async (c) => {
       }
       dailyRef = hostRef;
     } else {
-      dailyRef = await getCanonicalDailyRef(todayUtc());
+      dailyRef = await getCanonicalDailyRef(dailyPuzzleDate());
     }
 
     const puzzle = await getDailyPuzzle(dailyRef);
@@ -431,7 +431,7 @@ api.post('/comment-score', async (c) => {
 api.get('/leaderboard', async (c) => {
   try {
     const requestedId =
-      c.req.query('puzzleId') ?? dailyPuzzleId(await getCanonicalDailyRef(todayUtc()));
+      c.req.query('puzzleId') ?? dailyPuzzleId(await getCanonicalDailyRef(dailyPuzzleDate()));
     const ref = parseDailyPuzzleId(requestedId);
     if (!ref) {
       return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);

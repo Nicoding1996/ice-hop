@@ -11,6 +11,7 @@
     "launch": "npm run deploy && devvit publish",
     "login": "devvit login",
     "test": "vitest run",
+    "test:ui": "vite build && tsx tools/ui-smoke/run.ts",
     "type-check": "tsc --build"
   },
   "engines": {

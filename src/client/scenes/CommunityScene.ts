@@ -9,6 +9,7 @@ import {
   fadeInScene,
   fadeToScene,
   makePill,
+  useCrispText,
 } from '../art/theme';
 
 const TEXT = '#eaf6fb';
@@ -27,6 +28,7 @@ export class CommunityScene extends Scene {
   }
 
   create(): void {
+    useCrispText(this);
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
     this.bgLayer = this.add.container(0, 0);
@@ -75,7 +77,7 @@ export class CommunityScene extends Scene {
     } catch (error) {
       console.error(error);
       status.setText('Could not load community puzzles.');
-      this.showEmptyState();
+      this.showErrorState(status);
     }
   }
 
@@ -101,6 +103,32 @@ export class CommunityScene extends Scene {
       x: w / 2,
       y: h * 0.69,
       onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
+    });
+  }
+
+  /** A failed load is never a dead end: retry in place or head back to the hub. */
+  private showErrorState(status: Phaser.GameObjects.Text): void {
+    const w = this.scale.width;
+    const h = this.scale.height;
+    const retry = makePill(this, {
+      label: 'Try again',
+      variant: 'primary',
+      x: w / 2,
+      y: h * 0.58,
+      onClick: () => {
+        retry.destroy();
+        menu.destroy();
+        status.setText('Loading community puzzles\u2026');
+        void this.loadAndStart(status);
+      },
+    });
+    const menu = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      x: w / 2,
+      y: h * 0.69,
+      onClick: () => fadeToScene(this, 'HomeScene'),
     });
   }
 }

@@ -21,9 +21,14 @@ and open water holes.
   **jumping in a straight line** over one or more pieces sitting next to it,
   landing on the first empty square beyond them. It can't shuffle into an empty
   square next door; it has to jump something.
-- **Seals.** Drag a seal along its lane to slide it any distance. Seals can't jump
+- **Seals.** Drag a seal along its lane to slide it any distance, or tap it and
+  then tap where it should stop. Seals can't jump
   and **won't slide into the water** (they'd fall in), so you'll often slide a
   seal out of the way to open a path, or use it as a stepping stone to hop over.
+
+The controls are the same in the feed post and the full game. Tap a penguin,
+then tap its destination square (marked with a gold dot). Every tap acts when
+you lift your finger, so sliding off a button cancels a mis-tap.
 - **Ice rocks.** They never move. Pure obstacles to hop over and slide around.
 - **Water holes.** The goal. **The puzzle is solved when every penguin is sitting
   in a hole.** There are always exactly as many holes as penguins, so "everyone
@@ -127,7 +132,7 @@ stream varied and gives every creator a fair shot.
 ## Tech stack
 
 - **[Devvit Web](https://developers.reddit.com/docs)** (`devvit` / `@devvit/web`
-  `0.12.24`) - runs the app inside a Reddit post.
+  `0.15.1`) - runs the app inside a Reddit post.
 - **[Phaser](https://phaser.io) 4** - powers the expanded `game.html` app; the
   playable feed board is a separate Phaser-free DOM/SVG surface.
 - **[Hono](https://hono.dev) 4** - the serverless API on Devvit's Node runtime.
@@ -188,6 +193,7 @@ Other scripts:
 ```sh
 npm run type-check   # tsc --build
 npm run test         # vitest run (engine, scoring, share, validation)
+npm run test:ui      # build + phone-sized UI smoke test (needs Chrome or Edge)
 npm run build        # vite build
 npm run deploy       # type-check + devvit upload
 npm run launch       # deploy + devvit publish
@@ -224,7 +230,10 @@ record; commit history alone is not sufficient.
 ### How puzzle posts are created
 
 - **Daily, automatically:** `scheduler.tasks.daily-puzzle` in `devvit.json` posts
-  a fresh puzzle every day at 12:00 UTC (`0 12 * * *`).
+  a fresh puzzle every day at 12:00 UTC (`0 12 * * *`). The Daily puzzle date
+  rolls over at the same moment (`dailyPuzzleDate` in `src/shared/date.ts`), so
+  "Play today's puzzle" in the menu is always the newest post and its thread.
+  Change the cron and `DAILY_ROLLOVER_UTC_HOUR` together.
 - **Daily, manually:** moderators can use **"Post today's puzzle"** at any time.
 - **Community:** each accepted creator submission is published as its own custom
   post after structural, solver, duplicate, rate-limit, and creator-proof checks.
@@ -262,13 +271,18 @@ It stays Phaser-free; Phaser remains in expanded `game.html` only.
   and available height while retaining the HUD, footer, and touch targets. Do not
   restore short-height `height: auto` or unconstrained grid-row overrides that
   collapse size-container rows.
-- Inline seals are feed-safe across input modes on both Daily and Community:
-  touch selects visible one-cell lane stops, pressing or focusing a stop previews
-  the exact 1x2 landing footprint, and activating it commits one canonical move.
-  Keyboard uses the same labelled buttons; mouse and pen may also drag toward a
-  legal stop. Cancellation, lost capture, or leaving the iframe returns the seal
-  to its origin without recording a move, while native touch panning remains
-  available to Reddit's feed.
+- Inline seals work like the full game on both Daily and Community: drag a seal
+  along its lane, or tap it to show its one-cell lane stops (pressing or focusing
+  a stop previews the exact 1x2 landing footprint) and tap a stop. Keyboard uses
+  the same labelled buttons. Touch drags stay feed-safe: a horizontal seal uses
+  `touch-action: pan-y`, so up/down swipes still scroll Reddit, and a vertical
+  seal, whose drag axis is the scroll axis, captures touch only after a tap
+  selects it. Cancellation, lost capture, or leaving the iframe returns the seal
+  to its origin without recording a move.
+- No feed state scrolls inside the post (`.inline-stage` is `overflow: hidden`).
+  Result cards fit by design, and `npm run test:ui` checks that at several card
+  sizes. The header leads with difficulty and uses icon SFX/Music toggles so the
+  difficulty and creator credit stay visible.
 - Inline SFX and Music controls are independent, persisted, grouped for assistive
   technology, and remain at least 44px tall. A legal move—not a feed tap—starts
   enabled music and its move cue; water landings add a splash, and the win cue is
@@ -285,7 +299,7 @@ confirmed upload.
 ## Community and progression
 
 - **Start anywhere:** Daily and Community posts are directly playable in the feed.
-  Use **Open full game** for the expanded hub, Endless, Build, My Puzzles, and the
+  Use **Full game** for the expanded hub, Endless, Build, My Puzzles, and the
   Community stream. Wins always route to a useful next action.
 - **Return tomorrow:** the daily, streak, daily leaderboard, weekly difficulty
   ramp, and subreddit flair provide a shared recurring challenge.
@@ -310,6 +324,29 @@ confirmed upload.
 
 The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
 source/package hardening milestone that preceded those later platform builds.
+
+### Unreleased
+
+Touch, fit, and generation fixes from a phone-sized audit.
+
+- One set of controls on both surfaces. Seals slide by drag or by tap-then-stop
+  in the feed post and the full game. The full game's seal tap used to do
+  nothing. The feed now also supports touch dragging within Reddit's
+  scroll rules. A hop accepts a tap anywhere in its destination cell instead of
+  only on a 26px dot, and every button acts on release.
+- Feed result cards fit a tall post without inner scrolling: the old card cut off
+  "Play again" and relied on an inner scroller that Reddit's scroll-trap rules
+  reject. The header now leads with difficulty and creator credit and uses icon
+  audio toggles.
+- Sharper full-game text on high-DPI phones, and seal art that stays inside its
+  1x2 footprint.
+- The Daily puzzle date rolls over at 12:00 UTC to match the post, so the menu's
+  "today" is always the newest post instead of an unposted puzzle for 12 hours.
+- Endless Easy no longer falls back to one fixed board for roughly 1 in 7
+  pool-empty requests, static fallbacks are varied and never pooled, pooled
+  entries are validated, and refill runs have a time budget.
+- Copy fixes (Endless banner, Test win, feed instructions), a Retry on Community
+  load errors, and a new `npm run test:ui` phone smoke test.
 
 ### 0.0.25 - 2026-08-16
 

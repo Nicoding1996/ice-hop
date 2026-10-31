@@ -106,19 +106,57 @@
             id="inline-sound-button"
             type="button"
             aria-pressed="true"
+            aria-label="Sound effects on"
           >
-            SFX on
+            <svg class="inline-audio-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3.5 9.2v5.6h3.8l4.9 4V5.2l-4.9 4H3.5z" fill="currentColor" />
+              <path
+                class="inline-audio-on"
+                d="M15.6 9a4.2 4.2 0 0 1 0 6M18.2 6.6a7.6 7.6 0 0 1 0 10.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+              <path
+                class="inline-audio-off"
+                d="M15.5 9.5l5 5M20.5 9.5l-5 5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
           </button>
           <button
             class="inline-audio-toggle"
             id="inline-music-button"
             type="button"
             aria-pressed="true"
+            aria-label="Music on"
           >
-            Music on
+            <svg class="inline-audio-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M9 17.5V6.3l10-2.1v11.3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linejoin="round"
+              />
+              <circle cx="6.6" cy="17.6" r="2.6" fill="currentColor" />
+              <circle cx="16.6" cy="15.6" r="2.6" fill="currentColor" />
+              <path
+                class="inline-audio-off"
+                d="M3.5 3.5l17 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+              />
+            </svg>
           </button>
           <button class="inline-top-open" id="inline-open-button" type="button">
-            Open full game
+            Full game
           </button>
         </div>
       </header>

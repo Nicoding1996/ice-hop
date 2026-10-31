@@ -21,6 +21,7 @@ import {
   makePill,
   makeBadge,
   makePanel,
+  useCrispText,
 } from '../art/theme';
 
 type TierInfo = { tier: EndlessTier; label: string; blurb: string };
@@ -59,6 +60,7 @@ export class EndlessScene extends Scene {
   }
 
   create(): void {
+    useCrispText(this);
     const generation = ++this.loadGeneration;
     this.solvedLoaded = false;
     this.cameras.main.setBackgroundColor(PALETTE.bg);
@@ -201,7 +203,7 @@ export class EndlessScene extends Scene {
       ? 'Solved so far: \u2026'
       : this.solved > 0
         ? `Solved so far: ${this.solved}`
-        : 'Solve your first to start a streak';
+        : 'Solve one to start your count';
     const banner = makeBadge(this, bannerLabel, 'gold', 'md');
     banner.setPosition(cx, h * 0.33);
 

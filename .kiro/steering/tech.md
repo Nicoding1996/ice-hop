@@ -5,9 +5,11 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 ## Versions / runtime
 
 - Node >= 22.12.0, ES modules (`"type": "module"`).
-- `devvit`, `@devvit/web`, `@devvit/start`: 0.12.24
+- `devvit`, `@devvit/web`, `@devvit/start`: 0.15.1 (keep all three on the same
+  version)
 - `hono` 4.x + `@hono/node-server`; `phaser` 4.1.0
-- Build: Vite with the `@devvit/start/vite` plugin. TypeScript project references.
+- Build: Vite 7.3.7 with the `@devvit/start/vite` plugin (`@devvit/start` 0.15.1
+  needs `vite >= 7.3.5`). TypeScript project references.
 
 ## Two execution contexts
 
@@ -111,7 +113,11 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 - Scheduled jobs: `scheduler.tasks` in devvit.json, each a `cron` expression
   pointing at an `/internal/scheduler/...` endpoint - the daily puzzle post and
   an every-5-minutes endless pool refill (the scheduler resolves ~once a minute;
-  up to 10 recurring tasks per install).
+  up to 10 recurring tasks per install). The Daily puzzle date rolls over at
+  12:00 UTC (`dailyPuzzleDate` / `DAILY_ROLLOVER_UTC_HOUR` in `src/shared/date.ts`),
+  matching the `0 12 * * *` post cron, so the hub's "today" is always the newest
+  Daily post. Change both together. Telemetry and rate limits keep UTC days.
+  Endless refill runs have a wall-clock budget (`refillEndlessPools`).
 
 ## devvit.json (config, schema v1)
 
@@ -137,6 +143,10 @@ upload.
 - `npm run build`      -> `vite build`
 - `npm run type-check` -> `tsc --build`
 - `npm run test`       -> `vitest run` (all tests); `npm run test -- <file>` for one
+- `npm run test:ui`    -> build + phone-sized UI smoke test (`tools/ui-smoke/`):
+  headless Chrome/Edge with touch emulation against a mock API; plays Daily and
+  Community to a replay-verified win, checks feed cards never need inner
+  scrolling, and fails on page exceptions. Needs Chrome/Edge (`CHROME_PATH`).
 - `npm run deploy`     -> type-check + `devvit upload`
 - `npm run launch`     -> deploy + `devvit publish`
 

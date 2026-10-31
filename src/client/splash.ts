@@ -23,7 +23,7 @@ import type {
   UgcSplashSnapshotV2,
 } from '../shared/api';
 import { POST_DATA_SPLASH_KEY } from '../shared/api';
-import { todayUtc } from '../shared/date';
+import { dailyPuzzleDate } from '../shared/date';
 import { isDailyDate, parseDailyPuzzleId } from '../shared/daily';
 import type { Board, Piece } from '../shared/game/types';
 import { MAX_REPLAY_MOVES } from '../shared/game/replay';
@@ -52,12 +52,14 @@ const updateAudioButton = (
   if (!button) return;
   const state = on ? 'on' : 'off';
   const fullLabel = label === 'SFX' ? 'Sound effects' : 'Music';
-  button.textContent = `${label} ${state}`;
+  // Icon buttons (speaker / note): aria-pressed drives the on/off glyph in CSS,
+  // and the accessible name and hover title carry the words.
   button.setAttribute('aria-pressed', on ? 'true' : 'false');
   button.setAttribute(
     'aria-label',
     `${fullLabel} ${state}. ${on ? `Turn ${fullLabel.toLowerCase()} off` : `Turn ${fullLabel.toLowerCase()} on`}`
   );
+  button.title = `${fullLabel} ${state}`;
 };
 
 const refreshAudioControls = (): void => {
@@ -536,7 +538,7 @@ const sealArt = (x: number, y: number, s: number, vertical: boolean): string => 
   const whisker = (dy: number, rad: number): string => {
     const wx = x + 0.95 * s;
     const wy = y + dy;
-    return `<rect x="${n(wx)}" y="${n(wy - wh / 2)}" width="${n(0.22 * s)}" height="${n(wh)}" fill="${C.sealOut}" transform="rotate(${n((rad * 180) / Math.PI)} ${n(wx)} ${n(wy)})" />`;
+    return `<rect x="${n(wx)}" y="${n(wy - wh / 2)}" width="${n(0.16 * s)}" height="${n(wh)}" fill="${C.sealOut}" transform="rotate(${n((rad * 180) / Math.PI)} ${n(wx)} ${n(wy)})" />`;
   };
   const art =
     ell(x - 0.64 * s, y - 0.13 * s, 0.17 * s, 0.1 * s, C.seal, { stroke: C.sealOut, sw: fsw, rot: 0.55 }) +
@@ -553,7 +555,11 @@ const sealArt = (x: number, y: number, s: number, vertical: boolean): string => 
     cir(x + 0.76 * s, y - 0.28 * s, 0.02 * s, C.eyeWhite) +
     whisker(-0.06 * s, -0.12) +
     whisker(-0.03 * s, 0);
-  return vertical ? `<g transform="rotate(90 ${n(x)} ${n(y)})">${art}</g>` : art;
+  // Same fit as theme.ts drawSealInto (SEAL_ART_SCALE / SEAL_ART_SHIFT): 92%
+  // size, nudged 0.1 cell toward the tail, so the seal stays inside its 1x2
+  // footprint instead of spilling into the next cell or past the board edge.
+  const fitted = `<g transform="translate(${n(x - 0.1 * s)} ${n(y)}) scale(0.92) translate(${n(-x)} ${n(-y)})">${art}</g>`;
+  return vertical ? `<g transform="rotate(90 ${n(x)} ${n(y)})">${fitted}</g>` : fitted;
 };
 
 const renderBoardPreview = (
@@ -693,7 +699,7 @@ const paintDailyMetadata = (
   difficulty: Difficulty,
   date?: string
 ): void => {
-  const isToday = date === todayUtc();
+  const isToday = date === dailyPuzzleDate();
   paintBadge(difficulty, isToday ? 'Today: ' : 'Daily: ');
   const byline = document.getElementById('byline');
   if (byline) byline.textContent = '';
