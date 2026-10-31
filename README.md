@@ -396,7 +396,7 @@ confirmed upload.
 The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
 source/package hardening milestone that preceded those later platform builds.
 
-### Unreleased
+### 0.0.28 - 2026-10-31
 
 Faster **Full game**. Timings below are the median of 9 runs in desktop Chrome
 throttled to 4x CPU and 4G, from opening the expanded view to the first frame
