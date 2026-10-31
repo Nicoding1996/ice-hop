@@ -27,6 +27,13 @@ scheduler.post('/daily-puzzle', async (c) => {
 scheduler.post('/daily-prepare', async (c) => {
   try {
     const result = await prepareUpcomingDailies();
+    // Logged only when it made something (about once a day), so
+    // `devvit logs` shows the job working without a line every 10 minutes.
+    if (result.prepared > 0) {
+      console.log(
+        `daily-prepare: made ${result.prepared}, ${result.ready} of ${result.upcoming} upcoming Dailies ready`
+      );
+    }
     return c.json({ status: 'success', ...result }, 200);
   } catch (error) {
     console.error(`/internal/scheduler/daily-prepare failed: ${error}`);
