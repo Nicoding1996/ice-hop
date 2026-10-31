@@ -193,6 +193,7 @@ src/
     inlineDaily.ts   # shared inline board controller and verification/recovery UX
     dailyHandoff.ts  # bounded Daily attempt continuation into expanded play
     game.*           # expanded Phaser view
+    expandedLaunch.ts # work started before Phaser loads: launch route, fonts, host puzzle request
     scenes/          # Boot, HomeScene, GameScene, EditorScene, CommunityScene, EndlessScene, MyPuzzlesScene
 ```
 
@@ -375,6 +376,27 @@ confirmed upload.
 
 The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
 source/package hardening milestone that preceded those later platform builds.
+
+### Unreleased
+
+Faster **Full game**. Timings below are the median of 9 runs in desktop Chrome
+throttled to 4x CPU and 4G, from opening the expanded view to the first frame
+with the board, for a returning player.
+
+- The expanded view now asks for its puzzle while Phaser is still loading and
+  starting, instead of after the play screen is built. This applies to
+  Community posts, guests, and signed-in players continuing a Daily they
+  started in the feed. A signed-in player who opens a Daily they haven't
+  started still asks once the screen is ready: that request starts their Daily
+  clock, and their time should not include engine start-up. A guest Daily went
+  from 2.27s to 1.96s with a 300 ms server, and a Community puzzle from 3.07s
+  to 2.23s with a 1 s server.
+- Text is drawn once at full resolution instead of once at 1x and again at full
+  size, and buttons no longer redraw an unchanged label. The first play screen
+  uploads 30 text images to the GPU instead of 52, and fewer after each move.
+- Phaser no longer builds its own unused audio system at startup, and the web
+  fonts start loading before Phaser does. A signed-in Daily, which gets only
+  these changes, went from 2.45s to 2.30s.
 
 ### 0.0.27 - 2026-10-31
 

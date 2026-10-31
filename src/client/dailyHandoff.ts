@@ -204,6 +204,26 @@ export const saveDailyHandoff = (input: DailyHandoffInput): boolean => {
   }
 };
 
+/**
+ * Whether this tab holds a live signed continuation for one exact post/puzzle,
+ * without consuming it. A signed handoff carries an issued play, so that
+ * player's Daily clock is already running.
+ */
+export const hasSignedDailyHandoff = (postId: string, puzzleId: string): boolean => {
+  try {
+    const raw = sessionStorage.getItem(storageKey(postId, puzzleId));
+    const handoff = raw ? parseStoredHandoff(raw) : null;
+    return (
+      handoff !== null &&
+      handoff.auth === 'signed' &&
+      handoff.postId === postId &&
+      handoff.puzzleId === puzzleId
+    );
+  } catch {
+    return false;
+  }
+};
+
 /** Remove this tab's continuation for one exact post/puzzle attempt. */
 export const clearDailyHandoff = (
   postId: string,

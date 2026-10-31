@@ -1,3 +1,6 @@
+// Keep this import first: its top-level code (launch route, font loading, and
+// the host puzzle request) must run before Phaser evaluates, not after.
+import { webFontsLoaded } from './expandedLaunch';
 import * as Phaser from 'phaser';
 import { AUTO, Game, Scale } from 'phaser';
 import { Boot } from './scenes/Boot';
@@ -39,6 +42,9 @@ const startGame = (parent: string): Game => {
     type: AUTO,
     parent,
     backgroundColor: '#0a2a43',
+    // audio.ts plays every sound through its own Web Audio context. Phaser's
+    // sound manager would only build a second, unused one during boot.
+    audio: { noAudio: true },
     scale: {
       mode: Scale.NONE,
       autoCenter: Scale.CENTER_BOTH,
@@ -93,27 +99,13 @@ const keepAwake = (game: Game): void => {
 /**
  * Wait for the web fonts (Fredoka + Nunito) to load before booting Phaser, so
  * the first frame renders in the real fonts rather than the fallback (Phaser
- * does not reflow Text when a font loads later). Capped by a short timeout so a
- * blocked/slow CDN never delays the game - it just starts on the fallback stack.
+ * does not reflow Text when a font loads later). expandedLaunch started the
+ * loads before Phaser evaluated. Capped by a short timeout so a blocked/slow CDN
+ * never delays the game - it just starts on the fallback stack.
  */
 const ensureFonts = async (): Promise<void> => {
-  if (!document.fonts?.load) return;
-  const specs = [
-    '500 1em Fredoka',
-    '600 1em Fredoka',
-    '700 1em Fredoka',
-    '400 1em Nunito',
-    '600 1em Nunito',
-    '700 1em Nunito',
-    '800 1em Nunito',
-  ];
-  const loaded = Promise.all(specs.map((s) => document.fonts.load(s))).then(() => undefined);
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2500));
-  try {
-    await Promise.race([loaded, timeout]);
-  } catch {
-    /* fall back to the system stacks declared in theme.ts FONT */
-  }
+  await Promise.race([webFontsLoaded, timeout]);
 };
 
 const dismissLaunchCoverAfterFirstRender = (game: Game): void => {

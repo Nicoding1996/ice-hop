@@ -78,6 +78,7 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
         ├── inlineDaily.ts         # shared inline controller, replay, recovery
         ├── dailyHandoff.ts        # bounded Daily attempt continuation to GameScene
         ├── game.html/.css/.ts     # expanded Phaser bootstrap
+        ├── expandedLaunch.ts      # pre-Phaser launch route, font loads, host init prefetch
         ├── audio.ts               # sound/music state and playback
         ├── telemetry.ts           # best-effort fixed-event client reporting
         ├── howToPlay.ts           # shared instructions overlay

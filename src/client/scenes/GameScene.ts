@@ -81,6 +81,7 @@ import { ACTION_BAR_GAP, actionBarSlots, playLayout, type PlayLayout } from '../
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { consumeDailyHandoff } from '../dailyHandoff';
+import { takeHostInit } from '../expandedLaunch';
 import { showHowToPlay } from '../howToPlay';
 import { showLeaderboard } from '../leaderboard';
 import { trackClientEvent } from '../telemetry';
@@ -652,7 +653,10 @@ export class GameScene extends Scene {
     }
     try {
       const url = this.forceDaily ? '/api/init?daily=1' : '/api/init';
-      const response = await this.fetchWithTimeout(url);
+      // The first host-post load adopts the request expandedLaunch started
+      // while Phaser booted (when it started one); retries fetch fresh.
+      const prefetched = this.forceDaily ? null : takeHostInit();
+      const response = await (prefetched ?? this.fetchWithTimeout(url));
       if (!this.isCurrentPlay(generation)) return;
       if (!response.ok) throw new Error(`init failed: ${response.status}`);
       const data: InitResponse = await response.json();

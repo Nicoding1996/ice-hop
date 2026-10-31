@@ -36,6 +36,15 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   opens from the hub, the Daily win screen (inside its fitted win layer), and the
   feed win card's status line via the `leaderboard` launch intent, which Boot
   routes to `HomeScene` with the host post's board open.
+- `game.ts` imports `src/client/expandedLaunch.ts` before Phaser (keep that
+  import first), so its top-level code runs while the engine still has to
+  evaluate and boot. It consumes the one-shot launch intent (Boot reads it with
+  `takeLaunchRoute`), starts the web-font loads, and for the default play route
+  requests the host post's `GET /api/init`, which `GameScene` adopts once
+  (`takeHostInit`; retries fetch fresh). That early request must never move a
+  ranked clock: it runs for Community posts, guests, and a signed Daily only
+  when this tab's inline board already saved a signed handoff. Otherwise
+  `GameScene` requests init itself once it is built.
 - The default `splash.html` entrypoint is a real Phaser-free DOM/SVG game shared
   by Daily and Community. `splash.ts` paints exact V2 boards immediately, while
   `inlineDaily.ts` owns interaction, lazy authority hydration, verification, and
@@ -49,11 +58,13 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   `Scale.NONE` at the container's CSS size times `RENDER_SCALE`
   (`devicePixelRatio`, capped at 3) and a `1/RENDER_SCALE` canvas zoom, and
   resizes the canvas itself when the container changes. Every scene calls
-  `useCrispRendering(this)` (camera zoom + DPR text) and lays out in CSS pixels
-  with `viewWidth(this)` / `viewHeight(this)`, never `scale.width/height`. Do not
-  return to Phaser's `RESIZE` mode: it sizes the backing store in CSS pixels, so
-  high-DPI phones show a stretched 1x canvas. Distances Phaser measures itself
-  (for example `input.dragDistanceThreshold`) are in canvas pixels.
+  `useCrispRendering(this)` (camera zoom + DPR text: its `add.text` passes the
+  resolution at creation, so each Text draws and uploads once) and lays out in
+  CSS pixels with `viewWidth(this)` / `viewHeight(this)`, never
+  `scale.width/height`. Do not return to Phaser's `RESIZE` mode: it sizes the
+  backing store in CSS pixels, so high-DPI phones show a stretched 1x canvas.
+  Distances Phaser measures itself (for example `input.dragDistanceThreshold`)
+  are in canvas pixels.
 - Play-screen geometry (HUD rows, board, action bar, tip) is the pure
   `src/shared/playLayout.ts`, shared with the UI smoke test so its taps land on
   the cells and buttons `GameScene` draws. Change layout there, not inline.
@@ -61,7 +72,8 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   cues are synthesized at runtime with Web Audio; the ambient soundtrack is one
   checked-in composition encoded as `ice-hop-music.ogg` and
   `ice-hop-music.mp3` under `src/client/public/` for Chromium/Android and
-  Safari/iOS decode fallback.
+  Safari/iOS decode fallback. Phaser's own sound manager is off
+  (`audio: { noAudio: true }` in `game.ts`), so no scene may use `this.sound`.
 - SFX and music have independent `localStorage` preferences and independent
   controls in the inline post and expanded hub. The expanded play HUD exposes a
   combined mute that restores the player's previous channel mix when re-enabled.

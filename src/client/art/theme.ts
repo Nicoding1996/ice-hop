@@ -571,7 +571,9 @@ export class PillButton extends Phaser.GameObjects.Container {
   private redraw(): void {
     const sz = SIZES[this.sizeKey];
     const style = VARIANTS[this.effectiveVariant()];
-    this.labelText.setColor(style.text);
+    // setColor re-renders and re-uploads the label even when the colour is
+    // unchanged, and redraw runs on every enable, width, and label change.
+    if (this.labelText.style.color !== style.text) this.labelText.setColor(style.text);
     const w = Math.max(this.minWidth, Math.ceil(this.labelText.width) + sz.padX * 2);
     const h = sz.height;
     const r = Math.min(RADIUS.button, h / 2);
@@ -689,17 +691,27 @@ const crispScenes = new WeakSet<Phaser.Scene>();
  * RENDER_SCALE from the top-left, so world units stay CSS pixels, and every
  * Text renders at the same resolution so it maps 1:1 onto canvas pixels. Call
  * at the top of every create(): the zoom is reapplied each start, and the Text
- * listener registers once per scene instance and survives restarts.
+ * hooks install once per scene instance and survive restarts.
  */
 export const useCrispRendering = (scene: Phaser.Scene): void => {
   scene.cameras.main.setOrigin(0, 0).setZoom(RENDER_SCALE);
   if (crispScenes.has(scene)) return;
   crispScenes.add(scene);
   if (RENDER_SCALE <= 1) return;
+  // A Text draws its canvas and uploads it to the GPU as soon as it is built,
+  // and again on every resolution change. Pass the resolution in at creation
+  // so each label renders once instead of once at 1x and again at full size.
+  const factory = scene.add;
+  const addText = factory.text.bind(factory);
+  factory.text = (x, y, text, style) =>
+    addText(x, y, text, { ...style, resolution: RENDER_SCALE });
+  // Fallback for Text added another way (for example `add.existing`).
   scene.events.on(
     Phaser.Scenes.Events.ADDED_TO_SCENE,
     (object: Phaser.GameObjects.GameObject) => {
-      if (object instanceof Phaser.GameObjects.Text) object.setResolution(RENDER_SCALE);
+      if (object instanceof Phaser.GameObjects.Text && object.style.resolution !== RENDER_SCALE) {
+        object.setResolution(RENDER_SCALE);
+      }
     }
   );
 };
