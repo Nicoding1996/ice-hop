@@ -68,7 +68,8 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │       ├── dailyPolicy.ts # pure weekday bands, strict rules, cascade, verified fallbacks
     │       ├── endless.ts     # tiered pool, seen lists, refill budget, stats
     │       ├── endlessPolicy.ts # pure tier shapes, bands, fallbacks, generators
-    │       ├── leaderboard.ts # sorted sets, streaks, weekly/streak/all-time boards, flair
+    │       ├── leaderboard.ts # sorted sets, streaks, weekly/streak/all-time boards
+    │       ├── flair.ts       # player user flair: text, ownership, lapsed-streak job
     │       ├── commentBoard.ts# live pinned-comment boards: queue, render, edit
     │       ├── ugc.ts         # validation, storage, voting, stream queries
     │       ├── keys.ts        # single source of truth for Redis keys
@@ -120,6 +121,9 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     name opt-out hash;
   - comment boards: one queue of boards to render, per-board pinned-comment
     targets and change counters, and the last text written to each comment;
+  - player flair: what Ice Hop last did with each player's flair (the text it
+    wrote, or released after a person changed it), an index of streak flair by
+    the streak's newest solve date, and a one-time backfill cursor;
   - UGC: submissions, vote/recent/creator indexes, board deduplication, voters,
     a verified played ledger, bounded completion candidates/materialized bests,
     a per-puzzle best-solve board, solve totals, and daily submit limits;

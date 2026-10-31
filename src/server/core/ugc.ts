@@ -7,7 +7,7 @@ import { orderCommunityStream } from '../../shared/community';
 import { validateSubmission } from '../../shared/solver/validate';
 import { todayUtc } from '../../shared/date';
 import { createUgcPost } from './post';
-import { setPlayerFlair } from './leaderboard';
+import { refreshPlayerFlair } from './flair';
 import { keys } from './keys';
 import { trackTelemetry } from './telemetry';
 
@@ -92,9 +92,9 @@ export const submitPuzzle = async (
     console.error(`Failed to create UGC feed post for ${id}: ${error}`);
   }
 
-  // Refresh the creator's flair so their "puzzles built" badge ticks up the
-  // moment they publish (best-effort; setPlayerFlair swallows its own errors).
-  await setPlayerFlair(username);
+  // Refresh the creator's flair so their "puzzles built" count ticks up the
+  // moment they publish (best-effort; refreshPlayerFlair never throws).
+  await refreshPlayerFlair(username);
   await trackTelemetry('creator:submitted');
 
   return { ok: true, id, par: validation.par };

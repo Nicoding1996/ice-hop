@@ -63,6 +63,7 @@ import {
   markEndlessSeen,
   takeEndlessPuzzle,
 } from '../core/endless';
+import { refreshPlayerFlair } from '../core/flair';
 import { keys } from '../core/keys';
 import {
   getBestDailySolve,
@@ -338,6 +339,8 @@ api.post('/solve', async (c) => {
 
     const outcome = await recordSolve(requestedRef, username, puzzle.par, moves, timeMs);
     if (outcome.firstSolve) await trackTelemetry('daily:completed:signed');
+    // Best-effort and skipped when the text is unchanged, as on a replay.
+    await refreshPlayerFlair(username);
     await attachHostCommentBoard(requestedRef);
     return c.json<SolveResultDTO>({
       accepted: true,

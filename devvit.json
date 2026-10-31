@@ -59,6 +59,20 @@
       "daily-prepare": {
         "endpoint": "/internal/scheduler/daily-prepare",
         "cron": "4,14,24,34,44,54 * * * *"
+      },
+      "player-flair": {
+        "endpoint": "/internal/scheduler/player-flair",
+        "cron": "8,18,28,38,48,58 * * * *"
+      }
+    }
+  },
+  "settings": {
+    "subreddit": {
+      "playerFlair": {
+        "type": "boolean",
+        "label": "Player flair",
+        "helpText": "Show each player's Daily streak, Dailies solved, and puzzles built as user flair. Ice Hop never replaces flair a player or moderator chose. Turning this off stops updates and leaves existing flair as it is.",
+        "defaultValue": true
       }
     }
   },

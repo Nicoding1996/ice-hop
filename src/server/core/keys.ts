@@ -76,6 +76,22 @@ export const keys = {
   /** Flag set when a user joins via the in-app Join button. */
   subscribed: (user: string): string => `subscribed:${user}`,
 
+  // --- Player flair ---
+  /**
+   * What Ice Hop last did with each player's subreddit flair: username -> JSON
+   * {shown: text} for flair it wrote, or {released: text} once a player or
+   * moderator changed or removed it. `released` holds the text last compared,
+   * so the player's flair is read again only when their progress changes.
+   */
+  playerFlair: (): string => `flair:player:1`,
+  /**
+   * Players whose Ice Hop flair shows a streak, scored by that streak's newest
+   * solve date (UTC midnight in ms), so the scheduler finds the ones that lapsed.
+   */
+  playerFlairStreaks: (): string => `flair:streak:1`,
+  /** One-time cursor that seeds the streak index from the all-time board. */
+  playerFlairBackfill: (): string => `flair:backfill:1`,
+
   // --- User-generated content ---
   ugcCounter: (): string => `ugc:counter`,
   ugcSubmission: (id: string): string => `ugc:sub:${id}`,

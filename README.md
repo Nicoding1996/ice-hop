@@ -97,8 +97,9 @@ move history.
   milestones, tier mastery, and a Hard solve exactly at par. Hinted solves stay
   available for learning but do not advance progress.
 - **Streaks.** Solve day after day to build a streak. Miss a day and it resets.
-  Your first solve each day sets a streak flair on the subreddit ("🔥 7-day
-  streak"), a public nudge to keep coming back.
+  Your subreddit flair shows the streak ("🔥 7-day streak"), a public nudge to
+  keep coming back. Without one it shows the Dailies you've solved ("🐧 45
+  Dailies solved"), and creators also get their puzzle count.
 - **Leaderboards.** Each daily puzzle is its own race, ranked by fewest moves
   with verified time as the tiebreak. The **Leaderboards** screen (from the
   menu, the Daily win screen, or the feed result's "Leaderboard ›" link) shows
@@ -184,7 +185,7 @@ src/
     commentBoard.ts  # Markdown for the live pinned-comment leaderboards
   server/   # Hono app on Devvit (Node 22)
     routes/   # /api (preview, init, hub, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
-    core/     # daily puzzle, endless pool, leaderboards + streaks, comment boards, UGC, posts, Redis keys
+    core/     # daily puzzle, endless pool, leaderboards + streaks, player flair, comment boards, UGC, posts, Redis keys
   client/   # runs in the post iframe
     audio.ts         # synthesized SFX, dual-format ambient loop, prefs + lifecycle
     leaderboard.ts   # shared Leaderboards overlay (Daily, Week, Streaks, All-time)
@@ -288,6 +289,24 @@ its rendered text changed:
   (Daily, current puzzle date only) or through the submission's post (Community).
 - Hiding your name applies to live boards: today's Daily and the Community
   puzzles you appear on. Closed Daily results keep the names they closed with.
+
+### How player flair updates
+
+A signed player's subreddit flair shows one headline plus puzzles built: a
+Daily streak of two or more days, otherwise Dailies solved, otherwise
+"🐧 Ice Hopper" (`src/server/core/flair.ts`).
+
+- A Daily solve or a published puzzle refreshes it. The text written last is
+  stored, so a solve that changes nothing, such as a replay, makes no Reddit call.
+- `scheduler.tasks.player-flair` runs every 10 minutes and rewrites the flair of
+  players whose streak lapsed at the 12:00 UTC rollover, at most 30 per run. Its
+  first runs also index streak flair written before the job existed.
+- Ice Hop writes only over an empty flair it never set, or over flair that still
+  shows Ice Hop text. If a player or moderator changes or removes it, Ice Hop
+  leaves it alone. Setting it back to any Ice Hop text, such as "🐧 Ice Hopper",
+  hands it back.
+- Moderators can switch it off with the **Player flair** app setting. Off stops
+  every update and leaves existing flair as it is.
 
 ### Playable feed-post contract
 
@@ -397,6 +416,17 @@ with the board, for a returning player.
 - Phaser no longer builds its own unused audio system at startup, and the web
   fonts start loading before Phaser does. A signed-in Daily, which gets only
   these changes, went from 2.45s to 2.30s.
+
+Player flair:
+
+- A streak flair no longer outlives the streak. A new `player-flair` job
+  rewrites it after the rollover where the streak ends, including flair set
+  before this change.
+- Without a streak, flair shows Dailies solved ("🐧 45 Dailies solved") instead
+  of "🐧 Ice Hopper", which now marks new players.
+- Ice Hop no longer replaces flair a player or moderator chose or removed.
+- Moderators can turn player flair off with the new **Player flair** setting.
+- A solve that would write the same text no longer rewrites the flair.
 
 ### 0.0.27 - 2026-10-31
 

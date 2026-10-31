@@ -182,13 +182,7 @@ const redisState = vi.hoisted(() => {
   };
 });
 
-const redditState = vi.hoisted(() => ({
-  setUserFlair: vi.fn(async () => undefined),
-}));
-
 vi.mock('@devvit/web/server', () => ({
-  context: { subredditName: 'ice_hop_dev' },
-  reddit: redditState,
   redis: redisState.redis,
 }));
 

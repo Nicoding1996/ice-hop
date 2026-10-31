@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { context, reddit, redis } from '@devvit/web/server';
+import { redis } from '@devvit/web/server';
 import type {
   LeaderboardEntry,
   LeaderboardResponse,
@@ -53,7 +53,7 @@ type SolveCandidate = SolveRecord & {
   readonly id: string;
   readonly progress: CandidateProgress;
 };
-type StreakRecord = { readonly count: number; readonly lastDate: string };
+export type StreakRecord = { readonly count: number; readonly lastDate: string };
 type DailyProgressBaseline = {
   readonly allTime: number;
   readonly streak: StreakRecord;
@@ -298,38 +298,6 @@ const getDailyProgressBaseline = async (username: string): Promise<DailyProgress
   return winner;
 };
 
-/**
- * Set the player's subreddit flair from their returning-player streak AND their
- * creator output. This is best-effort and never blocks a solve or submission.
- */
-export const setPlayerFlair = async (username: string, streak?: number): Promise<void> => {
-  try {
-    const subredditName = context.subredditName;
-    if (!subredditName || username === 'anon') return;
-
-    let days = streak;
-    if (days === undefined) {
-      const rec = parseStreak(await redis.get(keys.streak(username)));
-      days = isStreakCurrent(rec.lastDate, dailyPuzzleDate()) ? rec.count : 0;
-    }
-    const built = await redis.zCard(keys.ugcByCreator(username));
-    const base = days >= 2 ? `\uD83D\uDD25 ${days}-day streak` : '\uD83D\uDC27 Ice Hopper';
-    const maker = built > 0
-      ? ` \u00B7 \uD83E\uDDE9 ${built} ${built === 1 ? 'puzzle' : 'puzzles'}`
-      : '';
-
-    await reddit.setUserFlair({
-      subredditName,
-      username,
-      text: `${base}${maker}`,
-      backgroundColor: '#1d6f9c',
-      textColor: 'light',
-    });
-  } catch (error) {
-    console.error(`Failed to set player flair: ${error}`);
-  }
-};
-
 /** Rebuild derived progression atomically from one baseline plus date evidence. */
 const repairDailyProgress = async (username: string): Promise<StreakRecord> => {
   const progressKey = keys.dailyProgress(username);
@@ -367,7 +335,6 @@ const repairDailyProgress = async (username: string): Promise<StreakRecord> => {
     const result: unknown = await transaction.exec();
     if (!transactionCommitted(result, 3)) continue;
 
-    await setPlayerFlair(username, streak.count);
     return streak;
   }
   throw new Error('Daily progression was too busy to publish.');
@@ -577,6 +544,15 @@ export const getDailyLeaderboard = async (
   }
 
   throw new Error('Daily leaderboard was too busy to read.');
+};
+
+/** Stored streak records for many players in one read (lapsed ones included). */
+export const getStreakRecords = async (
+  usernames: readonly string[]
+): Promise<StreakRecord[]> => {
+  if (usernames.length === 0) return [];
+  const raws = await redis.mGet(usernames.map((username) => keys.streak(username)));
+  return usernames.map((_, index) => parseStreak(raws[index] ?? undefined));
 };
 
 /** A player's current Daily streak in days: 0 once it has lapsed. */

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { refreshCommentBoards } from '../core/commentBoard';
+import { refreshLapsedFlair } from '../core/flair';
 import { createDailyPost } from '../core/post';
 import { prepareUpcomingDailies } from '../core/daily';
 import { refillEndlessPools } from '../core/endless';
@@ -64,6 +65,27 @@ scheduler.post('/comment-leaderboards', async (c) => {
     return c.json({ status: 'success', ...result }, 200);
   } catch (error) {
     console.error(`/internal/scheduler/comment-leaderboards failed: ${error}`);
+    return c.json({ status: 'error' }, 400);
+  }
+});
+
+// Cron task (registered in devvit.json as scheduler.tasks.player-flair):
+// rewrites the flair of players whose Daily streak lapsed at the 12:00 UTC
+// rollover, so no flair keeps a streak the app no longer counts. Each run is
+// bounded; the next continues. Flair a player or moderator chose stays as is.
+scheduler.post('/player-flair', async (c) => {
+  try {
+    const result = await refreshLapsedFlair();
+    // Logged only when it did something, so `devvit logs` stays quiet between
+    // rollovers instead of printing a line every 10 minutes.
+    if (result.backfilled > 0 || result.written > 0) {
+      console.log(
+        `player-flair: indexed ${result.backfilled}, checked ${result.checked}, rewrote ${result.written}`
+      );
+    }
+    return c.json({ status: 'success', ...result }, 200);
+  } catch (error) {
+    console.error(`/internal/scheduler/player-flair failed: ${error}`);
     return c.json({ status: 'error' }, 400);
   }
 });

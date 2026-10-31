@@ -51,8 +51,12 @@ players, and the solver counts moves the same way.
    that a 5-minute scheduler job edits only when its text changes; a closed
    Daily freezes into "Final results". A player can hide their name on comment
    boards (shown as "Anonymous penguin"); the in-app boards keep names.
-   The first solve each day also sets a streak-based subreddit flair (e.g.
-   "🔥 7-day streak"), a public, recurring status that nudges return visits.
+   Daily solves also keep a subreddit flair: the streak from two days
+   ("🔥 7-day streak"), otherwise Dailies solved ("🐧 45 Dailies solved"),
+   plus puzzles built, a public, recurring status that nudges return visits.
+   A scheduler job rewrites a streak flair once the streak lapses, so flair
+   never claims a streak the app no longer counts. Flair a player or moderator
+   chose or removed is left alone, and moderators can turn flair off.
 3. Completion: hit par, get clean closure, anticipate tomorrow (healthier than
    time-grinding the same board).
 4. Difficulty ladder: daily bands are non-overlapping and never below par 4:

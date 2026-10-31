@@ -143,6 +143,12 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   `reddit.getCommentById(id)` then `comment.edit({ text })`, only when the
   rendered text changed (`src/server/core/commentBoard.ts`). Comment and score
   names are plain text, never `u/` mentions.
+- Player flair (`src/server/core/flair.ts`) is written as the app with
+  `reddit.setUserFlair` after a signed Daily solve or a published puzzle, only
+  when its stored last text differs, and only over an empty flair the app never
+  wrote or flair that still shows Ice Hop text. Read the current flair with
+  `reddit.getUserByUsername(name)` then `user.getUserFlairBySubreddit(sub)`:
+  `subreddit.getUserFlair({ usernames })` throws for a user with no flair entry.
 - Leaderboard routes: `GET /api/leaderboard` (`puzzleId`, `day=yesterday`, or
   `post=1`; adds par, the move distribution, per-row streaks, and the viewer's
   name opt-out), `GET /api/leaderboard/board?kind=week|streak|alltime`, and
@@ -159,10 +165,11 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   pointing at an `/internal/scheduler/...` endpoint - the daily puzzle post, an
   every-5-minutes endless pool refill, the comment-leaderboard refresh every
   5 minutes offset by two (`2,7,...,57 * * * *`) so it never shares a minute with
-  the refill, and the week-ahead Daily preparation every 10 minutes at minute 4
-  (`4,14,...,54 * * * *`, `prepareUpcomingDailies`) so it never shares a minute
-  with the other jobs (the scheduler resolves ~once a minute; up to 10 recurring
-  tasks per install). The Daily puzzle date rolls over at
+  the refill, the week-ahead Daily preparation every 10 minutes at minute 4
+  (`4,14,...,54 * * * *`, `prepareUpcomingDailies`), and the lapsed-streak flair
+  refresh every 10 minutes at minute 8 (`8,18,...,58 * * * *`,
+  `refreshLapsedFlair`), so no two jobs share a minute (the scheduler resolves
+  ~once a minute; up to 10 recurring tasks per install). The Daily puzzle date rolls over at
   12:00 UTC (`dailyPuzzleDate` / `DAILY_ROLLOVER_UTC_HOUR` in `src/shared/date.ts`),
   matching the `0 12 * * *` post cron, so the hub's "today" is always the newest
   Daily post. Change both together. Telemetry and rate limits keep UTC days.
@@ -180,7 +187,9 @@ view, `game` = `game.html` expanded Phaser view), `server` (dir/entry),
 `SUBSCRIBE_TO_SUBREDDIT` + `SUBMIT_COMMENT` that back the win-screen Join and
 Comment-my-score actions), `menu.items`, `triggers` (e.g. `onAppInstall`),
 `scheduler.tasks` (cron - the `daily-puzzle`, `endless-refill`,
-`comment-leaderboards`, and `daily-prepare` jobs), `scripts`
+`comment-leaderboards`, `daily-prepare`, and `player-flair` jobs), `settings`
+(one `subreddit` boolean, `playerFlair`, default on: moderators can stop player
+flair; read with `settings.get` from `@devvit/web/server`), `scripts`
 (`dev`: `vite build --watch`, `build`: `vite build`), and `dev.subreddit` (the
 playtest subreddit, currently `ice_hop_dev`). (No `forms` are declared today.)
 
