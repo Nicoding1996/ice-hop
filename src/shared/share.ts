@@ -1,6 +1,8 @@
 // Builds the spoiler-free, copy-to-comments result text (Wordle-style).
 // It intentionally reveals only the score/streak/rank - never the board layout
 // or the solution - so sharing never spoils the puzzle for others.
+import { escapeMarkdown } from './commentBoard';
+import { formatPuzzleDate } from './date';
 
 export type ShareData = {
   readonly date: string;
@@ -31,21 +33,33 @@ export type ScoreComment = {
   readonly stars: number;
   /** Community puzzle author, when commenting on a UGC puzzle post. */
   readonly creator?: string;
+  /** Daily puzzle date (YYYY-MM-DD), when commenting on a Daily post. */
+  readonly date?: string;
+  /** The player's current Daily streak in days. */
+  readonly streak?: number;
 };
 
 /**
  * A short, spoiler-free score line to drop into a post's comment thread (the
- * "comment section is the scoreboard" loop). Worded as moves vs par - never
- * "tries" - to match the rest of the game and invite "beat my count" replies.
+ * "comment section is the scoreboard" loop), e.g.
+ * "🐧 Daily Oct 30 · ⭐⭐⭐ 6 moves (par 6) 🎯 · 🔥 3-day streak".
+ * Worded as moves vs par to invite "beat my count" replies. Names are plain
+ * text, never "u/" mentions, so a score comment pings nobody.
  */
 export const buildScoreComment = (s: ScoreComment): string => {
   const earned = Math.max(0, Math.min(3, s.stars));
   const stars = '⭐'.repeat(earned) + '⬜'.repeat(3 - earned);
-  const what = s.creator ? `u/${s.creator}'s puzzle` : "today's puzzle";
-  const note =
-    s.moves <= s.par ? ' \u2014 par! \uD83C\uDFAF' : s.moves === s.par + 1 ? ' \u2014 one over par' : '';
-  // Penguin leads as a brand mark (matching the share grid's "Ice Hop 🐧") so it
-  // never collides with the trailing "par! 🎯", and an over-par solve ends
-  // cleanly on the stars instead of a lone, flat penguin.
-  return `\uD83D\uDC27 Solved ${what} in ${s.moves} moves (par ${s.par}) ${stars}${note}`;
+  const what = s.creator
+    ? `${escapeMarkdown(s.creator)}'s puzzle`
+    : s.date
+      ? `Daily ${formatPuzzleDate(s.date)}`
+      : "Today's puzzle";
+  const moves = `${s.moves} ${s.moves === 1 ? 'move' : 'moves'}`;
+  const parts = [
+    `\uD83D\uDC27 ${what}`,
+    `${stars} ${moves} (par ${s.par})${s.moves <= s.par ? ' \uD83C\uDFAF' : ''}`,
+  ];
+  const streak = s.streak ?? 0;
+  if (!s.creator && streak >= 2) parts.push(`\uD83D\uDD25 ${streak}-day streak`);
+  return parts.join(' \u00B7 ');
 };

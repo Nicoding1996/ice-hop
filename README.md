@@ -99,12 +99,23 @@ move history.
 - **Streaks.** Solve day after day to build a streak. Miss a day and it resets.
   Your first solve each day sets a streak flair on the subreddit ("🔥 7-day
   streak"), a public nudge to keep coming back.
-- **Leaderboards.** A fresh daily race ranked by fewest moves, then trusted time.
-- **A built-in comment hub.** Every daily post auto-seeds a pinned how-to-play
-  comment that invites players to drop their scores, so the comment section
-  becomes part of the game instead of an afterthought.
+- **Leaderboards.** Each daily puzzle is its own race, ranked by fewest moves
+  with verified time as the tiebreak. The **Leaderboards** screen (from the
+  menu, the Daily win screen, or the feed result's "Leaderboard ›" link) shows
+  today's or yesterday's board with a move-count chart and streak flames, plus
+  this week's stars (Monday to Sunday, reset at Monday's 12:00 UTC rollover),
+  current streaks, and all-time days solved.
+- **A live comment leaderboard.** Every puzzle post's pinned comment shows a live
+  top 10 that updates every few minutes: moves, times, how many players hit par,
+  and a move-count chart. When the day's puzzle closes it freezes into
+  **Final results**, and the next day's board names yesterday's winner. Names
+  are plain text (no "u/" pings), and any player can hide their name on comment
+  boards from the Leaderboards screen.
 - **Shareable result.** Copy a spoiler-free emoji summary of your solve (par,
-  moves, streak) straight into the comments to compare without spoiling the board.
+  moves, streak) straight into the comments to compare without spoiling the board,
+  or tap **Comment my score** to post a line like
+  "🐧 Daily Oct 30 · ⭐⭐⭐ 6 moves (par 6) 🎯 · 🔥 3-day streak" under the
+  pinned leaderboard.
 - **Build your own + a community stream.** Make your own puzzle in the editor;
   the solver checks that it is structurally valid and solvable, and Submit stays
   locked until you personally solve that exact board in Test mode. Accepted
@@ -166,11 +177,14 @@ src/
     game/     # board, legal moves, apply-move + win detection, types
     solver/   # BFS solver (par), puzzle generator, difficulty, UGC validation
     scoring.ts share.ts date.ts api.ts
+    leaderboard.ts   # distributions, ranks, durations, leaderboard response parsers
+    commentBoard.ts  # Markdown for the live pinned-comment leaderboards
   server/   # Hono app on Devvit (Node 22)
     routes/   # /api (preview, init, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
-    core/     # daily puzzle, endless pool, leaderboard + streaks, UGC, post creation, Redis keys
+    core/     # daily puzzle, endless pool, leaderboards + streaks, comment boards, UGC, posts, Redis keys
   client/   # runs in the post iframe
     audio.ts         # synthesized SFX, dual-format ambient loop, prefs + lifecycle
+    leaderboard.ts   # shared Leaderboards overlay (Daily, Week, Streaks, All-time)
     public/          # checked-in OGG/MP3 soundtrack encodes copied into the build
     splash.*         # lightweight Phaser-free playable Daily/Community feed surface
     inlineDaily.ts   # shared inline board controller and verification/recovery UX
@@ -248,6 +262,22 @@ record; commit history alone is not sufficient.
 - **Community:** each accepted creator submission is published as its own custom
   post after structural, solver, duplicate, rate-limit, and creator-proof checks.
 
+### How the pinned comment leaderboards update
+
+Every new post seeds its distinguished, app-authored comment with the board
+already rendered. `scheduler.tasks.comment-leaderboards` runs every five minutes
+(offset two minutes from the Endless refill) and edits a pinned comment only when
+its rendered text changed:
+
+- Today's Daily board re-renders every run. The first run after the 12:00 UTC
+  rollover renders the previous Daily once more as frozen **Final results** and
+  stops updating it; later solves of that puzzle still count in the app.
+- A Community board re-renders after a signed, non-creator solve improves it.
+- Posts published before live boards attach on their first verified solve
+  (Daily, current puzzle date only) or through the submission's post (Community).
+- Hiding your name applies to live boards: today's Daily and the Community
+  puzzles you appear on. Closed Daily results keep the names they closed with.
+
 ### Playable feed-post contract
 
 Daily and Community custom posts share the lightweight default entrypoint: a real
@@ -319,8 +349,9 @@ confirmed upload.
 - **Create for other players:** Community submissions are solver-validated,
   de-duplicated, rate-limited, and require a legal creator solve of the exact
   submitted board. My Puzzles reports live solves and votes afterward.
-- **Use the thread:** every puzzle post seeds a pinned prompt, spoiler-free results
-  are shareable, and signed-in players can post a verified score beneath it.
+- **Use the thread:** every puzzle post pins a live leaderboard comment,
+  spoiler-free results are shareable, and signed-in players can post a verified
+  score beneath it.
 - **Protect progress:** server-side transcript replay verifies Daily, Endless, and
   Community completions. Daily and Community guest solves may still be verified,
   but guest progression is never durable or migrated after sign-in.
@@ -373,6 +404,24 @@ Game feel and play, on both the feed post and the full game:
   selected while it can keep hopping, and a three-lesson Practice tutorial.
 - Fixed the full game's Moves/Par readout staying hidden after "Play today's
   again" on the solved-Daily recap.
+
+Leaderboards and the comment leaderboard:
+
+- The pinned comment on every Daily and Community post is now a live leaderboard
+  (top 10, par rate, move-count chart, yesterday's winner) that a new
+  every-5-minutes scheduler job edits only when it changes. A closed Daily
+  freezes into Final results. Before this, the pinned comment was never updated.
+- A new Leaderboards screen replaces the win screen's Compare list: Daily (today
+  or yesterday, with times, streak flames, and the move chart), this week's stars,
+  current streaks, and all-time days solved. It opens from the menu, the Daily
+  win screen, and the feed result's status line. The all-time count (`lb:all`)
+  was stored before but never shown.
+- Players can hide their name on comment boards. Names in comments are plain
+  text, so updates never ping anyone.
+- "Comment my score" posts the puzzle date and streak:
+  "🐧 Daily Oct 30 · ⭐⭐⭐ 6 moves (par 6) 🎯 · 🔥 3-day streak". Community
+  score comments no longer mention the creator.
+- Leaderboard reads never claim or generate a Daily for a request-supplied id.
 
 ### 0.0.25 - 2026-08-16
 

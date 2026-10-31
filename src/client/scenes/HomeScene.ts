@@ -15,6 +15,7 @@ import {
   useCrispText,
 } from '../art/theme';
 import { showHowToPlay } from '../howToPlay';
+import { showLeaderboard } from '../leaderboard';
 import {
   isSoundOn,
   setSoundOn,
@@ -33,13 +34,19 @@ export class HomeScene extends Scene {
   private content: Phaser.GameObjects.GameObject[] = [];
   /** The "How to play" overlay, when open (so we can close it on rebuild). */
   private rules?: Phaser.GameObjects.Container;
+  /** The leaderboard overlay, when open (rebuilt at the new size on resize). */
+  private leaderboards?: Phaser.GameObjects.Container;
+  /** Whether the open overlay shows the host post's Daily (feed link). */
+  private leaderboardsHostPost = false;
 
   constructor() {
     super('HomeScene');
   }
 
-  create(): void {
+  create(data?: { readonly leaderboard?: boolean }): void {
     useCrispText(this);
+    this.rules = undefined;
+    this.leaderboards = undefined;
     // The play HUD's speaker is a scene-local convenience; the hub returns to
     // the player's independently persisted channel choices without authorizing
     // music unless this expanded document already received a valid gesture.
@@ -49,6 +56,9 @@ export class HomeScene extends Scene {
     this.bgLayer = this.add.container(0, 0);
     paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
     this.build();
+    // A feed win card's "Leaderboard" link opens the hub with the board for
+    // that post's Daily already showing; closing it leaves the player here.
+    if (data?.leaderboard) this.showLeaderboards(true);
     const onResize = (): void => {
       paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
       this.build();
@@ -66,6 +76,11 @@ export class HomeScene extends Scene {
     // stale (it isn't tracked in `content`).
     this.rules?.destroy();
     this.rules = undefined;
+    // An open leaderboard is rebuilt at the new size instead of dropped.
+    const reopenLeaderboards = Boolean(this.leaderboards?.active);
+    const reopenHostPost = this.leaderboardsHostPost;
+    this.leaderboards?.destroy();
+    this.leaderboards = undefined;
     const w = this.scale.width;
     const h = this.scale.height;
     const cx = w / 2;
@@ -115,19 +130,34 @@ export class HomeScene extends Scene {
       minWidth: wide,
       onClick: () => fadeToScene(this, 'EditorScene'),
     });
+    // My puzzles and Leaderboards share one row of half-width pills, so the
+    // column keeps its height on short viewports.
+    const pairGap = SPACE.sm;
+    const half = (wide - pairGap) / 2;
     const mine = makePill(this, {
       label: 'My puzzles',
       variant: 'secondary',
-      minWidth: wide,
+      minWidth: half,
       onClick: () => fadeToScene(this, 'MyPuzzlesScene'),
     });
+    const ranks = makePill(this, {
+      label: 'Leaderboards',
+      variant: 'secondary',
+      minWidth: half,
+      onClick: () => this.showLeaderboards(),
+    });
+    const pair = this.add.container(0, 0, [mine, ranks]);
+    const pairWidth = mine.width + pairGap + ranks.width;
+    mine.setX(-pairWidth / 2 + mine.width / 2);
+    ranks.setX(pairWidth / 2 - ranks.width / 2);
+    pair.setSize(pairWidth, Math.max(mine.height, ranks.height));
     const community = makePill(this, {
       label: 'Community puzzles',
       variant: 'secondary',
       minWidth: wide,
       onClick: () => fadeToScene(this, 'CommunityScene'),
     });
-    const buttons = [play, endless, build, mine, community];
+    const buttons = [play, endless, build, pair, community];
 
     // Centre the button column in the space below the tagline so the gaps read
     // evenly on both tall phones and short desktop viewports.
@@ -176,6 +206,20 @@ export class HomeScene extends Scene {
     help.setPosition(SPACE.md + help.width / 2, SPACE.md + help.height / 2);
 
     this.content.push(peng, title, tag, ...buttons, this.soundButton, this.musicButton, help);
+    if (reopenLeaderboards) this.showLeaderboards(reopenHostPost);
+  }
+
+  /** Open the shared leaderboard overlay (guarded so it can't stack). */
+  private showLeaderboards(hostPost = false): void {
+    if (this.leaderboards?.active) return;
+    this.leaderboardsHostPost = hostPost;
+    this.leaderboards = showLeaderboard(this, {
+      tab: 'daily',
+      hostPost,
+      onClose: () => {
+        this.leaderboards = undefined;
+      },
+    });
   }
 
   private toggleSound(): void {

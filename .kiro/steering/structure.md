@@ -41,16 +41,18 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   ├── daily.ts          # immutable Daily puzzle identities/migration parser
     │   ├── community.ts      # stream ordering and creator totals
     │   ├── scoring.ts        # stars and leaderboard score encoding
+    │   ├── leaderboard.ts    # distributions, ranks, durations, response parsers
+    │   ├── commentBoard.ts   # live pinned-comment leaderboard Markdown
     │   ├── share.ts          # spoiler-free share/comment copy
-    │   └── date.ts           # UTC date and deterministic seed helpers
+    │   └── date.ts           # UTC/puzzle dates, weeks, labels, seed helpers
     ├── server/
     │   ├── index.ts          # Hono entry; mounts /api and /internal
     │   ├── routes/
-    │   │   ├── api.ts        # post preview/init, Daily replay, social actions, telemetry
+    │   │   ├── api.ts        # post preview/init, Daily replay, leaderboards, social actions, telemetry
     │   │   ├── ugc.ts        # submit/list/mine/vote/Community replay routes
     │   │   ├── menu.ts       # moderator menu endpoints
     │   │   ├── triggers.ts   # install warm-up/first post
-    │   │   └── scheduler.ts  # daily post and Endless refill jobs
+    │   │   └── scheduler.ts  # daily post, Endless refill, comment-leaderboard jobs
     │   └── core/
     │       ├── completion.ts  # issue records and authoritative transcript verification
     │       ├── achievements.ts# Redis first-unlock persistence
@@ -60,7 +62,8 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │       ├── dailyPolicy.ts # pure weekday bands and verified fallbacks
     │       ├── endless.ts     # tiered pool, refill budget, stats
     │       ├── endlessPolicy.ts # pure tier shapes, bands, fallbacks, generators
-    │       ├── leaderboard.ts # sorted sets, streaks, flair
+    │       ├── leaderboard.ts # sorted sets, streaks, weekly/streak/all-time boards, flair
+    │       ├── commentBoard.ts# live pinned-comment boards: queue, render, edit
     │       ├── ugc.ts         # validation, storage, voting, stream queries
     │       ├── keys.ts        # single source of truth for Redis keys
     │       └── __tests__/     # pure server policy tests
@@ -72,6 +75,7 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
         ├── audio.ts               # sound/music state and playback
         ├── telemetry.ts           # best-effort fixed-event client reporting
         ├── howToPlay.ts           # shared instructions overlay
+        ├── leaderboard.ts         # shared Leaderboards overlay (hub, win, feed link)
         ├── art/theme.ts           # palette, vector art, transitions, win FX
         └── scenes/
             ├── Boot.ts
@@ -102,9 +106,15 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     user-bound play issues, a migration baseline plus permanent per-user date
     ledger, bounded per-puzzle score candidates/materialized bests, leaderboards,
     streaks, and score-comment claims;
+  - cross-puzzle boards: expiring weekly star totals keyed by the Monday puzzle
+    date, a streak board whose rows mirror each streak record (lapsed rows are
+    filtered and removed on read), the all-time `lb:all`, and the comment-board
+    name opt-out hash;
+  - comment boards: one queue of boards to render, per-board pinned-comment
+    targets and change counters, and the last text written to each comment;
   - UGC: submissions, vote/recent/creator indexes, board deduplication, voters,
     a verified played ledger, bounded completion candidates/materialized bests,
-    solve totals, and daily submit limits;
+    a per-puzzle best-solve board, solve totals, and daily submit limits;
   - Endless: migration baselines, permanent per-tier completion ledgers, atomic
     hint/completion resolution claims, Hard-at-par, awards, user-bound issues,
     and versioned per-tier pools/sequences;

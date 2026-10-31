@@ -30,7 +30,11 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   `CommunityScene` (loads the stream and hands off to GameScene), `EndlessScene`
   (Easy/Medium/Hard tier select), and `MyPuzzlesScene` (creator dashboard). The
   shared "How to play" overlay (`src/client/howToPlay.ts`) opens from the hub and
-  expanded play screen.
+  expanded play screen. The shared Leaderboards overlay
+  (`src/client/leaderboard.ts`: Daily today/yesterday, Week, Streaks, All-time)
+  opens from the hub, the Daily win screen (inside its fitted win layer), and the
+  feed win card's status line via the `leaderboard` launch intent, which Boot
+  routes to `HomeScene` with the host post's board open.
 - The default `splash.html` entrypoint is a real Phaser-free DOM/SVG game shared
   by Daily and Community. `splash.ts` paints exact V2 boards immediately, while
   `inlineDaily.ts` owns interaction, lazy authority hydration, verification, and
@@ -105,15 +109,29 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   scopes declared in devvit.json: `reddit.subscribeToCurrentSubreddit()` (the
   win-screen "Join" -> `/api/subscribe`) and `reddit.submitComment({ ..., runAs:
   'USER' })` (the win-screen "Comment my score" -> `/api/comment-score`). The
-  pinned daily/community how-to comments are seeded as the app and distinguished.
+  pinned daily/community comments are seeded as the app and distinguished, and
+  double as live leaderboards: the app edits them with
+  `reddit.getCommentById(id)` then `comment.edit({ text })`, only when the
+  rendered text changed (`src/server/core/commentBoard.ts`). Comment and score
+  names are plain text, never `u/` mentions.
+- Leaderboard routes: `GET /api/leaderboard` (`puzzleId`, `day=yesterday`, or
+  `post=1`; adds par, the move distribution, per-row streaks, and the viewer's
+  name opt-out), `GET /api/leaderboard/board?kind=week|streak|alltime`, and
+  `POST /api/leaderboard/visibility {hidden}`. Leaderboard reads use the
+  read-only `findCanonicalDailyRef` / `findDailyPuzzle`, so a request-supplied
+  id can never claim or generate a Daily.
 - Persistence: `redis` (get/set/incrBy; hashes via hSet/hGet/hKeys/hDel/hLen for
   the endless pool; sorted sets for leaderboards via the zAdd/zRange family -
   verify exact signatures in docs at implementation time). No list ops
-  (lPush/rPop) are available in the Devvit redis client.
+  (lPush/rPop) are available in the Devvit redis client, and no ZCOUNT or
+  ZREVRANK: count members below a score with `countScoresBelow` (first member at
+  or above the boundary via `zRange(..., { by: 'score', limit })`, then `zRank`).
 - Scheduled jobs: `scheduler.tasks` in devvit.json, each a `cron` expression
-  pointing at an `/internal/scheduler/...` endpoint - the daily puzzle post and
-  an every-5-minutes endless pool refill (the scheduler resolves ~once a minute;
-  up to 10 recurring tasks per install). The Daily puzzle date rolls over at
+  pointing at an `/internal/scheduler/...` endpoint - the daily puzzle post, an
+  every-5-minutes endless pool refill, and the comment-leaderboard refresh every
+  5 minutes offset by two (`2,7,...,57 * * * *`) so it never shares a minute with
+  the refill (the scheduler resolves ~once a minute; up to 10 recurring tasks per
+  install). The Daily puzzle date rolls over at
   12:00 UTC (`dailyPuzzleDate` / `DAILY_ROLLOVER_UTC_HOUR` in `src/shared/date.ts`),
   matching the `0 12 * * *` post cron, so the hub's "today" is always the newest
   Daily post. Change both together. Telemetry and rate limits keep UTC days.
@@ -126,7 +144,8 @@ view, `game` = `game.html` expanded Phaser view), `server` (dir/entry),
 `permissions` (`redis: true`, plus `reddit.enable` with `asUser` scopes
 `SUBSCRIBE_TO_SUBREDDIT` + `SUBMIT_COMMENT` that back the win-screen Join and
 Comment-my-score actions), `menu.items`, `triggers` (e.g. `onAppInstall`),
-`scheduler.tasks` (cron - the `daily-puzzle` and `endless-refill` jobs), `scripts`
+`scheduler.tasks` (cron - the `daily-puzzle`, `endless-refill`, and
+`comment-leaderboards` jobs), `scripts`
 (`dev`: `vite build --watch`, `build`: `vite build`), and `dev.subreddit` (the
 playtest subreddit, currently `ice_hop_dev`). (No `forms` are declared today.)
 

@@ -42,7 +42,7 @@ const soundButton = soundElement instanceof HTMLButtonElement ? soundElement : n
 const musicElement = document.getElementById('inline-music-button');
 const musicButton = musicElement instanceof HTMLButtonElement ? musicElement : null;
 type ExpandedModeEvent = Parameters<typeof requestExpandedMode>[0];
-type LaunchIntent = 'play' | 'home' | 'endless';
+type LaunchIntent = 'play' | 'home' | 'endless' | 'leaderboard';
 
 const updateAudioButton = (
   button: HTMLButtonElement | null,

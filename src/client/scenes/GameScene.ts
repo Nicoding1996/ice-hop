@@ -8,7 +8,6 @@ import type {
   EndlessSolveResponse,
   EndlessTier,
   InitResponse,
-  LeaderboardEntry,
   LeaderboardResponse,
   MarkPlayedResponse,
   SolveResultDTO,
@@ -23,7 +22,6 @@ import {
   type AchievementSnapshot,
 } from '../../shared/achievements';
 import { boardSignature } from '../../shared/game/board';
-import { parseDailyPuzzleId } from '../../shared/daily';
 import { legalMoves } from '../../shared/game/moves';
 import { replayMoves } from '../../shared/game/replay';
 import { applyMove, isSolved } from '../../shared/game/rules';
@@ -78,7 +76,9 @@ import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { consumeDailyHandoff } from '../dailyHandoff';
 import { showHowToPlay } from '../howToPlay';
+import { showLeaderboard } from '../leaderboard';
 import { trackClientEvent } from '../telemetry';
+import { parseDailyLeaderboard } from '../../shared/leaderboard';
 
 type DragState = {
   pieceIndex: number;
@@ -110,166 +110,6 @@ const parseMarkPlayedResponse = (value: unknown): MarkPlayedResponse | null => {
   return saved === false && typeof reason === 'string' && reason.length > 0
     ? { ok: false, saved: false, reason }
     : null;
-};
-
-const parseLeaderboardEntry = (
-  value: unknown,
-  totalPlayers: number
-): LeaderboardEntry | null => {
-  if (!isResponseObject(value)) return null;
-  const rank = responseProperty(value, 'rank');
-  const username = responseProperty(value, 'username');
-  const moves = responseProperty(value, 'moves');
-  const timeMs = responseProperty(value, 'timeMs');
-  if (
-    typeof rank !== 'number' ||
-    !Number.isSafeInteger(rank) ||
-    rank < 1 ||
-    rank > totalPlayers ||
-    typeof username !== 'string' ||
-    username.length === 0 ||
-    typeof moves !== 'number' ||
-    !Number.isSafeInteger(moves) ||
-    moves < 1 ||
-    typeof timeMs !== 'number' ||
-    !Number.isSafeInteger(timeMs) ||
-    timeMs < 0
-  ) {
-    return null;
-  }
-  return { rank, username, moves, timeMs };
-};
-
-const parseLeaderboardEntries = (
-  value: unknown,
-  totalPlayers: number,
-  maxEntries: number
-): LeaderboardEntry[] | null => {
-  if (!Array.isArray(value) || value.length > maxEntries || value.length > totalPlayers) {
-    return null;
-  }
-  const entries: LeaderboardEntry[] = [];
-  for (const candidate of value) {
-    const entry = parseLeaderboardEntry(candidate, totalPlayers);
-    const previous = entries.at(-1);
-    if (!entry || (previous && entry.rank !== previous.rank + 1)) return null;
-    entries.push(entry);
-  }
-  return entries;
-};
-
-const entriesAreScoreOrdered = (entries: readonly LeaderboardEntry[]): boolean => {
-  for (let index = 1; index < entries.length; index++) {
-    const previous = entries[index - 1];
-    const current = entries[index];
-    if (
-      previous.moves > current.moves ||
-      (previous.moves === current.moves && previous.timeMs > current.timeMs)
-    ) {
-      return false;
-    }
-  }
-  return true;
-};
-
-const sameLeaderboardEntry = (
-  left: LeaderboardEntry,
-  right: LeaderboardEntry
-): boolean =>
-  left.rank === right.rank &&
-  left.username === right.username &&
-  left.moves === right.moves &&
-  left.timeMs === right.timeMs;
-
-const leaderboardSlicesAgree = (
-  entries: readonly LeaderboardEntry[],
-  nearbyEntries: readonly LeaderboardEntry[],
-  viewerRank: number
-): boolean => {
-  const byRank = new Map<number, LeaderboardEntry>();
-  const byUsername = new Map<string, number>();
-  for (const entry of [...entries, ...nearbyEntries]) {
-    const rankedEntry = byRank.get(entry.rank);
-    const usernameRank = byUsername.get(entry.username);
-    if (
-      (rankedEntry && !sameLeaderboardEntry(rankedEntry, entry)) ||
-      (usernameRank !== undefined && usernameRank !== entry.rank)
-    ) {
-      return false;
-    }
-    byRank.set(entry.rank, entry);
-    byUsername.set(entry.username, entry.rank);
-  }
-
-  const knownEntries = [...byRank.values()].sort((left, right) => left.rank - right.rank);
-  if (!entriesAreScoreOrdered(knownEntries)) return false;
-
-  if (!context.username) return viewerRank === 0;
-  const currentRank = byUsername.get(context.username);
-  return viewerRank === 0
-    ? currentRank === undefined
-    : currentRank === viewerRank && byRank.get(viewerRank)?.username === context.username;
-};
-
-const parseLeaderboardResponse = (
-  value: unknown,
-  expectedPuzzleId: string
-): LeaderboardResponse | undefined => {
-  if (!isResponseObject(value)) return undefined;
-  const expectedRef = parseDailyPuzzleId(expectedPuzzleId);
-  if (!expectedRef) return undefined;
-  const puzzleId = responseProperty(value, 'puzzleId');
-  const date = responseProperty(value, 'date');
-  const totalPlayers = responseProperty(value, 'totalPlayers');
-  const viewerRank = responseProperty(value, 'viewerRank');
-  if (
-    puzzleId !== expectedPuzzleId ||
-    date !== expectedRef.date ||
-    typeof totalPlayers !== 'number' ||
-    !Number.isSafeInteger(totalPlayers) ||
-    totalPlayers < 0 ||
-    typeof viewerRank !== 'number' ||
-    !Number.isSafeInteger(viewerRank) ||
-    viewerRank < 0 ||
-    viewerRank > totalPlayers
-  ) {
-    return undefined;
-  }
-
-  const entries = parseLeaderboardEntries(
-    responseProperty(value, 'entries'),
-    totalPlayers,
-    10
-  );
-  const nearbyEntries = parseLeaderboardEntries(
-    responseProperty(value, 'nearbyEntries'),
-    totalPlayers,
-    5
-  );
-  if (
-    !entries ||
-    !nearbyEntries ||
-    !entriesAreScoreOrdered(entries) ||
-    !entriesAreScoreOrdered(nearbyEntries) ||
-    !leaderboardSlicesAgree(entries, nearbyEntries, viewerRank) ||
-    entries.length !== Math.min(10, totalPlayers) ||
-    entries.some((entry, index) => entry.rank !== index + 1) ||
-    (viewerRank === 0
-      ? nearbyEntries.length !== 0
-      : nearbyEntries.length !== Math.min(5, totalPlayers) ||
-        !nearbyEntries.some((entry) => entry.rank === viewerRank))
-  ) {
-    return undefined;
-  }
-
-  return {
-    puzzleId: expectedPuzzleId,
-    date: expectedRef.date,
-    totalPlayers,
-    viewerRank,
-    entries,
-    nearbyEntries,
-  };
 };
 
 export class GameScene extends Scene {
@@ -332,6 +172,8 @@ export class GameScene extends Scene {
   private muteButton!: IconButton;
   /** The shared "How to play" overlay, when open (guards against stacking). */
   private howTo?: Phaser.GameObjects.Container;
+  /** The shared leaderboard overlay on the Daily win screen, when open. */
+  private leaderboardOverlay?: Phaser.GameObjects.Container;
   private hintLayer!: Phaser.GameObjects.Container;
   private hintStage = 0;
   private hintUsed = false;
@@ -446,6 +288,7 @@ export class GameScene extends Scene {
     this.overlayBaseHeight = 0;
     this.blockingShield = undefined;
     this.howTo = undefined;
+    this.leaderboardOverlay = undefined;
     this.loadErrorViews = [];
   }
 
@@ -2323,12 +2166,10 @@ export class GameScene extends Scene {
     // identical secondary pill (the two used to be indistinguishable).
     let leaderboardData: LeaderboardResponse | undefined;
     const compareButton = makePill(this, {
-      label: 'Compare',
+      label: 'Leaderboard',
       variant: 'chip',
       size: 'sm',
-      onClick: () => {
-        if (leaderboardData) this.showDailyLeaderboard(leaderboardData, 0);
-      },
+      onClick: () => this.openLeaderboard(leaderboardData),
     });
     compareButton.setVisible(false);
     const copyButton = makePill(this, {
@@ -2340,7 +2181,6 @@ export class GameScene extends Scene {
     });
     const revealLeaderboard = (data: LeaderboardResponse): void => {
       leaderboardData = data;
-      if (data.totalPlayers <= 3) return;
       compareButton.setVisible(true);
       const gap = SPACE.sm;
       const rowWidth = compareButton.width + gap + copyButton.width;
@@ -3333,228 +3173,24 @@ export class GameScene extends Scene {
     }
   }
 
-  private showDailyLeaderboard(data: LeaderboardResponse, requestedPage: number): void {
-    const w = this.overlayBaseWidth || this.scale.width;
-    const h = this.overlayBaseHeight || this.scale.height;
-    const rowsPerPage = h < 400 ? 2 : h < 560 ? 3 : 5;
-    type LeaderboardPage = {
-      readonly label: string;
-      readonly entries: LeaderboardResponse['entries'];
-    };
-    const pages: LeaderboardPage[] = [];
-    const addPages = (section: string, entries: LeaderboardResponse['entries']): void => {
-      for (let start = 0; start < entries.length; start += rowsPerPage) {
-        const pageEntries = entries.slice(start, start + rowsPerPage);
-        const first = pageEntries[0];
-        const last = pageEntries.at(-1);
-        if (!first || !last) continue;
-        pages.push({
-          label: `${section} \u00B7 #${first.rank}${last.rank === first.rank ? '' : `\u2013#${last.rank}`}`,
-          entries: pageEntries,
-        });
-      }
-    };
-
-    // When the viewer is outside the first screenful, make one page-sized
-    // local window the first page. Re-centre the server's five-row window for
-    // short viewports so the page labelled "Around you" always contains You.
-    if (data.viewerRank > rowsPerPage && data.nearbyEntries.length > 0) {
-      const viewerIndex = data.nearbyEntries.findIndex(
-        (entry) => entry.rank === data.viewerRank
-      );
-      if (viewerIndex >= 0) {
-        const maxStart = Math.max(0, data.nearbyEntries.length - rowsPerPage);
-        const aroundStart = Math.min(
-          Math.max(0, viewerIndex - Math.floor(rowsPerPage / 2)),
-          maxStart
-        );
-        const aroundEntries = data.nearbyEntries.slice(
-          aroundStart,
-          aroundStart + rowsPerPage
-        );
-        const first = aroundEntries[0];
-        const last = aroundEntries.at(-1);
-        if (first && last) {
-          pages.push({
-            label: `Around you \u00B7 #${first.rank}${last.rank === first.rank ? '' : `\u2013#${last.rank}`}`,
-            entries: aroundEntries,
-          });
-        }
-      }
-    }
-    addPages('Top solvers', data.entries);
-    if (pages.length === 0) return;
-
-    const pageIndex = Math.max(0, Math.min(requestedPage, pages.length - 1));
-    const page = pages[pageIndex];
-    const compact = h < 560;
-    const cardW = Math.min(460, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const cardLeft = w / 2 - cardW / 2;
-    const cardRight = cardLeft + cardW;
-    const cardTop = h / 2 - cardH / 2;
-    const cardBottom = cardTop + cardH;
-    const modal = this.add.container(0, 0);
-
-    const shade = this.add
-      .rectangle(w / 2, h / 2, w, h, 0x05131f, 0.86)
-      .setInteractive();
-    const panel = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-    const title = this.add
-      .text(w / 2, cardTop + SPACE.xl, "Today's leaderboard", {
-        fontFamily: FONT.display,
-        fontSize: compact ? '21px' : '26px',
-        fontStyle: '700',
-        color: COLORS.text,
-      })
-      .setOrigin(0.5, 0);
-    const summary = this.add
-      .text(
-        w / 2,
-        title.y + title.height + SPACE.xs,
-        data.viewerRank > 0
-          ? `You're #${data.viewerRank} of ${data.totalPlayers}`
-          : `${data.totalPlayers} verified ${data.totalPlayers === 1 ? 'solver' : 'solvers'}`,
-        {
-          fontFamily: FONT.ui,
-          fontSize: compact ? '12px' : '14px',
-          fontStyle: '800',
-          color: COLORS.arrow,
-        }
-      )
-      .setOrigin(0.5, 0);
-    const rule = this.add
-      .text(w / 2, summary.y + summary.height + SPACE.xs, 'Fewest moves wins \u00B7 verified time breaks ties', {
-        fontFamily: FONT.ui,
-        fontSize: compact ? '10px' : '11px',
-        fontStyle: '600',
-        color: COLORS.text,
-      })
-      .setOrigin(0.5, 0)
-      .setAlpha(0.68);
-    const pageTitle = this.add
-      .text(w / 2, rule.y + rule.height + SPACE.md, page.label, {
-        fontFamily: FONT.ui,
-        fontSize: compact ? '12px' : '13px',
-        fontStyle: '800',
-        color: COLORS.arrow,
-      })
-      .setOrigin(0.5, 0);
-    modal.add([shade, panel, title, summary, rule, pageTitle]);
-
-    const hasPager = pages.length > 1;
-    const listTop = pageTitle.y + pageTitle.height + SPACE.sm;
-    const listBottom = cardBottom - (hasPager ? 98 : 70);
-    const availableListHeight = Math.max(1, listBottom - listTop);
-    const rowHeight = Math.min(58, availableListHeight / Math.max(1, page.entries.length));
-    const renderedListHeight = rowHeight * page.entries.length;
-    const firstRowTop = listTop + (availableListHeight - renderedListHeight) / 2;
-    const rowLeft = cardLeft + SPACE.xl;
-    const rowWidth = cardW - SPACE.xl * 2;
-
-    page.entries.forEach((entry, index) => {
-      const rowTop = firstRowTop + index * rowHeight;
-      const rowY = rowTop + rowHeight / 2;
-      const isViewer = Boolean(context.username) && entry.username === context.username;
-      const background = this.add.graphics();
-      background.fillStyle(isViewer ? COLORS.gold : 0x0e2740, isViewer ? 0.16 : 0.72);
-      background.fillRoundedRect(rowLeft, rowTop + 2, rowWidth, Math.max(28, rowHeight - 4), 11);
-      if (isViewer) {
-        background.lineStyle(1.5, COLORS.gold, 0.9);
-        background.strokeRoundedRect(rowLeft, rowTop + 2, rowWidth, Math.max(28, rowHeight - 4), 11);
-      }
-      const rank = this.add
-        .text(rowLeft + SPACE.md, rowY, `#${entry.rank}`, {
-          fontFamily: FONT.ui,
-          fontSize: compact ? '12px' : '13px',
-          fontStyle: '800',
-          color: isViewer ? COLORS.arrow : COLORS.text,
-        })
-        .setOrigin(0, 0.5);
-      const usernameLimit = cardW < 320 ? 11 : cardW < 400 ? 15 : 20;
-      const displayUsername =
-        isViewer || entry.username.length <= usernameLimit
-          ? isViewer
-            ? 'You'
-            : entry.username
-          : `${entry.username.slice(0, usernameLimit - 1)}\u2026`;
-      const username = this.add
-        .text(rowLeft + 54, rowY, displayUsername, {
-          fontFamily: FONT.ui,
-          fontSize: compact ? '13px' : '15px',
-          fontStyle: isViewer ? '800' : '700',
-          color: COLORS.text,
-        })
-        .setOrigin(0, 0.5);
-      const moves = this.add
-        .text(
-          cardRight - SPACE.xl - SPACE.md,
-          rowY,
-          `${entry.moves} ${entry.moves === 1 ? 'move' : 'moves'}`,
-          {
-            fontFamily: FONT.ui,
-            fontSize: compact ? '12px' : '14px',
-            fontStyle: '800',
-            color: isViewer ? COLORS.arrow : COLORS.text,
-          }
-        )
-        .setOrigin(1, 0.5);
-      modal.add([background, rank, username, moves]);
+  /**
+   * Open the shared leaderboard overlay on this Daily. It joins the fitted win
+   * layer (base coordinates) so it scales with the win card on resize, and is
+   * added last so its backdrop blocks every win action underneath.
+   */
+  private openLeaderboard(preloaded?: LeaderboardResponse): void {
+    if (this.leaderboardOverlay?.active) return;
+    this.leaderboardOverlay = showLeaderboard(this, {
+      tab: 'daily',
+      puzzleId: this.dailyPuzzleId,
+      ...(preloaded ? { preloaded } : {}),
+      parent: this.fxLayer,
+      width: this.overlayBaseWidth || this.scale.width,
+      height: this.overlayBaseHeight || this.scale.height,
+      onClose: () => {
+        this.leaderboardOverlay = undefined;
+      },
     });
-
-    const close = makePill(this, {
-      label: 'Close',
-      variant: 'chip',
-      size: 'sm',
-      x: w / 2,
-      y: cardBottom - SPACE.xl,
-      onClick: () => modal.destroy(true),
-    });
-    modal.add(close);
-
-    if (hasPager) {
-      const pagerY = cardBottom - 70;
-      const pageCount = this.add
-        .text(w / 2, pagerY, `${pageIndex + 1} / ${pages.length}`, {
-          fontFamily: FONT.ui,
-          fontSize: '12px',
-          fontStyle: '700',
-          color: COLORS.text,
-        })
-        .setOrigin(0.5)
-        .setAlpha(0.72);
-      modal.add(pageCount);
-      if (pageIndex > 0) {
-        const previous = makePill(this, {
-          label: '\u2039 Prev',
-          variant: 'chip',
-          size: 'sm',
-          onClick: () => {
-            modal.destroy(true);
-            this.showDailyLeaderboard(data, pageIndex - 1);
-          },
-        });
-        previous.setPosition(cardLeft + SPACE.xl + previous.width / 2, pagerY);
-        modal.add(previous);
-      }
-      if (pageIndex < pages.length - 1) {
-        const next = makePill(this, {
-          label: 'Next \u203A',
-          variant: 'chip',
-          size: 'sm',
-          onClick: () => {
-            modal.destroy(true);
-            this.showDailyLeaderboard(data, pageIndex + 1);
-          },
-        });
-        next.setPosition(cardRight - SPACE.xl - next.width / 2, pagerY);
-        modal.add(next);
-      }
-    }
-
-    // Add the modal last so its interactive shade blocks every underlying win
-    // action while preserving the fitted base-coordinate system on resize.
-    this.fxLayer.add(modal);
   }
 
   private async fetchLeaderboard(): Promise<LeaderboardResponse | undefined> {
@@ -3564,7 +3200,12 @@ export class GameScene extends Scene {
       );
       if (!response.ok) return undefined;
       const value: unknown = await response.json();
-      return parseLeaderboardResponse(value, this.dailyPuzzleId);
+      return (
+        parseDailyLeaderboard(value, {
+          puzzleId: this.dailyPuzzleId,
+          ...(context.username ? { viewer: context.username } : {}),
+        }) ?? undefined
+      );
     } catch {
       return undefined;
     }

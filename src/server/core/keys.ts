@@ -43,8 +43,27 @@ export const keys = {
   dailyLeaderboard: (ref: DailyPuzzleRef): string => `lb:${dailyProgressSuffix(ref)}`,
   /** All-time progression count (one point per UTC date solved). */
   allTimeLeaderboard: (): string => `lb:all`,
+  /**
+   * Weekly board: each player's summed best Daily stars over the Monday-Sunday
+   * puzzle dates of the week starting `weekStart`. Expires after the week ends.
+   */
+  weeklyLeaderboard: (weekStart: string): string => `lb:week:1:${weekStart}`,
+  /** Streak count at each player's latest solve; lapsed rows are filtered on read. */
+  streakLeaderboard: (): string => `lb:streak:1`,
+  /** Players who hide their name on comment leaderboards (username -> '1'). */
+  leaderboardHidden: (): string => `lb:hidden:1`,
   /** A user's current streak record (JSON). */
   streak: (user: string): string => `streak:${user}`,
+
+  // --- Live pinned-comment leaderboards ---
+  /** Boards whose pinned comments the scheduler renders, scored by queue order. */
+  commentBoards: (): string => `cb:queue:1`,
+  /** Pinned comments showing one board: post id -> comment id. */
+  commentBoardTargets: (board: string): string => `cb:targets:1:${board}`,
+  /** Change counter that lets the job dequeue a board only if nothing changed. */
+  commentBoardVersion: (board: string): string => `cb:version:1:${board}`,
+  /** Last text written to a pinned comment, so unchanged boards skip the edit. */
+  commentBoardText: (commentId: string): string => `cb:text:1:${commentId}`,
   /** Users who have posted their verified score under a host post. */
   scoreComments: (postId: string): string => `commented:${postId}`,
   /** Flag set when a user joins via the in-app Join button. */
@@ -67,6 +86,8 @@ export const keys = {
   ugcSolves: (): string => `ugc:solves`,
   /** Per-puzzle users whose first solve has been reflected in the creator total. */
   ugcSolveCredits: (id: string): string => `ugc:solvecredits:1:${id}`,
+  /** Per-puzzle best signed solves: fewest moves, then earliest verified solve. */
+  ugcLeaderboard: (id: string): string => `ugc:lb:1:${id}`,
   ugcByCreator: (user: string): string => `ugc:bycreator:${user}`,
 
   // --- Endless mode ---

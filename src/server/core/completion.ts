@@ -18,6 +18,7 @@ import { validateBoardStructure } from '../../shared/game/validation';
 import { todayUtc } from '../../shared/date';
 import { solve } from '../../shared/solver/solver';
 import { syncAchievements } from './achievements';
+import { recordCommunityBoardSolve } from './commentBoard';
 import { getEndlessStats } from './endless';
 import { keys } from './keys';
 import { trackEndlessCompleted, trackTelemetry } from './telemetry';
@@ -879,6 +880,12 @@ export const completeCommunityPuzzle = async (
   } catch (error) {
     if (!(await getBestCommunityCompletion(user, id))) throw error;
     console.warn(`Community completion projection will repair on retry: ${error}`);
+  }
+
+  // Creators know their own answer, so only other players reach the board.
+  if (user !== submission.creator) {
+    const bestMoves = existing ? Math.min(existing.moves, candidate.moves) : candidate.moves;
+    await recordCommunityBoardSolve(id, user, bestMoves);
   }
 
   if (firstSolve) await trackTelemetry('community:completed');

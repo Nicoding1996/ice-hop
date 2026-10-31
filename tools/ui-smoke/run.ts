@@ -137,6 +137,16 @@ const feedScenarios = async (page: Page, server: SmokeServer): Promise<void> => 
     );
     const fit = await page.evaluate(STAGE_FIT);
     check(`${name}: win card fits without inner scrolling`, fit === 'fits', String(fit));
+    if (user !== 'guest') {
+      const link = String(
+        await page.evaluate(`document.querySelector('.inline-result-link')?.textContent ?? ''`)
+      );
+      check(
+        `${name}: the status line opens the leaderboard`,
+        link.startsWith('#7 of 42 today') && link.endsWith('Leaderboard \u203A'),
+        link
+      );
+    }
     await page.screenshot(join(OUT_DIR, `feed-daily-win-${width}x${height}-${user}.png`));
   }
 
@@ -280,6 +290,76 @@ const expandedScenario = async (page: Page, server: SmokeServer): Promise<void> 
   await page.screenshot(join(OUT_DIR, 'full-game-daily-win.png'));
 };
 
+/**
+ * Tab centres in the leaderboard overlay at 390x844 (mirrors showLeaderboard:
+ * a 366x680 card at top 82, title, then a centred row of four "sm" chips).
+ */
+const OVERLAY_TAB_Y = 157;
+const OVERLAY_TABS = { daily: 75, week: 144, streak: 221, alltime: 306 } as const;
+const OVERLAY_NAME_TOGGLE = { x: 195, y: 687 } as const;
+
+/** From the verified Daily win: Leaderboard chip -> overlay -> tabs -> name setting. */
+const winLeaderboardScenario = async (page: Page, server: SmokeServer): Promise<void> => {
+  console.log('full game daily leaderboard');
+  check(
+    'win: the leaderboard loads after a verified solve',
+    server.urls.some((url) => url.startsWith('/api/leaderboard?puzzleId='))
+  );
+  // Mirrors stackFromBottom(): More puzzles (42) and Comment my score (42)
+  // sit below the Leaderboard | Share result row of "sm" chips.
+  await page.tap(390 / 2 - 60, 694);
+  await sleep(700);
+  await page.screenshot(join(OUT_DIR, 'full-game-leaderboard.png'));
+  await page.tap(OVERLAY_TABS.week, OVERLAY_TAB_Y);
+  await sleep(900);
+  check(
+    'win: the Week tab loads this week\u2019s board',
+    server.urls.includes('/api/leaderboard/board?kind=week')
+  );
+  await page.screenshot(join(OUT_DIR, 'full-game-leaderboard-week.png'));
+  await page.tap(OVERLAY_NAME_TOGGLE.x, OVERLAY_NAME_TOGGLE.y);
+  await sleep(700);
+  check(
+    'win: the name setting saves through the visibility route',
+    server.requests.includes('/api/leaderboard/visibility')
+  );
+};
+
+/** A feed win's "Leaderboard ›" link launches the hub with the board open. */
+const hubLeaderboardScenario = async (page: Page, server: SmokeServer): Promise<void> => {
+  console.log('hub leaderboard from the feed link');
+  await page.setViewport(390, 844, 2);
+  await page.navigate(`${server.origin}/game.html?post=daily&user=snowfan`, 800);
+  await page.evaluate(
+    `sessionStorage.setItem('icehop.launch:t3_smoke_daily', 'leaderboard'); location.reload(); true`
+  );
+  await sleep(2800);
+  check(
+    'hub: the feed link opens the host post\u2019s Daily board',
+    server.urls.includes('/api/leaderboard?post=1')
+  );
+  await page.screenshot(join(OUT_DIR, 'hub-leaderboard.png'));
+  await page.tap(OVERLAY_TABS.streak, OVERLAY_TAB_Y);
+  await sleep(900);
+  check(
+    'hub: the Streaks tab loads current streaks',
+    server.urls.includes('/api/leaderboard/board?kind=streak')
+  );
+  await page.screenshot(join(OUT_DIR, 'hub-leaderboard-streaks.png'));
+  // Tapping the dimmed backdrop above the card closes it, leaving the hub.
+  await page.tap(195, 40);
+  await sleep(600);
+  await page.screenshot(join(OUT_DIR, 'hub.png'));
+
+  // A short expanded view (e.g. a desktop modal) uses the compact layout.
+  await page.setViewport(360, 580, 2);
+  await page.evaluate(
+    `sessionStorage.setItem('icehop.launch:t3_smoke_daily', 'leaderboard'); location.reload(); true`
+  );
+  await sleep(2800);
+  await page.screenshot(join(OUT_DIR, 'hub-leaderboard-360x580.png'));
+};
+
 /** Practice: "?" -> Practice, then solve the three lessons by taps. */
 const tutorialScenario = async (page: Page, server: SmokeServer): Promise<void> => {
   const width = 390;
@@ -330,6 +410,8 @@ const main = async (): Promise<void> => {
   try {
     await feedScenarios(browser.page, server);
     await expandedScenario(browser.page, server);
+    await winLeaderboardScenario(browser.page, server);
+    await hubLeaderboardScenario(browser.page, server);
     await tutorialScenario(browser.page, server);
     check(
       'no page exceptions or console errors',

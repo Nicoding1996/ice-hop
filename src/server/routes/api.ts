@@ -12,7 +12,10 @@ import type {
   EndlessTier,
   InitResponse,
   LeaderboardResponse,
+  LeaderboardVisibilityRequest,
+  LeaderboardVisibilityResponse,
   PostPreviewResponse,
+  RankedBoardResponse,
   SolveResultDTO,
   SolveSubmission,
   UgcSubmission,
@@ -22,11 +25,13 @@ import {
   dailyPuzzleId,
   parseDailyPuzzleId,
   parsePostDailyMapping,
+  sameDailyPuzzle,
   type DailyPuzzleRef,
 } from '../../shared/daily';
 import { verifySolvedTranscript } from '../../shared/game/replay';
 import { validateBoardStructure } from '../../shared/game/validation';
-import { dailyPuzzleDate } from '../../shared/date';
+import { dailyPuzzleDate, previousDate } from '../../shared/date';
+import { isRankedBoardKind } from '../../shared/leaderboard';
 import { buildScoreComment } from '../../shared/share';
 import { computeStars } from '../../shared/scoring';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
@@ -44,7 +49,13 @@ import {
   releaseEndlessIssue,
   reserveEndlessIssue,
 } from '../core/completion';
-import { getCanonicalDailyRef, getDailyPuzzle } from '../core/daily';
+import { ensureDailyCommentBoard, requeueBoardsForPlayer } from '../core/commentBoard';
+import {
+  findCanonicalDailyRef,
+  findDailyPuzzle,
+  getCanonicalDailyRef,
+  getDailyPuzzle,
+} from '../core/daily';
 import {
   generateEndlessFallback,
   getEndlessSolved,
@@ -54,8 +65,11 @@ import {
 import { keys } from '../core/keys';
 import {
   getBestDailySolve,
-  getDailyLeaderboard,
+  getCurrentStreak,
+  getDailyBoardView,
+  getRankedBoard,
   recordSolve,
+  setNameHidden,
 } from '../core/leaderboard';
 import {
   trackClientTelemetry,
@@ -79,6 +93,21 @@ const getPostDailyRef = async (postId: string): Promise<DailyPuzzleRef | null> =
   const ref = parsePostDailyMapping(raw);
   if (!ref) throw new Error('Post has an invalid daily puzzle mapping.');
   return ref;
+};
+
+/**
+ * Best-effort: link the host Daily post's pinned comment to its live board, so
+ * posts published before live boards start showing standings on first solve.
+ */
+const attachHostCommentBoard = async (ref: DailyPuzzleRef): Promise<void> => {
+  try {
+    const { postId } = context;
+    if (!postId) return;
+    const hostRef = await getPostDailyRef(postId);
+    if (hostRef && sameDailyPuzzle(hostRef, ref)) await ensureDailyCommentBoard(ref, postId);
+  } catch (error) {
+    console.error(`Live comment board registration failed: ${error}`);
+  }
 };
 
 export const api = new Hono();
@@ -308,6 +337,7 @@ api.post('/solve', async (c) => {
 
     const outcome = await recordSolve(requestedRef, username, puzzle.par, moves, timeMs);
     if (outcome.firstSolve) await trackTelemetry('daily:completed:signed');
+    await attachHostCommentBoard(requestedRef);
     return c.json<SolveResultDTO>({
       accepted: true,
       stars: outcome.stars,
@@ -359,6 +389,8 @@ api.post('/comment-score', async (c) => {
     let moves: number;
     let par: number;
     let creator: string | undefined;
+    let date: string | undefined;
+    let streak: number | undefined;
     const ugcId = await redis.get(keys.ugcPost(postId));
     if (ugcId) {
       const raw = await redis.get(keys.ugcSubmission(ugcId));
@@ -378,15 +410,18 @@ api.post('/comment-score', async (c) => {
       if (!ref) {
         return c.json<ErrorResponse>({ status: 'error', message: 'post has no puzzle' }, 404);
       }
-      const [puzzle, completion] = await Promise.all([
+      const [puzzle, completion, currentStreak] = await Promise.all([
         getDailyPuzzle(ref),
         getBestDailySolve(ref, username),
+        getCurrentStreak(username),
       ]);
       if (!completion) {
         return c.json<ErrorResponse>({ status: 'error', message: 'solve not verified' }, 403);
       }
       moves = completion.moves;
       par = puzzle.par;
+      date = ref.date;
+      streak = currentStreak;
     }
 
     // Prepare everything that cannot create a Reddit side effect before taking
@@ -398,6 +433,8 @@ api.post('/comment-score', async (c) => {
       par,
       stars: computeStars(moves, par),
       creator,
+      date,
+      streak,
     });
     const pinnedCommentId = await redis.get(keys.pinnedComment(postId));
     const commentTarget =
@@ -428,25 +465,83 @@ api.post('/comment-score', async (c) => {
   }
 });
 
+/**
+ * One Daily puzzle's leaderboard. Select it with `puzzleId`, `day=yesterday`,
+ * or `post=1` (the host post's Daily, else today's); the default is today's.
+ * Reads never claim or generate a puzzle for a request-supplied id.
+ */
 api.get('/leaderboard', async (c) => {
   try {
-    const requestedId =
-      c.req.query('puzzleId') ?? dailyPuzzleId(await getCanonicalDailyRef(dailyPuzzleDate()));
-    const ref = parseDailyPuzzleId(requestedId);
-    if (!ref) {
-      return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
+    let ref: DailyPuzzleRef | null;
+    const requestedId = c.req.query('puzzleId');
+    if (requestedId !== undefined) {
+      ref = parseDailyPuzzleId(requestedId);
+      if (!ref) {
+        return c.json<ErrorResponse>({ status: 'error', message: 'invalid puzzle id' }, 400);
+      }
+    } else if (c.req.query('day') === 'yesterday') {
+      ref = await findCanonicalDailyRef(previousDate(dailyPuzzleDate()));
+    } else {
+      const { postId } = context;
+      const hostRef =
+        c.req.query('post') === '1' && postId ? await getPostDailyRef(postId) : null;
+      ref = hostRef ?? (await getCanonicalDailyRef(dailyPuzzleDate()));
+    }
+    const puzzle = ref ? await findDailyPuzzle(ref) : null;
+    if (!ref || !puzzle) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'no daily puzzle' }, 404);
     }
     const username = await reddit.getCurrentUsername();
-    const leaderboard = await getDailyLeaderboard(ref, 10, username);
+    const view = await getDailyBoardView(ref, puzzle.par, username);
     return c.json<LeaderboardResponse>({
       puzzleId: dailyPuzzleId(ref),
       date: ref.date,
-      ...leaderboard,
+      ...view,
     });
   } catch (error) {
     console.error(`/api/leaderboard failed: ${error}`);
     const message = error instanceof Error ? error.message : 'leaderboard failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** This week's stars, current streaks, or all-time days solved. */
+api.get('/leaderboard/board', async (c) => {
+  try {
+    const kind = c.req.query('kind');
+    if (!isRankedBoardKind(kind)) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid board' }, 400);
+    }
+    const username = await reddit.getCurrentUsername();
+    return c.json<RankedBoardResponse>(await getRankedBoard(kind, username));
+  } catch (error) {
+    console.error(`/api/leaderboard/board failed: ${error}`);
+    const message = error instanceof Error ? error.message : 'leaderboard failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Show or hide the signed-in player's name on live comment leaderboards. */
+api.post('/leaderboard/visibility', async (c) => {
+  try {
+    const username = await reddit.getCurrentUsername();
+    if (!username) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'not signed in' }, 401);
+    }
+    const body = await c.req.json<LeaderboardVisibilityRequest>();
+    if (!body || typeof body.hidden !== 'boolean') {
+      return c.json<ErrorResponse>({ status: 'error', message: 'invalid request' }, 400);
+    }
+    await setNameHidden(username, body.hidden);
+    try {
+      await requeueBoardsForPlayer(username);
+    } catch (error) {
+      console.error(`Comment board requeue failed: ${error}`);
+    }
+    return c.json<LeaderboardVisibilityResponse>({ ok: true, hidden: body.hidden });
+  } catch (error) {
+    console.error(`/api/leaderboard/visibility failed: ${error}`);
+    return c.json<ErrorResponse>({ status: 'error', message: 'visibility update failed' }, 400);
   }
 });
 

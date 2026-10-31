@@ -9,6 +9,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { Board } from '../../src/shared/game/types';
 import { verifySolvedTranscript } from '../../src/shared/game/replay';
+import { competitionRanks } from '../../src/shared/leaderboard';
 import { difficultyFromPar } from '../../src/shared/solver/difficulty';
 import { solve } from '../../src/shared/solver/solver';
 import { property } from './cdp';
@@ -114,7 +115,72 @@ export type SmokeServer = {
   readonly completions: VerifiedCompletion[];
   /** Every /api/* path requested, in order. */
   readonly requests: string[];
+  /** Every /api/* path with its query string, in order. */
+  readonly urls: string[];
   close(): Promise<void>;
+};
+
+const BOARD_NAMES = [
+  'aurora_fan',
+  'icebreaker',
+  'puffin_pal',
+  'floe_rider',
+  'snowcap',
+  'krill_king',
+  'glacier_gus',
+  'tux_tamer',
+  'berg_buddy',
+  'slushy',
+];
+
+/** A consistent 42-player Daily board; a signed viewer sits at #7. */
+const dailyLeaderboard = (date: string, viewer: string | null) => {
+  const par = FIXTURES.daily.par;
+  const viewerRank = viewer ? 7 : 0;
+  const entries = BOARD_NAMES.map((name, index) => ({
+    rank: index + 1,
+    username: viewer && index + 1 === viewerRank ? viewer : name,
+    moves: par,
+    timeMs: 18_000 + index * 4_100,
+    streak: [12, 0, 5, 2, 0, 9, 3, 0, 1, 4][index] ?? 0,
+  }));
+  return {
+    puzzleId: `v6:${date}`,
+    date,
+    par,
+    totalPlayers: 42,
+    viewerRank,
+    entries,
+    nearbyEntries: viewer ? entries.slice(4, 9) : [],
+    distribution: [18, 11, 7, 4, 2].map((players, index) => ({
+      moves: par + index,
+      orMore: index === 4,
+      players,
+    })),
+    viewerHidden: false,
+  };
+};
+
+const rankedBoard = (kind: string, viewer: string | null) => {
+  const values =
+    kind === 'week'
+      ? [21, 18, 18, 15, 12, 12, 9, 7, 6, 3]
+      : kind === 'streak'
+        ? [41, 30, 22, 14, 9, 7, 5, 4, 3, 2]
+        : [120, 96, 80, 64, 50, 41, 33, 20, 12, 8];
+  const ranks = competitionRanks(values);
+  return {
+    kind,
+    ...(kind === 'week' ? { periodStart: '2026-10-26', periodEnd: '2026-11-01' } : {}),
+    ...(kind === 'streak' ? {} : { totalPlayers: 57 }),
+    entries: values.map((value, index) => ({
+      rank: ranks[index] ?? index + 1,
+      username: BOARD_NAMES[index] ?? `player${index}`,
+      value,
+    })),
+    viewer: viewer ? { rank: kind === 'streak' ? 0 : 14, value: kind === 'week' ? 5 : 3 } : null,
+    viewerHidden: false,
+  };
 };
 
 const readCookies = (header: string | undefined): Map<string, string> => {
@@ -132,10 +198,14 @@ export const startServer = async (): Promise<SmokeServer> => {
   }
   const completions: VerifiedCompletion[] = [];
   const requests: string[] = [];
+  const urls: string[] = [];
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
-    if (url.pathname.startsWith('/api/')) requests.push(url.pathname);
+    if (url.pathname.startsWith('/api/')) {
+      requests.push(url.pathname);
+      urls.push(`${url.pathname}${url.search}`);
+    }
     let body = '';
     request.on('data', (chunk) => {
       body += String(chunk);
@@ -234,6 +304,25 @@ export const startServer = async (): Promise<SmokeServer> => {
         });
         return;
       }
+      if (url.pathname === '/api/leaderboard') {
+        const requested = url.searchParams.get('puzzleId');
+        if (requested !== null && requested !== PUZZLE_ID) {
+          json({ status: 'error', message: 'no daily puzzle' }, 404);
+          return;
+        }
+        const date = url.searchParams.get('day') === 'yesterday' ? '2026-10-29' : DAILY_DATE;
+        json(dailyLeaderboard(date, guest ? null : username));
+        return;
+      }
+      if (url.pathname === '/api/leaderboard/board') {
+        json(rankedBoard(url.searchParams.get('kind') ?? '', guest ? null : username));
+        return;
+      }
+      if (url.pathname === '/api/leaderboard/visibility') {
+        const parsed: unknown = body ? JSON.parse(body) : null;
+        json({ ok: true, hidden: property(parsed, 'hidden') === true });
+        return;
+      }
       if (url.pathname.startsWith('/api/')) {
         json({ ok: true });
         return;
@@ -266,6 +355,7 @@ export const startServer = async (): Promise<SmokeServer> => {
     origin: `http://127.0.0.1:${port}`,
     completions,
     requests,
+    urls,
     close: () => new Promise<void>((done) => server.close(() => done())),
   };
 };

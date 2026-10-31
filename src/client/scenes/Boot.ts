@@ -26,6 +26,7 @@ export class Boot extends Scene {
     }
     if (launch === 'build') this.scene.start('EditorScene', {});
     else if (launch === 'home') this.scene.start('HomeScene', {});
+    else if (launch === 'leaderboard') this.scene.start('HomeScene', { leaderboard: true });
     else if (launch === 'endless') this.scene.start('EndlessScene', {});
     else this.scene.start('GameScene', {});
   }

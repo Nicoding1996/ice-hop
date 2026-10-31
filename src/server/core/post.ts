@@ -3,6 +3,13 @@ import type { SplashPostData, UgcSubmission } from '../../shared/api';
 import { POST_DATA_SPLASH_KEY } from '../../shared/api';
 import { difficultyFromPar } from '../../shared/solver/difficulty';
 import type { Difficulty } from '../../shared/solver/difficulty';
+import {
+  registerCommunityCommentBoard,
+  registerDailyCommentBoard,
+  rememberCommentText,
+  renderCommunityBoardText,
+  renderDailyBoardText,
+} from './commentBoard';
 import { getOrCreateDailyPuzzle } from './daily';
 import { keys } from './keys';
 
@@ -82,25 +89,39 @@ export const createDailyPost = async (date: string) => {
   await setDifficultyFlair(post, band);
 
   // Seed a distinguished/pinned comment so every daily has a discussion home
-  // (the "comment section is part of the game" lever). Never let it break the
-  // post if the app lacks comment/distinguish permissions.
+  // (the "comment section is part of the game" lever). It opens as the live
+  // leaderboard the scheduler keeps editing. Never let it break the post if
+  // the app lacks comment/distinguish permissions.
   try {
-    const comment = await reddit.submitComment({
-      id: post.id,
-      text: [
-        "\uD83D\uDC27 **Ice Hop \u2014 today's puzzle is live!**",
-        'How to play: tap a penguin to hop it over things, drag a seal to slide. Get every penguin into the water in as few moves as you can ("par" is the fewest possible).',
-        'Solved it? Drop your score below \uD83D\uDC47 and see if anyone can beat your move count. You can build your own puzzle from the menu, too!',
-      ].join('\n\n'),
-    });
+    const text = (await seedText(() => renderDailyBoardText(puzzle.ref, false))) ?? DAILY_SEED_TEXT;
+    const comment = await reddit.submitComment({ id: post.id, text });
     await comment.distinguish(true);
     // Remember the pinned comment so score comments can reply under it.
     await redis.set(keys.pinnedComment(post.id), comment.id);
+    await rememberCommentText(comment.id, text);
+    await registerDailyCommentBoard(puzzle.ref, post.id, comment.id);
   } catch (error) {
     console.error(`Failed to seed daily comment: ${error}`);
   }
 
   return post;
+};
+
+/** Original pinned text, used only if the live board cannot render. */
+const DAILY_SEED_TEXT = [
+  "\uD83D\uDC27 **Ice Hop \u2014 today's puzzle is live!**",
+  'How to play: tap a penguin to hop it over things, drag a seal to slide. Get every penguin into the water in as few moves as you can ("par" is the fewest possible).',
+  'Solved it? Drop your score below \uD83D\uDC47 and see if anyone can beat your move count. You can build your own puzzle from the menu, too!',
+].join('\n\n');
+
+/** Render a seed comment, falling back (null) instead of failing the post. */
+const seedText = async (render: () => Promise<string | null>): Promise<string | null> => {
+  try {
+    return await render();
+  } catch (error) {
+    console.error(`Failed to render a seed leaderboard: ${error}`);
+    return null;
+  }
 };
 
 /**
@@ -146,19 +167,28 @@ export const createUgcPost = async (submission: UgcSubmission): Promise<string> 
   await setDifficultyFlair(post, band);
 
   // Seed a distinguished credit/how-to comment, mirroring the daily, so the
-  // creator is named in the thread and there's a home for scores. Best-effort.
+  // creator is named in the thread and there's a home for scores. It doubles
+  // as the puzzle's live "Best solves" board. Best-effort.
   try {
-    const comment = await reddit.submitComment({
-      id: post.id,
-      text: [
+    const text =
+      (await seedText(() =>
+        renderCommunityBoardText({
+          id: submission.id,
+          creator: submission.creator,
+          par: submission.par,
+        })
+      )) ??
+      [
         `\uD83D\uDC27 **A community puzzle by u/${submission.creator}!**`,
         'Tap a penguin to hop it over things, drag a seal to slide. Get every penguin into the water in as few moves as you can.',
         'Solved it? Drop your move count below \uD83D\uDC47 and upvote the puzzle if you liked it. Want to make your own? Tap **Full game**, then choose **Build a puzzle**.',
-      ].join('\n\n'),
-    });
+      ].join('\n\n');
+    const comment = await reddit.submitComment({ id: post.id, text });
     await comment.distinguish(true);
     // Remember the pinned comment so score comments can reply under it.
     await redis.set(keys.pinnedComment(post.id), comment.id);
+    await rememberCommentText(comment.id, text);
+    await registerCommunityCommentBoard(submission.id, post.id, comment.id);
   } catch (error) {
     console.error(`Failed to seed UGC comment: ${error}`);
   }

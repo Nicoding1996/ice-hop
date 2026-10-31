@@ -38,10 +38,19 @@ players, and the solver counts moves the same way.
 ## Retention and progression loops
 
 1. Daily ritual: one shared puzzle/day via cron-posted feed item + streak. Each
-   daily post auto-seeds a pinned how-to-play comment inviting score-sharing, so
-   the comment section is a built-in discussion home.
+   daily post auto-seeds a pinned how-to-play comment that is also its live
+   leaderboard and invites score-sharing, so the comment section is a built-in
+   discussion home.
 2. Competition: each immutable daily puzzle has its own leaderboard; reset gives
-   a fresh daily race.
+   a fresh daily race. Around it sit three cross-puzzle boards: this week's
+   summed best stars per Daily (Monday-Sunday puzzle dates, so it resets at
+   Monday's 12:00 UTC rollover, max 21), current streaks, and all-time days
+   solved. Ranks on those boards are competition ranks (equal values share).
+   The pinned comment on every Daily and Community post is a live leaderboard
+   (top 10 with plain names, par rate, move-count chart, yesterday's winner)
+   that a 5-minute scheduler job edits only when its text changes; a closed
+   Daily freezes into "Final results". A player can hide their name on comment
+   boards (shown as "Anonymous penguin"); the in-app boards keep names.
    The first solve each day also sets a streak-based subreddit flair (e.g.
    "🔥 7-day streak"), a public, recurring status that nudges return visits.
 3. Completion: hit par, get clean closure, anticipate tomorrow (healthier than
@@ -152,10 +161,13 @@ Spoiler-free emoji grid summarizing the solution path / score (Wordle-style),
 shared via the native share sheet (`showShareSheet`, which also links back to the
 post) with a clipboard fallback so the paste-into-comments flow works everywhere.
 No board spoilers before a user solves. A separate "Comment my score" win-screen
-action posts the same spoiler-free score line straight into the post's thread on
+action posts a spoiler-free score line straight into the post's thread on
 the player's behalf (`buildScoreComment` in `share.ts` -> `/api/comment-score`,
-`runAs: 'USER'`, gated by the `SUBMIT_COMMENT` asUser scope), so the comment
-section fills with scores without anyone leaving the game.
+`runAs: 'USER'`, gated by the `SUBMIT_COMMENT` asUser scope), as a reply under
+the pinned leaderboard, so the comment section fills with scores without anyone
+leaving the game. Daily lines carry the date and a 2+ day streak
+("🐧 Daily Oct 30 · ⭐⭐⭐ 6 moves (par 6) 🎯 · 🔥 3-day streak"); Community lines
+name the creator in plain text. No line mentions (pings) anyone.
 
 
 ## Theme (LOCKED): "Ice Hop" - penguins on the ice
@@ -253,12 +265,21 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 ## Expanded navigation & flow
 
 - Home hub (`HomeScene`): the menu screen with Play today's puzzle / Endless
-  puzzles / Build a puzzle / My puzzles / Community puzzles, plus a persistent
+  puzzles / Build a puzzle / My puzzles + Leaderboards (one row of two
+  half-width pills) / Community puzzles, plus a persistent
   sound on/off toggle and a "?" chip that opens the shared "How to play" overlay
   (`showHowToPlay` in `howToPlay.ts`). The game is built to read without
   instructions, so "?" is a discoverable safety net, not a wall; the same overlay
   is reachable from the expanded play screen for a first-timer who opens the full
   Daily.
+- Leaderboards overlay (`showLeaderboard` in `leaderboard.ts`): tabs Daily (a
+  Today/Yesterday switch, par, "#7 of 42 · 18 hit par", a move-count bar chart
+  with the viewer's bucket in gold, medal ranks, streak flames, "6 moves · 0:42"),
+  Week (stars), Streaks, and All-time. The viewer's own row is highlighted and
+  pinned after an ellipsis when it ranks below what fits. Signed-in players get
+  the comment-board name toggle; guests get a quiet sign-in offer. The feed win
+  card's status line ("#7 of 42 today · 3-day streak · Leaderboard ›") opens it
+  through the `leaderboard` launch intent.
 - My puzzles (`MyPuzzlesScene`): a creator dashboard listing the puzzles you've
   built with their solve and upvote counts plus headline totals - the reason a
   builder comes back. Paginated (Prev / Next) rather than scrolled so rows never
@@ -279,7 +300,8 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   score line straight into the current post's thread, authored by the player via
   `/api/comment-score`; gated by a `scorePosted` flag and a "this puzzle came from
   the host post" check so it can never double-post or comment a mismatched puzzle),
-  More puzzles (-> Endless tier select), and Menu; Endless wins offer Next puzzle
+  Leaderboard (the shared Leaderboards overlay on this Daily), More puzzles
+  (-> Endless tier select), and Menu; Endless wins offer Next puzzle
   (same tier) / Change level / Menu; Community wins offer Upvote / Next / Back to
   daily; Test wins offer Back to editing. Signed-in players who haven't joined
   also get a "Join r/{subreddit}" CTA (`/api/subscribe` - a one-tap opt-in that

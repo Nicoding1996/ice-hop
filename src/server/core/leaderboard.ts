@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { context, reddit, redis } from '@devvit/web/server';
-import type { LeaderboardEntry, LeaderboardResponse } from '../../shared/api';
+import type {
+  LeaderboardEntry,
+  LeaderboardResponse,
+  MovesBucket,
+  RankedBoardEntry,
+  RankedBoardKind,
+  RankedBoardResponse,
+} from '../../shared/api';
 import {
   CURRENT_DAILY_SCHEMA,
   LEGACY_DAILY_SCHEMA,
@@ -9,7 +16,21 @@ import {
   type DailyPuzzleRef,
 } from '../../shared/daily';
 import { computeStars, decodeScore, leaderboardScore } from '../../shared/scoring';
-import { dailyPuzzleDate, isStreakCurrent, previousDate } from '../../shared/date';
+import {
+  addDays,
+  dailyPuzzleDate,
+  isStreakCurrent,
+  previousDate,
+  weekDates,
+  weekStartDate,
+} from '../../shared/date';
+import {
+  BOARD_TOP_N,
+  bucketsFromBelowCounts,
+  bucketsFromMoves,
+  competitionRanks,
+  distributionBoundaries,
+} from '../../shared/leaderboard';
 import { keys } from './keys';
 
 export type SolveOutcome = {
@@ -337,13 +358,55 @@ const repairDailyProgress = async (username: string): Promise<StreakRecord> => {
       member: username,
       score: baseline.allTime + dates.length,
     });
+    // The streak board row is written with the record it mirrors, so a reader
+    // can trust that a matching record means the row is current.
+    await transaction.zAdd(keys.streakLeaderboard(), {
+      member: username,
+      score: streak.count,
+    });
     const result: unknown = await transaction.exec();
-    if (!transactionCommitted(result, 2)) continue;
+    if (!transactionCommitted(result, 3)) continue;
 
     await setPlayerFlair(username, streak.count);
     return streak;
   }
   throw new Error('Daily progression was too busy to publish.');
+};
+
+/** Weekly boards outlive their week long enough for "last week" lookups. */
+const WEEKLY_BOARD_TTL_SECONDS = 70 * 24 * 60 * 60;
+
+/**
+ * Recompute one player's weekly stars from the materialized best solve of each
+ * puzzle date in that week, then publish the total. Deriving the sum (rather
+ * than incrementing) keeps retries idempotent and repairs any earlier miss.
+ * Best-effort: the weekly board must never fail a verified Daily solve.
+ */
+const updateWeeklyBoard = async (date: string, username: string): Promise<void> => {
+  try {
+    const weekStart = weekStartDate(date);
+    const dates = weekDates(weekStart);
+    const solveKeys = dates.flatMap((day) =>
+      refsForDate(day).map((ref) => keys.solve(ref, username))
+    );
+    const raws = await redis.mGet(solveKeys);
+    const perSchema = refsForDate(date).length;
+    let total = 0;
+    dates.forEach((_, dateIndex) => {
+      let best = 0;
+      for (let offset = 0; offset < perSchema; offset++) {
+        const record = parseSolveRecord(raws[dateIndex * perSchema + offset] ?? undefined);
+        if (record) best = Math.max(best, record.stars);
+      }
+      total += best;
+    });
+    if (total <= 0) return;
+    const boardKey = keys.weeklyLeaderboard(weekStart);
+    await redis.zAdd(boardKey, { member: username, score: total });
+    await redis.expire(boardKey, WEEKLY_BOARD_TTL_SECONDS);
+  } catch (error) {
+    console.error(`Weekly board update failed: ${error}`);
+  }
 };
 
 /**
@@ -411,6 +474,7 @@ export const recordSolve = async (
 
   const leaderboardKey = keys.dailyLeaderboard(ref);
   const streak = await repairDailyProgress(username);
+  await updateWeeklyBoard(ref.date, username);
   const [rankAsc, totalPlayers] = await Promise.all([
     redis.zRank(leaderboardKey, username),
     redis.zCard(leaderboardKey),
@@ -441,6 +505,8 @@ const leaderboardEntries = (
       username: row.member,
       moves: decoded.moves,
       timeMs: decoded.timeMs,
+      // Filled in by getDailyBoardView, which batches the streak reads.
+      streak: 0,
     };
   });
 
@@ -511,4 +577,234 @@ export const getDailyLeaderboard = async (
   }
 
   throw new Error('Daily leaderboard was too busy to read.');
+};
+
+/** A player's current Daily streak in days: 0 once it has lapsed. */
+export const getCurrentStreak = async (username: string): Promise<number> => {
+  const record = parseStreak(await redis.get(keys.streak(username)));
+  return isStreakCurrent(record.lastDate, dailyPuzzleDate()) ? record.count : 0;
+};
+
+/** Current streaks for many players in one read (0 when lapsed or unknown). */
+const getCurrentStreaks = async (
+  usernames: readonly string[]
+): Promise<Map<string, number>> => {
+  const streaks = new Map<string, number>();
+  if (usernames.length === 0) return streaks;
+  const today = dailyPuzzleDate();
+  const raws = await redis.mGet(usernames.map((username) => keys.streak(username)));
+  usernames.forEach((username, index) => {
+    const record = parseStreak(raws[index] ?? undefined);
+    streaks.set(username, isStreakCurrent(record.lastDate, today) ? record.count : 0);
+  });
+  return streaks;
+};
+
+/**
+ * Number of members scoring strictly below `score`. Devvit's Redis client has
+ * no ZCOUNT, so this reads the first member at or above the boundary and uses
+ * its rank: every member before it scores lower.
+ */
+export const countScoresBelow = async (
+  key: string,
+  score: number,
+  total: number
+): Promise<number> => {
+  const [first] = await redis.zRange(key, score, '+inf', {
+    by: 'score',
+    limit: { offset: 0, count: 1 },
+  });
+  if (!first) return total;
+  const rank = await redis.zRank(key, first.member);
+  return typeof rank === 'number' ? Math.min(rank, total) : total;
+};
+
+/** Small boards are read whole; larger ones are counted at bucket boundaries. */
+const DISTRIBUTION_FULL_READ_LIMIT = 250;
+
+/** Best-score distribution (par, par+1, ... par+4 or more) for a Daily board. */
+export const getMovesDistribution = async (
+  leaderboardKey: string,
+  par: number,
+  total: number
+): Promise<MovesBucket[]> => {
+  if (total <= 0) return bucketsFromMoves(par, []);
+  if (total <= DISTRIBUTION_FULL_READ_LIMIT) {
+    const rows = await redis.zRange(leaderboardKey, 0, -1, { by: 'rank' });
+    return bucketsFromMoves(
+      par,
+      rows.map((row) => decodeScore(row.score).moves)
+    );
+  }
+  const below = await Promise.all(
+    distributionBoundaries(par).map((boundary) =>
+      countScoresBelow(leaderboardKey, boundary, total)
+    )
+  );
+  return bucketsFromBelowCounts(par, below, total);
+};
+
+/** Whether a player hides their name on comment leaderboards. */
+export const isNameHidden = async (username: string): Promise<boolean> =>
+  Boolean(await redis.hGet(keys.leaderboardHidden(), username));
+
+/** Opt a player out of (or back into) named comment-board rows. */
+export const setNameHidden = async (username: string, hidden: boolean): Promise<void> => {
+  if (hidden) {
+    await redis.hSet(keys.leaderboardHidden(), { [username]: '1' });
+  } else {
+    await redis.hDel(keys.leaderboardHidden(), [username]);
+  }
+};
+
+/** The subset of `usernames` who hide their name on comment boards. */
+export const hiddenNames = async (usernames: readonly string[]): Promise<Set<string>> => {
+  const unique = [...new Set(usernames)];
+  if (unique.length === 0) return new Set();
+  const flags = await redis.hMGet(keys.leaderboardHidden(), unique);
+  return new Set(unique.filter((_, index) => Boolean(flags[index])));
+};
+
+export type DailyBoardView = Omit<LeaderboardResponse, 'puzzleId' | 'date'>;
+
+/**
+ * The in-app Daily leaderboard: a consistent ranked snapshot plus each listed
+ * player's current streak, the move distribution, and the viewer's opt-out.
+ */
+export const getDailyBoardView = async (
+  ref: DailyPuzzleRef,
+  par: number,
+  viewer?: string
+): Promise<DailyBoardView> => {
+  const snapshot = await getDailyLeaderboard(ref, BOARD_TOP_N, viewer);
+  const listed = [...snapshot.entries, ...snapshot.nearbyEntries].map(
+    (entry) => entry.username
+  );
+  const [streaks, distribution, viewerHidden] = await Promise.all([
+    getCurrentStreaks([...new Set(listed)]),
+    getMovesDistribution(keys.dailyLeaderboard(ref), par, snapshot.totalPlayers),
+    viewer ? isNameHidden(viewer) : Promise.resolve(false),
+  ]);
+  const withStreak = (entry: LeaderboardEntry): LeaderboardEntry => ({
+    ...entry,
+    streak: streaks.get(entry.username) ?? 0,
+  });
+  return {
+    par,
+    totalPlayers: snapshot.totalPlayers,
+    viewerRank: snapshot.viewerRank,
+    entries: snapshot.entries.map(withStreak),
+    nearbyEntries: snapshot.nearbyEntries.map(withStreak),
+    distribution,
+    viewerHidden,
+  };
+};
+
+/** Rows read from the streak board before lapsed ones are filtered out. */
+const STREAK_SCAN = 30;
+
+const getStreakBoard = async (
+  viewer: string | undefined,
+  viewerHidden: boolean
+): Promise<RankedBoardResponse> => {
+  const boardKey = keys.streakLeaderboard();
+  const today = dailyPuzzleDate();
+  // WATCH before reading so lapsed rows are removed only if no solve rewrote
+  // the board meanwhile (a fresh solve also rewrites the row it mirrors).
+  const transaction = await redis.watch(boardKey);
+  const rows = await redis.zRange(boardKey, 0, STREAK_SCAN - 1, {
+    by: 'rank',
+    reverse: true,
+  });
+  const records =
+    rows.length > 0 ? await redis.mGet(rows.map((row) => keys.streak(row.member))) : [];
+  const current: { readonly username: string; readonly value: number }[] = [];
+  const lapsed: string[] = [];
+  rows.forEach((row, index) => {
+    const record = parseStreak(records[index] ?? undefined);
+    if (record.count > 0 && isStreakCurrent(record.lastDate, today)) {
+      current.push({ username: row.member, value: record.count });
+    } else {
+      lapsed.push(row.member);
+    }
+  });
+  try {
+    if (lapsed.length > 0) {
+      await transaction.multi();
+      await transaction.zRem(boardKey, lapsed);
+      await transaction.exec();
+    } else {
+      await transaction.unwatch();
+    }
+  } catch (error) {
+    console.warn(`Streak board cleanup skipped: ${error}`);
+  }
+
+  current.sort(
+    (left, right) => right.value - left.value || left.username.localeCompare(right.username)
+  );
+  const top = current.slice(0, BOARD_TOP_N);
+  const ranks = competitionRanks(top.map((entry) => entry.value));
+  const entries: RankedBoardEntry[] = top.map((entry, index) => ({
+    rank: ranks[index] ?? index + 1,
+    username: entry.username,
+    value: entry.value,
+  }));
+  let viewerStanding: RankedBoardResponse['viewer'] = null;
+  if (viewer) {
+    const value = await getCurrentStreak(viewer);
+    viewerStanding = {
+      rank: entries.find((entry) => entry.username === viewer)?.rank ?? 0,
+      value,
+    };
+  }
+  return { kind: 'streak', entries, viewer: viewerStanding, viewerHidden };
+};
+
+/**
+ * Cross-puzzle boards: this week's Daily stars, current streaks, or all-time
+ * days solved. Each returns the top ten (competition-ranked) and the viewer.
+ */
+export const getRankedBoard = async (
+  kind: RankedBoardKind,
+  viewer: string | undefined
+): Promise<RankedBoardResponse> => {
+  const viewerHidden = viewer ? await isNameHidden(viewer) : false;
+  if (kind === 'streak') return getStreakBoard(viewer, viewerHidden);
+
+  const weekStart = weekStartDate(dailyPuzzleDate());
+  const boardKey =
+    kind === 'week' ? keys.weeklyLeaderboard(weekStart) : keys.allTimeLeaderboard();
+  const [rows, totalPlayers, viewerScore] = await Promise.all([
+    redis.zRange(boardKey, 0, BOARD_TOP_N - 1, { by: 'rank', reverse: true }),
+    redis.zCard(boardKey),
+    viewer ? redis.zScore(boardKey, viewer) : Promise.resolve(undefined),
+  ]);
+  const scored = rows.filter((row) => row.score > 0);
+  const ranks = competitionRanks(scored.map((row) => row.score));
+  const entries: RankedBoardEntry[] = scored.map((row, index) => ({
+    rank: ranks[index] ?? index + 1,
+    username: row.member,
+    value: row.score,
+  }));
+
+  let viewerStanding: RankedBoardResponse['viewer'] = null;
+  if (viewer && typeof viewerScore === 'number' && viewerScore > 0) {
+    const listed = entries.find((entry) => entry.username === viewer);
+    // Scores are whole numbers, so "below score + 1" counts everyone at or
+    // under the viewer; the rest rank strictly ahead.
+    const rank =
+      listed?.rank ??
+      1 + totalPlayers - (await countScoresBelow(boardKey, viewerScore + 1, totalPlayers));
+    viewerStanding = { rank: Math.max(1, rank), value: viewerScore };
+  }
+
+  return {
+    kind,
+    ...(kind === 'week' ? { periodStart: weekStart, periodEnd: addDays(weekStart, 6) } : {}),
+    totalPlayers,
+    entries,
+    viewer: viewerStanding,
+    viewerHidden,
+  };
 };

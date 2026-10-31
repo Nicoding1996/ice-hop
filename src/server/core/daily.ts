@@ -242,3 +242,26 @@ export const getDailyPuzzle = async (ref: DailyPuzzleRef): Promise<DailyPuzzle> 
 /** Return the canonical published puzzle for a calendar date, creating it if needed. */
 export const getOrCreateDailyPuzzle = async (date: string): Promise<DailyPuzzle> =>
   getDailyPuzzle(await getCanonicalDailyRef(date));
+
+/**
+ * Read-only canonical identity for a date. Unlike getCanonicalDailyRef it never
+ * claims an identity, so reads such as "yesterday's leaderboard" cannot start a
+ * competition for a date that never had a puzzle.
+ */
+export const findCanonicalDailyRef = async (date: string): Promise<DailyPuzzleRef | null> => {
+  const raw = await redis.hGet(keys.dailyPuzzleIdentities(), date);
+  const ref = raw ? parseDailyPuzzleId(raw) : null;
+  return ref && ref.date === date ? ref : null;
+};
+
+/**
+ * Read-only lookup of an already materialized Daily puzzle. Unlike
+ * getDailyPuzzle it never generates or claims a board, so request-supplied
+ * puzzle ids (leaderboard reads) cannot trigger generation work.
+ */
+export const findDailyPuzzle = async (ref: DailyPuzzleRef): Promise<DailyPuzzle | null> => {
+  const stored = await redis.get(keys.dailyPuzzle(ref));
+  if (stored) return parseStoredDaily(stored, ref);
+  const claimed = await redis.hGet(keys.dailyPuzzleCreations(), dailyPuzzleId(ref));
+  return claimed ? parseStoredDaily(claimed, ref) : null;
+};

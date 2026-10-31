@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { refreshCommentBoards } from '../core/commentBoard';
 import { createDailyPost } from '../core/post';
 import { refillEndlessPools } from '../core/endless';
 import { dailyPuzzleDate } from '../../shared/date';
@@ -28,6 +29,20 @@ scheduler.post('/endless-refill', async (c) => {
     return c.json({ status: 'success', added }, 200);
   } catch (error) {
     console.error(`/internal/scheduler/endless-refill failed: ${error}`);
+    return c.json({ status: 'error' }, 400);
+  }
+});
+
+// Cron task (registered in devvit.json as scheduler.tasks.comment-leaderboards):
+// re-renders the live leaderboards in pinned puzzle comments. Today's Daily
+// updates every run, a closed Daily gets its frozen "Final results" once, and
+// Community boards update after a solve changes them. Unchanged text is skipped.
+scheduler.post('/comment-leaderboards', async (c) => {
+  try {
+    const result = await refreshCommentBoards();
+    return c.json({ status: 'success', ...result }, 200);
+  } catch (error) {
+    console.error(`/internal/scheduler/comment-leaderboards failed: ${error}`);
     return c.json({ status: 'error' }, 400);
   }
 });

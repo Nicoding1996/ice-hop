@@ -144,6 +144,8 @@ const redisState = vi.hoisted(() => {
       removeSorted(key, members)
     ),
     zScore: vi.fn(async (key: string, member: string) => sortedSets.get(key)?.get(member)),
+    mGet: vi.fn(async (keys: readonly string[]) => keys.map((key) => strings.get(key) ?? null)),
+    expire: vi.fn(async () => undefined),
   };
 
   return {
@@ -318,5 +320,32 @@ describe('bounded Daily best-score convergence', () => {
     );
     expect(await redisState.redis.zScore(keys.allTimeLeaderboard(), 'alice')).toBe(1);
     expect(redisState.hashes.get(keys.dailyProgress('alice'))?.size).toBe(1);
+  });
+});
+
+describe('cross-puzzle boards', () => {
+  it('derives weekly stars from each date best and mirrors the streak row', async () => {
+    const monday = currentDailyPuzzleRef('2026-10-26');
+    const tuesday = currentDailyPuzzleRef('2026-10-27');
+    await recordSolve(monday, 'alice', 5, 5, 900);
+    await recordSolve(tuesday, 'alice', 5, 11, 900);
+    expect(await redisState.redis.zScore(keys.weeklyLeaderboard('2026-10-26'), 'alice')).toBe(4);
+
+    // An improvement replaces that date's stars; a retry never double-counts.
+    await recordSolve(tuesday, 'alice', 5, 6, 900);
+    await recordSolve(tuesday, 'alice', 5, 6, 900);
+    expect(await redisState.redis.zScore(keys.weeklyLeaderboard('2026-10-26'), 'alice')).toBe(6);
+    expect(await redisState.redis.zScore(keys.streakLeaderboard(), 'alice')).toBe(2);
+
+    // The next Monday's puzzle starts a fresh weekly board.
+    await recordSolve(currentDailyPuzzleRef('2026-11-02'), 'alice', 5, 5, 900);
+    expect(await redisState.redis.zScore(keys.weeklyLeaderboard('2026-11-02'), 'alice')).toBe(3);
+    expect(await redisState.redis.zScore(keys.weeklyLeaderboard('2026-10-26'), 'alice')).toBe(6);
+  });
+
+  it('keeps guests off every cross-puzzle board', async () => {
+    await recordSolve(currentDailyPuzzleRef('2026-10-26'), 'anon', 5, 5, 900);
+    expect(await redisState.redis.zCard(keys.weeklyLeaderboard('2026-10-26'))).toBe(0);
+    expect(await redisState.redis.zCard(keys.streakLeaderboard())).toBe(0);
   });
 });

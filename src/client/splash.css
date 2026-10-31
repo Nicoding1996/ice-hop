@@ -841,6 +841,40 @@ body.inline-daily-active .wrap {
   gap: 3px;
 }
 
+/* The verified status line, styled as a quiet text link into the leaderboard.
+   It keeps the one-line height of the plain status text it replaced while
+   still offering a full-height touch target. */
+.inline-result-link {
+  min-height: 32px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 10px;
+  /* Cool water-shimmer blue: the primary action keeps the one warm accent. */
+  color: #7fe0ff;
+  background: transparent;
+  font: inherit;
+  font-size: clamp(0.78rem, 3.2vw, 0.92rem);
+  font-weight: 750;
+  line-height: 1.3;
+  text-decoration: underline;
+  text-decoration-color: rgba(127, 224, 255, 0.45);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.inline-result-link:hover:not(:disabled),
+.inline-result-link:focus-visible {
+  background: rgba(127, 224, 255, 0.1);
+}
+
+.inline-result-link:disabled {
+  color: #cfe8f4;
+  text-decoration: none;
+  cursor: default;
+  opacity: 0.7;
+}
+
 .inline-play {
   display: grid;
   width: min(100%, 600px);

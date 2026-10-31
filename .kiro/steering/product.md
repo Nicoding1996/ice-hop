@@ -57,10 +57,14 @@ in later does not migrate a guest solve.
   flair. In expanded `GameScene` only, a solved-Daily recap routes returning
   players toward Endless or Community. The inline post remains a playable board.
 - **Competition:** each immutable daily puzzle has its own leaderboard, ranked by
-  fewest moves with server-derived elapsed time only as a tiebreaker.
-- **Discussion:** each puzzle post seeds a pinned prompt. Sharing and the
-  user-authorized "Comment my score" action put spoiler-free results into the
-  post thread under the player's account.
+  fewest moves with server-derived elapsed time only as a tiebreaker. The
+  Leaderboards screen adds this week's stars (Monday-Sunday), current streaks,
+  and all-time days solved, so a returning player always has a race to watch.
+- **Discussion:** each puzzle post's pinned comment is a live leaderboard (top
+  10, par rate, move chart) that freezes into Final results when a Daily closes.
+  Sharing and the user-authorized "Comment my score" action put spoiler-free,
+  dated results with streaks into the post thread under the player's account.
+  Comment names are plain text (no pings), and any player can hide theirs.
 - **Creation:** the editor provides live solver feedback, Undo, Random, and Test.
   Submit stays locked until the creator legally solves that exact board. Accepted
   puzzles use the same playable inline-post surface and enter the Community stream.

@@ -142,11 +142,24 @@ export type LeaderboardEntry = {
   readonly username: string;
   readonly moves: number;
   readonly timeMs: number;
+  /** The player's current Daily streak in days (0 when lapsed). */
+  readonly streak: number;
+};
+
+/** One move-count bucket of a puzzle's verified best-score distribution. */
+export type MovesBucket = {
+  /** First move count in the bucket; the first bucket is always par. */
+  readonly moves: number;
+  /** The final bucket also counts every higher move count. */
+  readonly orMore: boolean;
+  readonly players: number;
 };
 
 export type LeaderboardResponse = {
   readonly puzzleId: string;
   readonly date: string;
+  /** Solver-computed optimal move count for this puzzle. */
+  readonly par: number;
   readonly totalPlayers: number;
   /** Zero for guests or a signed-in viewer without a ranked solve. */
   readonly viewerRank: number;
@@ -154,7 +167,40 @@ export type LeaderboardResponse = {
   readonly entries: readonly LeaderboardEntry[];
   /** Bounded window centred on the signed-in viewer when they are ranked. */
   readonly nearbyEntries: readonly LeaderboardEntry[];
+  /** Best-score counts for par, par+1, ... and a final "or more" bucket. */
+  readonly distribution: readonly MovesBucket[];
+  /** Whether the signed-in viewer hides their name on comment leaderboards. */
+  readonly viewerHidden: boolean;
 };
+
+/** Cross-puzzle boards shown beside the per-puzzle Daily leaderboard. */
+export type RankedBoardKind = 'week' | 'streak' | 'alltime';
+
+export type RankedBoardEntry = {
+  /** Competition rank: equal values share a rank (1, 2, 2, 4). */
+  readonly rank: number;
+  readonly username: string;
+  /** Week: stars earned; streak: current streak days; all-time: days solved. */
+  readonly value: number;
+};
+
+export type RankedBoardResponse = {
+  readonly kind: RankedBoardKind;
+  /** Week boards only: the Monday and Sunday puzzle dates it covers. */
+  readonly periodStart?: string;
+  readonly periodEnd?: string;
+  /** Players on the board; omitted for streaks, which lapse without a write. */
+  readonly totalPlayers?: number;
+  readonly entries: readonly RankedBoardEntry[];
+  /** The signed-in viewer's standing; rank is 0 when it is not known. */
+  readonly viewer: { readonly rank: number; readonly value: number } | null;
+  readonly viewerHidden: boolean;
+};
+
+/** Opt in or out of having your name shown on comment leaderboards. */
+export type LeaderboardVisibilityRequest = { readonly hidden: boolean };
+
+export type LeaderboardVisibilityResponse = { readonly ok: true; readonly hidden: boolean };
 
 // --- User-generated content ---
 

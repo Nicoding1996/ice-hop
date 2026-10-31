@@ -154,6 +154,11 @@ const redisState = vi.hoisted(() => {
       incrementHash(key, field, increment)
     ),
     expire: vi.fn(async () => undefined),
+    incrBy: vi.fn(async (key: string, increment: number) => {
+      const next = Number(strings.get(key) ?? '0') + increment;
+      strings.set(key, String(next));
+      return next;
+    }),
     watch: vi.fn(async (...keys: string[]) => createTransaction(keys)),
     zAdd: vi.fn(async (key: string, entry: SortedSetEntry) => addSorted(key, entry)),
     zCard: vi.fn(async (key: string) => sortedSets.get(key)?.size ?? 0),

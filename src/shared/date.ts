@@ -18,11 +18,41 @@ export const DAILY_ROLLOVER_UTC_HOUR = 12;
 export const dailyPuzzleDate = (now: Date = new Date()): string =>
   todayUtc(new Date(now.getTime() - DAILY_ROLLOVER_UTC_HOUR * 3_600_000));
 
-/** The UTC date string for the day before `date`. Used for streak continuity. */
-export const previousDate = (date: string): string => {
+/** `date` (YYYY-MM-DD) shifted by a whole number of UTC days. */
+export const addDays = (date: string, days: number): string => {
   const d = new Date(`${date}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+};
+
+/** The UTC date string for the day before `date`. Used for streak continuity. */
+export const previousDate = (date: string): string => addDays(date, -1);
+
+/**
+ * Monday puzzle date of the week that contains `date`. Weekly boards cover the
+ * Monday-Sunday puzzle dates, so they reset at Monday's 12:00 UTC rollover.
+ */
+export const weekStartDate = (date: string): string => {
+  const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay(); // 0 = Sunday
+  return addDays(date, -((weekday + 6) % 7));
+};
+
+/** The seven puzzle dates (Monday first) of the week starting `weekStart`. */
+export const weekDates = (weekStart: string): string[] =>
+  Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * Short, locale-independent label for a puzzle date: "Oct 30", or
+ * "Fri, Oct 30" with the weekday. The server and every client agree on it.
+ */
+export const formatPuzzleDate = (date: string, withWeekday = false): string => {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  const label = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return withWeekday ? `${WEEKDAYS[d.getUTCDay()]}, ${label}` : label;
 };
 
 /**

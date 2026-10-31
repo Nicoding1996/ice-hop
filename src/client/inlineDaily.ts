@@ -56,7 +56,7 @@ type InlinePuzzleState =
   | 'load-error'
   | 'verification-error';
 
-export type InlineLaunchIntent = 'play' | 'home' | 'endless';
+export type InlineLaunchIntent = 'play' | 'home' | 'endless' | 'leaderboard';
 
 export type InlineBoardRenderer = (
   board: Board,
@@ -2588,13 +2588,19 @@ class InlinePuzzleControllerImpl implements InlinePuzzleController {
         )
       );
     } else {
-      const parts = ['Score saved'];
+      // The status line doubles as the way into the full leaderboard, so the
+      // card keeps its height: "#7 of 42 today · 3-day streak · Leaderboard ›".
+      const parts: string[] = [];
       if (result.bestMoves < result.moves) {
         parts.push(`best ${result.bestMoves} moves (${result.stars}★)`);
       }
-      if (result.rank > 0) parts.push(`#${result.rank} of ${result.totalPlayers} today`);
+      parts.push(
+        result.rank > 0 ? `#${result.rank} of ${result.totalPlayers} today` : 'Score saved'
+      );
       if (result.streak > 0) parts.push(`${result.streak}-day streak`);
-      details.append(makeParagraph('inline-result-detail', parts.join(' · ')));
+      const link = this.makeOpenButton(`${parts.join(' · ')} · Leaderboard ›`, 'leaderboard');
+      link.className = 'inline-result-link inline-open-button';
+      details.append(link);
     }
 
     // Primary action, then two secondary actions per row (see splash.css).

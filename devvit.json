@@ -51,6 +51,10 @@
       "endless-refill": {
         "endpoint": "/internal/scheduler/endless-refill",
         "cron": "*/5 * * * *"
+      },
+      "comment-leaderboards": {
+        "endpoint": "/internal/scheduler/comment-leaderboards",
+        "cron": "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
       }
     }
   },
