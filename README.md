@@ -378,8 +378,8 @@ source/package hardening milestone that preceded those later platform builds.
 
 ### Unreleased
 
-Puzzle generation. Numbers below are from `npm run bench:gen` on one PC: 28
-Daily dates, 300 Easy, 100 Medium and 40 Hard Endless boards, before and after.
+Puzzle generation. Numbers below are from `npm run bench:gen` on one PC, before
+and after: 28 Daily dates, and 300 Easy, 150 Medium and 60 Hard Endless boards.
 
 - Puzzles are built in reverse: start from a finished board, map every position
   that can reach it, and pick starting boards with a known par and a known
