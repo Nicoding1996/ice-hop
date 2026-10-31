@@ -145,14 +145,20 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   or above the boundary via `zRange(..., { by: 'score', limit })`, then `zRank`).
 - Scheduled jobs: `scheduler.tasks` in devvit.json, each a `cron` expression
   pointing at an `/internal/scheduler/...` endpoint - the daily puzzle post, an
-  every-5-minutes endless pool refill, and the comment-leaderboard refresh every
+  every-5-minutes endless pool refill, the comment-leaderboard refresh every
   5 minutes offset by two (`2,7,...,57 * * * *`) so it never shares a minute with
-  the refill (the scheduler resolves ~once a minute; up to 10 recurring tasks per
-  install). The Daily puzzle date rolls over at
+  the refill, and the week-ahead Daily preparation every 10 minutes at minute 4
+  (`4,14,...,54 * * * *`, `prepareUpcomingDailies`) so it never shares a minute
+  with the other jobs (the scheduler resolves ~once a minute; up to 10 recurring
+  tasks per install). The Daily puzzle date rolls over at
   12:00 UTC (`dailyPuzzleDate` / `DAILY_ROLLOVER_UTC_HOUR` in `src/shared/date.ts`),
   matching the `0 12 * * *` post cron, so the hub's "today" is always the newest
   Daily post. Change both together. Telemetry and rate limits keep UTC days.
-  Endless refill runs have a wall-clock budget (`refillEndlessPools`).
+- Devvit Web allows 30 seconds per request, scheduled jobs included. Generation
+  jobs have wall-clock budgets well under that (Daily preparation 15s, Endless
+  refill 20s), save each puzzle as soon as it is made, and let the next run
+  continue. Request-path generation stays bounded by the clients' 12-second
+  timeouts (Daily on demand about 5.5s at worst, Endless about 1.2s).
 
 ## devvit.json (config, schema v1)
 
@@ -161,8 +167,8 @@ view, `game` = `game.html` expanded Phaser view), `server` (dir/entry),
 `permissions` (`redis: true`, plus `reddit.enable` with `asUser` scopes
 `SUBSCRIBE_TO_SUBREDDIT` + `SUBMIT_COMMENT` that back the win-screen Join and
 Comment-my-score actions), `menu.items`, `triggers` (e.g. `onAppInstall`),
-`scheduler.tasks` (cron - the `daily-puzzle`, `endless-refill`, and
-`comment-leaderboards` jobs), `scripts`
+`scheduler.tasks` (cron - the `daily-puzzle`, `endless-refill`,
+`comment-leaderboards`, and `daily-prepare` jobs), `scripts`
 (`dev`: `vite build --watch`, `build`: `vite build`), and `dev.subreddit` (the
 playtest subreddit, currently `ice_hop_dev`). (No `forms` are declared today.)
 
@@ -179,6 +185,11 @@ upload.
 - `npm run build`      -> `vite build`
 - `npm run type-check` -> `tsc --build`
 - `npm run test`       -> `vitest run` (all tests); `npm run test -- <file>` for one
+- `npm run bench:gen`  -> puzzle-generation benchmark (`tools/bench/`): Daily on
+  demand and prepared, and the Endless pool, with time, par, best solutions,
+  3-star luck, and repeats. Run it before and after any generation change.
+  PowerShell drops options passed through `npm run ... --`; use
+  `npx tsx tools/bench/generation.ts --days 56` there.
 - `npm run test:ui`    -> build + phone-sized UI smoke test (`tools/ui-smoke/`):
   headless Chrome/Edge with touch emulation against a mock API; plays Daily and
   Community to a replay-verified win, checks feed cards never need inner

@@ -76,14 +76,23 @@ players, and the solver counts moves the same way.
    community stream - is the CTA after a daily solve. Tiers use non-overlapping
    par bands plus piece-count levers: Easy is trap-free
    (`requireAllPiecesUsed`, par 2-4), Medium allows decoys (par 5-7), and Hard
-   uses heavier boards (par 8-11), while every served board remains solvable. Endless drops the daily's
-   uniqueness gate (it's solo, so a single optimal line doesn't matter) and bounds
-   the solver budget, so generation stays cheap. Puzzles are served from a small
-   per-tier Redis pool (`endless:pool:1:{tier}`, quality generation) refilled off
-   the request path by an every-5-minute scheduler cron (budget spread across the
-   tiers) plus a warm-up on install. When a pool is momentarily empty the request
-   uses a FAST, bounded fallback generator (low attempts, tight solver cap, gates
-   off) so it can never hang - the pool supplies the nicer puzzles. The
+   uses heavier boards (par 8-11), while every served board remains solvable.
+   Easy offers seven small piece mixes because the three-piece mixes allow only
+   about 70-180 different puzzles each. Endless relaxes the daily's uniqueness
+   gate to at most two best solutions for Medium/Hard (it's solo, so a single
+   optimal line matters less). Puzzles are built in reverse (see "Generated
+   puzzle quality") and served from a small per-tier Redis pool
+   (`endless:pool:1:{tier}`, filed under each puzzle's fingerprint id so a
+   puzzle or its mirrored copy is pooled once) refilled off the request path by
+   an every-5-minute scheduler cron plus a warm-up on install. Each pooled entry
+   goes to exactly one request. A signed-in player is never given a puzzle they
+   were given before in that tier, counting mirrored and rotated copies
+   (`endless:seen:1:{user}:{tier}`, newest 500 kept); seen pool entries stay
+   for other players. When the pool has nothing new for the player, the request
+   generates one with the pool's rules within about a second, excluding the
+   seen list, then falls back to a gate-light pass and finally a static board,
+   so it can never hang. Guests have no saved identity, so nothing is
+   remembered for them. The
    client also prefetches the next puzzle (stashed in the Phaser registry) while
    you solve the current one, so tapping "Next" is instant; the lifetime count is
    kept in the registry so a prefetched board still shows the right banner. A
@@ -100,19 +109,53 @@ players, and the solver counts moves the same way.
 
 BFS over board states (state = positions of all pieces), in `src/shared/solver`
 as pure TS. Used to: compute par (`solver.ts`), count optimal solutions for
-uniqueness (`countShortestSolutions`), generate graded puzzles (`generator.ts` +
-`difficulty.ts`), classify each piece's role (`quality.ts`), validate that
-user submissions are solvable before they are accepted (`validate.ts`), and power
-the Endless hint (the best next move recomputed from the current board state).
+uniqueness (`countShortestSolutions`), generate graded puzzles (`reverse.ts` for
+quality boards, `generator.ts` for request-path fallbacks, plus `difficulty.ts`),
+map every reachable position of a board at once (`stateGraph.ts`: par and
+best-solution counts for all positions, a best line, and 3-star luck), classify
+each piece's role (`quality.ts`), validate that user submissions are solvable
+before they are accepted (`validate.ts`), and power the Endless hint (the best
+next move recomputed from the current board state).
+
+Every move has an exact reverse, and every rule is the same in all four
+directions, so a mirrored or rotated board is the same puzzle with the same par.
+`boardFingerprint` / `boardFingerprintId` in `src/shared/game/symmetry.ts` give
+all eight copies one key; repeat checks use them rather than `boardSignature`.
 
 ## Generated puzzle quality (not just "solvable")
 
-Daily boards are random placements filtered by the solver, but "solvable + par
-in range" alone does not feel designed. The preferred daily pass applies the
-quality gates below. If its request-safe deadline expires, relaxed and fast
-passes progressively drop expensive gates while preserving the exact weekday par
-band; the final fallback is also solver-verified and in-band. Endless pool
-refills use similar quality gates off the player request path.
+"Solvable + par in range" alone does not feel designed, so generated boards also
+pass the quality gates below.
+
+Quality boards are built in reverse (`generateReverse` in `reverse.ts`): pick a
+finished layout (water holes, rocks, seals, a penguin in every hole), map every
+position reachable from it, and compute each position's moves-to-finish and
+best-solution count in one backward pass. Every one of those positions is a
+solvable starting board with a known par, so one search yields many candidates;
+the gates then pick one and the shared solver re-checks its par. Measured on
+the Daily mixes, this makes strict boards (one best solution, no clutter) about
+28 to 155 times faster than random placement plus solver filtering, which never
+produced a strict weekend board within the old 2.5s budget. Benchmark changes
+with `npm run bench:gen` (`tools/bench/generation.ts`) before and after.
+
+Dailies are made a week ahead: the `daily-prepare` job keeps the next seven
+puzzle dates ready under the strict rules (`generateDesignedDaily`): exactly one
+best solution, no inert pieces (Easy: every piece used), 3-star luck at most 5%
+on Easy and 1% on Medium/Hard, the weekday's mixes and par band, and no repeat
+of another prepared Daily or of any Daily from the last 60 days, counting
+mirrored copies. Prepared entries carry a rules version (`DAILY_PREPARE_POLICY`);
+bump it when the rules change so stale entries are made again. A date's puzzle
+is created only once its day has arrived (the 12:00 post may run up to five
+minutes early), and no route can read a prepared entry, so nobody can see a
+puzzle before its day. Board seeds are random, never derived from the date,
+because the code is public. If no prepared puzzle exists, the request path runs
+the same strict rules for up to 2.5s, then relaxed and fast passes that drop
+expensive gates while preserving the exact weekday par band; the final fallback
+is also solver-verified and in-band.
+
+**3-star luck** is the chance that a player making uniformly random legal moves
+finishes within par + 1 moves, which still earns 3 stars. It is computed exactly
+over the position graph (`randomFinishChance`).
 
 - `requireUnique`: exactly one optimal solution (no mushy many-solution boards).
 - `rejectInert`: drop boards with an inert piece, one the player can never even

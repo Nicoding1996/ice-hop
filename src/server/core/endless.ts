@@ -2,21 +2,26 @@ import { redis } from '@devvit/web/server';
 import type { Board } from '../../shared/game/types';
 import type { EndlessTier, EndlessTierCounts } from '../../shared/api';
 import { validateBoardStructure } from '../../shared/game/validation';
-import { generateEndlessPoolPuzzle, isEndlessParInBand } from './endlessPolicy';
+import {
+  endlessPuzzleId,
+  generateEndlessFallback,
+  generateEndlessPoolPuzzle,
+  isEndlessParInBand,
+  type EndlessPuzzle,
+} from './endlessPolicy';
 import { keys } from './keys';
 
 /**
  * Endless mode: the "play more" loop after the daily. The player picks a tier
  * (Easy / Medium / Hard) and we hand back a freshly generated, solver-verified
- * puzzle from that bucket. Unlike the daily (deterministic per date), every
- * endless request is randomly seeded so the puzzles shuffle and never repeat in
- * a predictable order. A lifetime "solved" counter per user drives the
- * progression banner.
+ * puzzle from that bucket. Every endless request is randomly seeded so the
+ * puzzles shuffle, and a signed-in player is not given a puzzle they have
+ * already seen. A lifetime "solved" counter per user drives the progression
+ * banner.
  */
 
 // Tier shapes, par bands, static fallbacks, and the pool/request generators
 // live in the pure endlessPolicy module so they stay unit-testable.
-export { generateEndlessFallback } from './endlessPolicy';
 
 const shuffle = <T>(arr: ReadonlyArray<T>): T[] => {
   const out = [...arr];
@@ -172,29 +177,77 @@ const ALL_TIERS: ReadonlyArray<EndlessTier> = ['easy', 'medium', 'hard'];
 /**
  * Pop one pre-generated puzzle from a tier's pool, or null when it is empty (the
  * caller then generates one on the fly). Fields are tried in random order so
- * concurrent players rarely get the same board. Any entry whose par falls
- * outside the tier band - e.g. a stale board left by an older build before the
- * band was enforced - is dropped (deleted) and skipped, so the pool self-heals
- * and never serves a too-easy puzzle under a Medium/Hard label.
+ * concurrent players rarely race for the same board, and an entry is served
+ * only by the request that deletes it, so two players can never both get it.
+ * A board `hasSeen` reports is left in the pool for other players. Any entry
+ * whose par falls outside the tier band - e.g. a stale board left by an older
+ * build before the band was enforced - is dropped (deleted) and skipped, so
+ * the pool self-heals and never serves a too-easy puzzle under a Medium/Hard
+ * label.
  */
 export const popPooledPuzzle = async (
-  tier: EndlessTier
+  tier: EndlessTier,
+  hasSeen?: (puzzleId: string) => Promise<boolean>
 ): Promise<{ board: Board; par: number } | null> => {
   const poolKey = keys.endlessPool(tier);
   const fields = await redis.hKeys(poolKey);
   if (fields.length === 0) return null;
   // Bounded scan: in the healthy steady state the first random field is valid
-  // and returned (deleting just it, as before); the extra tries only matter
-  // while draining contaminated entries left by an older build.
+  // and returned; the extra tries skip seen boards and drain contaminated
+  // entries left by an older build.
   for (const field of shuffle(fields).slice(0, 8)) {
     const json = await redis.hGet(poolKey, field);
-    await redis.hDel(poolKey, [field]);
-    if (!json) continue;
+    if (!json) continue; // another request took it
     const pooled = parsePooledPuzzle(json);
     // Stale, malformed, or out-of-band entries are dropped, never served.
-    if (pooled && isEndlessParInBand(tier, pooled.par)) return pooled;
+    if (!pooled || !isEndlessParInBand(tier, pooled.par)) {
+      await redis.hDel(poolKey, [field]);
+      continue;
+    }
+    if (hasSeen && (await hasSeen(endlessPuzzleId(pooled)))) continue;
+    if ((await redis.hDel(poolKey, [field])) > 0) return pooled;
   }
   return null;
+};
+
+/** Newest puzzles remembered per player and tier as already seen. */
+const SEEN_LIMIT = 500;
+/** A player's seen list is forgotten after this long without Endless play. */
+const SEEN_TTL_SECONDS = 60 * 60 * 24 * 180;
+
+/**
+ * The next Endless puzzle for `user`: from the pool when it has one they
+ * haven't been given, otherwise generated on the spot without any puzzle they
+ * have seen. Guests have no saved identity, so nothing is remembered for them.
+ */
+export const takeEndlessPuzzle = async (
+  user: string,
+  tier: EndlessTier
+): Promise<EndlessPuzzle> => {
+  if (user === 'anon') {
+    return (await popPooledPuzzle(tier)) ?? generateEndlessFallback(tier);
+  }
+  const seenKey = keys.endlessSeen(user, tier);
+  const pooled = await popPooledPuzzle(
+    tier,
+    async (puzzleId) => (await redis.zScore(seenKey, puzzleId)) !== undefined
+  );
+  if (pooled) return pooled;
+  const seen = await redis.zRange(seenKey, 0, -1);
+  return generateEndlessFallback(tier, new Set(seen.map((entry) => entry.member)));
+};
+
+/** Remember that `user` was given `puzzle` (keeps the newest SEEN_LIMIT). */
+export const markEndlessSeen = async (
+  user: string,
+  tier: EndlessTier,
+  puzzle: EndlessPuzzle
+): Promise<void> => {
+  if (user === 'anon') return;
+  const seenKey = keys.endlessSeen(user, tier);
+  await redis.zAdd(seenKey, { member: endlessPuzzleId(puzzle), score: Date.now() });
+  await redis.zRemRangeByRank(seenKey, 0, -(SEEN_LIMIT + 1));
+  await redis.expire(seenKey, SEEN_TTL_SECONDS);
 };
 
 /** Parse one stored pool entry; Redis contents are untrusted at this boundary. */
@@ -213,39 +266,41 @@ const parsePooledPuzzle = (json: string): { board: Board; par: number } | null =
 
 /**
  * Per-run cap on how many puzzles to add to each tier in one refill call. Hard
- * runs the near-unique solver gate and costs several times as much per puzzle as
- * Easy/Medium, so it makes fewer per run to keep a single cron invocation short;
- * the pool target (POOL_TARGET) is unchanged, Hard just refills over more runs.
- * Each puzzle is persisted as it is generated, so even a run cut short by a
- * platform timeout keeps its progress and the next run simply continues.
+ * costs the most per puzzle, so it makes fewer per run to keep a single cron
+ * invocation short; the pool target (POOL_TARGET) is unchanged, Hard just
+ * refills over more runs. Each puzzle is persisted as it is generated, so even
+ * a run cut short by a platform timeout keeps its progress and the next run
+ * simply continues.
  */
-const PER_RUN_CAP: Record<EndlessTier, number> = { easy: 4, medium: 3, hard: 2 };
+const PER_RUN_CAP: Record<EndlessTier, number> = { easy: 6, medium: 6, hard: 4 };
 
 /** Default wall-clock budget for one refill run (the cron fires every 5 min). */
 const REFILL_BUDGET_MS = 20_000;
 
 /**
  * Top each tier's pool up toward POOL_TARGET, adding at most PER_RUN_CAP[tier]
- * puzzles per tier in a single call. Generation stops once `budgetMs` is spent
- * (a single Hard puzzle measured up to ~18s), so one run stays bounded and the
- * next run continues where this one stopped. Once a pool is full this generates
- * nothing for it. Returns how many were added.
+ * puzzles per tier in a single call. Generation stops once `budgetMs` is spent,
+ * so one run stays bounded and the next run continues where this one stopped.
+ * Entries are filed under the puzzle's fingerprint id, so a board already in
+ * the pool (or a mirrored copy) is not added twice. Once a pool is full this
+ * generates nothing for it. Returns how many were added.
  */
 export const refillEndlessPools = async (budgetMs: number = REFILL_BUDGET_MS): Promise<number> => {
   const deadline = Date.now() + budgetMs;
   let added = 0;
   for (const tier of ALL_TIERS) {
-    const have = await redis.hLen(keys.endlessPool(tier));
-    let need = Math.min(POOL_TARGET - have, PER_RUN_CAP[tier]);
-    while (need > 0) {
+    const poolKey = keys.endlessPool(tier);
+    const have = await redis.hLen(poolKey);
+    let tries = Math.min(POOL_TARGET - have, PER_RUN_CAP[tier]);
+    while (tries > 0) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return added;
       const puzzle = generateEndlessPoolPuzzle(tier, remaining);
       if (!puzzle) return added;
-      const id = String(await redis.incrBy(keys.endlessPoolSeq(tier), 1));
-      await redis.hSet(keys.endlessPool(tier), { [id]: JSON.stringify(puzzle) });
-      need -= 1;
-      added += 1;
+      tries -= 1;
+      if (await redis.hSetNX(poolKey, endlessPuzzleId(puzzle), JSON.stringify(puzzle))) {
+        added += 1;
+      }
     }
   }
   return added;

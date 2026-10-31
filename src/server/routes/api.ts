@@ -58,10 +58,10 @@ import {
   getDailyPuzzle,
 } from '../core/daily';
 import {
-  generateEndlessFallback,
   getEndlessSolved,
   getEndlessStats,
-  popPooledPuzzle,
+  markEndlessSeen,
+  takeEndlessPuzzle,
 } from '../core/endless';
 import { keys } from '../core/keys';
 import {
@@ -589,9 +589,16 @@ api.get('/endless', async (c) => {
     // Reserve one bounded user slot before consuming a shared pool entry or
     // spending fallback-generation work. Concurrent losers fail at this point.
     issueId = await reserveEndlessIssue(username);
-    const pooled = await popPooledPuzzle(tier);
-    const { board, par } = pooled ?? generateEndlessFallback(tier);
+    // A signed-in player is never handed a puzzle they were given before
+    // (counting mirrored/rotated copies) while unseen ones remain.
+    const puzzle = await takeEndlessPuzzle(username, tier);
+    const { board, par } = puzzle;
     await finalizeEndlessIssue(username, issueId, tier, board, par);
+    try {
+      await markEndlessSeen(username, tier, puzzle);
+    } catch (seenError) {
+      console.error(`/api/endless seen-list update failed: ${seenError}`);
+    }
     const solved = await getEndlessSolved(username);
     await trackEndlessIssued(tier);
     return c.json<EndlessResponse>({ issueId, tier, board, par, solved });

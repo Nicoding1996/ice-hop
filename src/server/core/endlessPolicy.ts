@@ -1,6 +1,9 @@
 import type { EndlessTier } from '../../shared/api';
 import type { Board } from '../../shared/game/types';
+import { boardFingerprintId } from '../../shared/game/symmetry';
 import { generate } from '../../shared/solver/generator';
+import { randomSeed } from '../../shared/solver/random';
+import { generateReverse } from '../../shared/solver/reverse';
 
 /**
  * Pure Endless generation policy (no Redis), kept beside endless.ts the same
@@ -26,11 +29,20 @@ type EndlessGenConfig = {
 // trap-free boards (requireAllPiecesUsed); Medium/Hard keep the no-clutter gate,
 // allow decoy misdirection, and add a near-unique gate in the pool pass so
 // harder boards feel designed, not just long. Every tier stays solvable.
+//
+// Easy's small mixes allow few puzzles (about 70 for 2 penguins + 1 rock, 180
+// for 1 penguin + 1 seal + 1 rock, counting mirrored copies as one), so Easy
+// also offers four-piece mixes, estimated from samples at about 500-1,400
+// puzzles each.
 export const ENDLESS_TIERS: Readonly<Record<EndlessTier, readonly EndlessGenConfig[]>> = {
   easy: [
     { hoppers: 1, sliders: 1, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
     { hoppers: 2, sliders: 0, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
     { hoppers: 2, sliders: 1, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
+    { hoppers: 2, sliders: 0, blockers: 2, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
+    { hoppers: 1, sliders: 1, blockers: 2, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
+    { hoppers: 1, sliders: 2, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
+    { hoppers: 3, sliders: 0, blockers: 1, minPar: 2, maxPar: 4, requireAllPiecesUsed: true },
   ],
   medium: [
     { hoppers: 2, sliders: 1, blockers: 2, minPar: 5, maxPar: 7 },
@@ -274,8 +286,6 @@ const shuffle = <T>(items: readonly T[]): T[] => {
   return out;
 };
 
-const randomSeed = (): number => Math.floor(Math.random() * 0x7fffffff);
-
 /** Each tier's par band, derived from its configs (single source of truth). */
 export const endlessParBand = (tier: EndlessTier): { readonly min: number; readonly max: number } => {
   const configs = ENDLESS_TIERS[tier];
@@ -290,25 +300,83 @@ export const isEndlessParInBand = (tier: EndlessTier, par: number): boolean => {
   return par >= band.min && par <= band.max;
 };
 
-/** A random verified static board for the tier (never the same one forever). */
-export const endlessStaticFallback = (tier: EndlessTier): EndlessPuzzle => {
+/**
+ * A random verified static board for the tier (never the same one forever),
+ * preferring boards not in `exclude` while any remain.
+ */
+export const endlessStaticFallback = (
+  tier: EndlessTier,
+  exclude?: ReadonlySet<string>
+): EndlessPuzzle => {
   const boards = ENDLESS_FALLBACKS[tier];
-  return boards[Math.floor(Math.random() * boards.length)] ?? boards[0];
+  const unseen = exclude ? boards.filter((board) => !exclude.has(endlessPuzzleId(board))) : boards;
+  const choices = unseen.length > 0 ? unseen : boards;
+  return choices[Math.floor(Math.random() * choices.length)] ?? boards[0];
+};
+
+/** Request-path budget for a quality board when the pool can't serve one. */
+const REQUEST_QUALITY_MS = 1200;
+
+/**
+ * Request-path cap on positions mapped per layout. The largest Hard layouts
+ * map about 18,000 positions in about a second; this skips roughly the
+ * biggest tenth of them so a player isn't kept waiting. Background generation
+ * uses the generator's larger default cap.
+ */
+const REQUEST_MAX_POSITIONS = 10_000;
+
+/**
+ * Quality generation (the pool's rules) built in reverse, trying the tier's
+ * mixes one layout at a time in random order until `deadline`. Boards whose
+ * fingerprint id is in `exclude` (already seen) are never returned.
+ */
+const generateEndlessQuality = (
+  tier: EndlessTier,
+  deadline: number,
+  exclude?: ReadonlySet<string>,
+  maxStates?: number
+): EndlessPuzzle | null => {
+  const configs = ENDLESS_TIERS[tier];
+  const maxOptimalSolutions = tier === 'easy' ? undefined : 2;
+  let order = shuffle(configs);
+  for (let round = 0; Date.now() < deadline; round++) {
+    if (round > 0 && round % order.length === 0) order = shuffle(configs);
+    const config = order[round % order.length];
+    if (!config) return null;
+    const generated = generateReverse({
+      ...config,
+      rejectInert: true,
+      ...(maxOptimalSolutions === undefined ? {} : { maxOptimalSolutions }),
+      ...(exclude ? { exclude } : {}),
+      ...(maxStates === undefined ? {} : { maxStates }),
+      attempts: 1,
+      seed: randomSeed(),
+    });
+    if (generated) return { board: generated.board, par: generated.par };
+  }
+  return null;
 };
 
 /**
- * Fast, bounded generation for the REQUEST path when the pool is momentarily
- * empty. Medium/Hard drop every quality gate and use a small attempt budget +
- * tight solver cap so they return quickly. Easy keeps its trap-free gate: its
- * boards are tiny (at most a few hundred states), so 2000 attempts per shape
- * still measured under ~350ms and fall through to a static board well under 1%
- * of the time, versus roughly 15% with the old 150-attempt gate-free pass.
+ * Bounded generation for the REQUEST path when the pool is momentarily empty
+ * or holds only boards this player has seen. It tries the pool's own quality
+ * rules for about a second, then the old gate-light random pass, then a static
+ * board, so it always answers quickly. Every step skips boards in `exclude`;
+ * only the static step repeats one, and only when every static board is in it.
  */
-export const generateEndlessFallback = (tier: EndlessTier): EndlessPuzzle =>
-  generateEndlessFast(tier) ?? endlessStaticFallback(tier);
+export const generateEndlessFallback = (
+  tier: EndlessTier,
+  exclude?: ReadonlySet<string>
+): EndlessPuzzle =>
+  generateEndlessQuality(tier, Date.now() + REQUEST_QUALITY_MS, exclude, REQUEST_MAX_POSITIONS) ??
+  generateEndlessFast(tier, exclude) ??
+  endlessStaticFallback(tier, exclude);
 
 /** The fast in-band pass shared by the request path and pool salvage. */
-const generateEndlessFast = (tier: EndlessTier): EndlessPuzzle | null => {
+const generateEndlessFast = (
+  tier: EndlessTier,
+  exclude?: ReadonlySet<string>
+): EndlessPuzzle | null => {
   for (const config of shuffle(ENDLESS_TIERS[tier])) {
     const generated =
       tier === 'easy'
@@ -333,46 +401,38 @@ const generateEndlessFast = (tier: EndlessTier): EndlessPuzzle | null => {
             attempts: 150,
             seed: randomSeed(),
           });
-    if (generated) return generated;
+    if (generated && !exclude?.has(endlessPuzzleId(generated))) return generated;
   }
   return null;
 };
+
+/** Quality pool generation gets this long before it settles for a fast board. */
+const POOL_QUALITY_MS = 8000;
 
 /**
  * Quality generation for the POOL (off the request path: the scheduler cron and
  * the install warm-up). Keeps the no-clutter gate and, for Medium/Hard, a
  * near-unique gate (at most 2 optimal solutions). Only the tier's OWN shapes are
- * tried, so a pool never holds an easier tier's board. If the gated pass misses
- * while time remains, the fast generator salvages an in-band board. Static
- * fallback boards are never pooled, so the pool cannot fill with repeats.
+ * tried, so a pool never holds an easier tier's board. Boards are built in
+ * reverse (Hard used to take about 8s each by random placement, with spikes
+ * near 20s; reverse building takes well under a second). If the quality pass
+ * misses while time remains, the fast generator salvages an in-band board.
+ * Static fallback boards are never pooled, so the pool cannot fill with repeats.
  *
- * `deadlineMs` bounds the work (Hard measured ~6.6s per puzzle on average with
- * spikes near 18s). Returns null once the budget is spent so a refill run can
- * stop cleanly and let the next run continue.
+ * `deadlineMs` bounds the work. Returns null once the budget is spent so a
+ * refill run can stop cleanly and let the next run continue.
  */
 export const generateEndlessPoolPuzzle = (
   tier: EndlessTier,
   deadlineMs: number = Number.POSITIVE_INFINITY
 ): EndlessPuzzle | null => {
   const deadline = Date.now() + deadlineMs;
-  const maxOptimalSolutions = tier === 'easy' ? undefined : 2;
-  for (const config of shuffle(ENDLESS_TIERS[tier])) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return null;
-    const generated = generate({
-      width: 5,
-      height: 5,
-      requireUnique: false,
-      rejectInert: true,
-      maxStates: 40_000,
-      ...config,
-      ...(maxOptimalSolutions === undefined ? {} : { maxOptimalSolutions }),
-      attempts: 500,
-      seed: randomSeed(),
-      ...(Number.isFinite(remaining) ? { deadlineMs: remaining } : {}),
-    });
-    if (generated) return generated;
-  }
+  const quality = generateEndlessQuality(tier, Math.min(deadline, Date.now() + POOL_QUALITY_MS));
+  if (quality) return quality;
   if (deadline - Date.now() <= 0) return null;
   return generateEndlessFast(tier);
 };
+
+/** Pool and seen-list id for a puzzle: mirrored/rotated copies share it. */
+export const endlessPuzzleId = (puzzle: EndlessPuzzle): string =>
+  boardFingerprintId(puzzle.board);

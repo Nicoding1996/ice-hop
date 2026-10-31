@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { refreshCommentBoards } from '../core/commentBoard';
 import { createDailyPost } from '../core/post';
+import { prepareUpcomingDailies } from '../core/daily';
 import { refillEndlessPools } from '../core/endless';
 import { dailyPuzzleDate } from '../../shared/date';
 
@@ -16,6 +17,19 @@ scheduler.post('/daily-puzzle', async (c) => {
     return c.json({ status: 'success', postId: post.id }, 200);
   } catch (error) {
     console.error(`/internal/scheduler/daily-puzzle failed: ${error}`);
+    return c.json({ status: 'error' }, 400);
+  }
+});
+
+// Cron task (registered in devvit.json as scheduler.tasks.daily-prepare): keeps
+// the next week of Dailies made in advance under the strict quality rules, so
+// the 12:00 post never has to rush one. Each run is bounded; the next continues.
+scheduler.post('/daily-prepare', async (c) => {
+  try {
+    const result = await prepareUpcomingDailies();
+    return c.json({ status: 'success', ...result }, 200);
+  } catch (error) {
+    console.error(`/internal/scheduler/daily-prepare failed: ${error}`);
     return c.json({ status: 'error' }, 400);
   }
 });

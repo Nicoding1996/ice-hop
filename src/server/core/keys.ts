@@ -12,6 +12,13 @@ export const keys = {
   dailyPuzzleCreations: (): string => `daily:creation:1`,
   /** One canonical published puzzle identity per UTC date across schema rollouts. */
   dailyPuzzleIdentities: (): string => `daily:identity:1`,
+  /**
+   * Week-ahead Dailies made by the scheduler before their day: puzzle date ->
+   * JSON {date, board, par, policy}. Read only when that date's puzzle is first
+   * created, so no route can show a puzzle early. Entries carry their rules
+   * version (DAILY_PREPARE_POLICY) instead of a key version.
+   */
+  dailyPrepared: (): string => `daily:prepared:1`,
   /** Maps a post id to a versioned puzzle id; legacy values are raw dates. */
   postDate: (postId: string): string => `post:${postId}`,
   /** Maps a feed post id to the UGC submission id it shows. */
@@ -109,8 +116,17 @@ export const keys = {
   /** Atomic hinted/completed arbitration for issued puzzles on a UTC date. */
   endlessResolutions: (user: string, date: string): string =>
     `endless:done:1:${user}:${date}`,
+  /**
+   * Pre-generated boards per tier. New entries are filed under their puzzle
+   * fingerprint id, so the same puzzle (or a mirrored copy) can't be pooled
+   * twice; older entries under numeric ids are still served.
+   */
   endlessPool: (tier: string): string => `endless:pool:1:${tier}`,
-  endlessPoolSeq: (tier: string): string => `endless:poolseq:1:${tier}`,
+  /**
+   * Fingerprint ids of the Endless puzzles a signed-in player was given in one
+   * tier (sorted set scored by time, newest kept), so they aren't served again.
+   */
+  endlessSeen: (user: string, tier: string): string => `endless:seen:1:${user}:${tier}`,
 
   // --- Aggregate product telemetry ---
   telemetryDay: (date: string): string => `telemetry:day:1:${date}`,

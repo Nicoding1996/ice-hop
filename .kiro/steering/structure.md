@@ -9,8 +9,9 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json            # project references -> tools/*
-├── tools/                   # tsconfig.{base,client,server,shared,vite,ui-smoke}.json
-│   └── ui-smoke/            # npm run test:ui: CDP driver, mock API server, scenarios
+├── tools/                   # tsconfig.{base,client,server,shared,vite,ui-smoke,bench}.json
+│   ├── ui-smoke/            # npm run test:ui: CDP driver, mock API server, scenarios
+│   └── bench/               # npm run bench:gen: puzzle-generation benchmark
 ├── brand/                   # active app art: icon.png, icon.svg, banner.svg
 ├── docs/archive/            # dated historical material; not active product guidance
 ├── README.md                # player overview, development guide, release history
@@ -26,10 +27,14 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   │   ├── replay.ts     # canonical legal transcript replay
     │   │   ├── slide.ts      # seal lane stops shared by feed post and full game
     │   │   ├── motion.ts     # shared move timing, win beat, seal water check
+    │   │   ├── symmetry.ts   # mirror/rotation transforms and puzzle fingerprints
     │   │   └── proof.ts      # exact-board creator solve proof
     │   ├── solver/
     │   │   ├── solver.ts     # BFS optimal solution/par and solution count
-    │   │   ├── generator.ts  # procedural generation and quality gates
+    │   │   ├── stateGraph.ts # every reachable position: moves to finish, best lines, 3-star luck
+    │   │   ├── reverse.ts    # reverse generation from finished layouts (quality boards)
+    │   │   ├── generator.ts  # random-placement generation (request-path fallbacks)
+    │   │   ├── random.ts     # seeded PRNG and shuffles
     │   │   ├── difficulty.ts # par-to-difficulty grading
     │   │   ├── quality.ts    # used/decoy/inert classification
     │   │   └── validate.ts   # user-board policy and solvability
@@ -53,15 +58,15 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   │   ├── ugc.ts        # submit/list/mine/vote/Community replay routes
     │   │   ├── menu.ts       # moderator menu endpoints
     │   │   ├── triggers.ts   # install warm-up/first post
-    │   │   └── scheduler.ts  # daily post, Endless refill, comment-leaderboard jobs
+    │   │   └── scheduler.ts  # daily post, week-ahead Daily, Endless refill, comment-leaderboard jobs
     │   └── core/
     │       ├── completion.ts  # issue records and authoritative transcript verification
     │       ├── achievements.ts# Redis first-unlock persistence
     │       ├── telemetry.ts   # bounded aggregate daily counters
     │       ├── post.ts        # V2 Daily/Community posts, mappings, pinned comments
-    │       ├── daily.ts       # bounded daily generation and storage
-    │       ├── dailyPolicy.ts # pure weekday bands and verified fallbacks
-    │       ├── endless.ts     # tiered pool, refill budget, stats
+    │       ├── daily.ts       # Daily storage, week-ahead preparation, on-demand creation
+    │       ├── dailyPolicy.ts # pure weekday bands, strict rules, cascade, verified fallbacks
+    │       ├── endless.ts     # tiered pool, seen lists, refill budget, stats
     │       ├── endlessPolicy.ts # pure tier shapes, bands, fallbacks, generators
     │       ├── leaderboard.ts # sorted sets, streaks, weekly/streak/all-time boards, flair
     │       ├── commentBoard.ts# live pinned-comment boards: queue, render, edit
@@ -106,7 +111,8 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
   - daily: immutable `daily:{schema}:{date}` boards, versioned post mappings,
     user-bound play issues, a migration baseline plus permanent per-user date
     ledger, bounded per-puzzle score candidates/materialized bests, leaderboards,
-    streaks, and score-comment claims;
+    streaks, score-comment claims, and the week-ahead prepared boards (read only
+    when their date's puzzle is first created);
   - cross-puzzle boards: expiring weekly star totals keyed by the Monday puzzle
     date, a streak board whose rows mirror each streak record (lapsed rows are
     filtered and removed on read), the all-time `lb:all`, and the comment-board
@@ -118,7 +124,8 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     a per-puzzle best-solve board, solve totals, and daily submit limits;
   - Endless: migration baselines, permanent per-tier completion ledgers, atomic
     hint/completion resolution claims, Hard-at-par, awards, user-bound issues,
-    and versioned per-tier pools/sequences;
+    versioned per-tier pools filed under puzzle fingerprint ids, and per-player
+    per-tier seen lists (newest 500, expiring after 180 days without play);
   - telemetry: versioned aggregate day counters, short-lived per-actor request
     limits, and 32-day username-keyed daily-active membership hashes used to
     derive unique/return totals.

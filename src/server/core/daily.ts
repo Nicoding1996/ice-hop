@@ -9,13 +9,18 @@ import {
 } from '../../shared/daily';
 import type { Board } from '../../shared/game/types';
 import { validateBoardStructure } from '../../shared/game/validation';
-import { generate, type GenOptions } from '../../shared/solver/generator';
-import { seedFromDate } from '../../shared/date';
+import { addDays, dailyPuzzleDate } from '../../shared/date';
+import { boardFingerprintId } from '../../shared/game/symmetry';
+import { randomSeed } from '../../shared/solver/random';
 import {
-  DAILY_FALLBACKS,
-  DAILY_LADDERS,
+  DAILY_PREPARE_POLICY,
   dailyTierForDate,
-  type DailyGenConfig,
+  generateDailyOnDemand,
+  generateDesignedDaily,
+  parsePreparedDaily,
+  upcomingDailyDates,
+  type DailyPass,
+  type PreparedDaily,
 } from './dailyPolicy';
 import { keys } from './keys';
 import { trackTelemetry } from './telemetry';
@@ -32,12 +37,6 @@ type StoredDailyPuzzle = {
   readonly date: string;
   readonly board: Board;
   readonly par: number;
-};
-
-type GeneratedDaily = {
-  readonly board: Board;
-  readonly par: number;
-  readonly pass: 'designed' | 'relaxed' | 'fast' | 'fallback';
 };
 
 const property = (value: object, key: string): unknown => Reflect.get(value, key);
@@ -70,81 +69,6 @@ const parseStoredDaily = (raw: string, ref: DailyPuzzleRef): DailyPuzzle | null 
   } catch {
     return null;
   }
-};
-
-/**
- * One pass over a list of configs that shares a single wall-clock budget across
- * them. Expensive uniqueness checks therefore cannot make a cache-miss request
- * exceed the whole pass budget.
- */
-const runPass = (
-  configs: readonly DailyGenConfig[],
-  baseSeed: number,
-  totalMs: number,
-  common: Partial<GenOptions>
-): { board: Board; par: number } | null => {
-  const deadline = Date.now() + totalMs;
-  for (let index = 0; index < configs.length; index++) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    const generated = generate({
-      width: 5,
-      height: 5,
-      seed: baseSeed + index,
-      deadlineMs: remaining,
-      ...common,
-      ...configs[index],
-    });
-    if (generated) return generated;
-  }
-  return null;
-};
-
-/**
- * Generate a daily through a bounded quality cascade. Every pass uses only the
- * selected weekday tier's shapes and par band:
- *   1. designed: unique optimal line and no inert clutter;
- *   2. relaxed: no inert clutter without the expensive uniqueness proof;
- *   3. fast: quality gates off, but still inside the same par band;
- *   4. fallback: a known solver-verified board in that exact band.
- *
- * This preserves the request-safe deadline without ever relabeling an Easy
- * board as Medium/Hard or reducing the par floor below four.
- */
-const generateDaily = (date: string): GeneratedDaily => {
-  const seed = seedFromDate(date);
-  const tier = dailyTierForDate(date);
-  const configs = DAILY_LADDERS[tier];
-
-  const designed = runPass(configs, seed, 2500, {
-    requireUnique: true,
-    rejectInert: true,
-    attempts: 3000,
-    maxStates: 30_000,
-  });
-  if (designed) return { ...designed, pass: 'designed' };
-
-  const relaxed = runPass(configs, seed + 10_000, 1500, {
-    rejectInert: true,
-    attempts: 1500,
-    maxStates: 20_000,
-  });
-  if (relaxed) return { ...relaxed, pass: 'relaxed' };
-
-  const fastConfigs = configs.map((config) => ({
-    ...config,
-    requireAllPiecesUsed: false,
-  }));
-  const fast = runPass(fastConfigs, seed + 20_000, 1500, {
-    requireUnique: false,
-    rejectInert: false,
-    attempts: 3000,
-    maxStates: 15_000,
-  });
-  if (fast) return { ...fast, pass: 'fast' };
-
-  const fallback = DAILY_FALLBACKS[tier];
-  return { ...fallback, pass: 'fallback' };
 };
 
 /**
@@ -209,7 +133,17 @@ export const getDailyPuzzle = async (ref: DailyPuzzleRef): Promise<DailyPuzzle> 
     return claimedPuzzle;
   }
 
-  const generated = generateDaily(ref.date);
+  // A date's puzzle is created only once its day has arrived, so no request
+  // can make (or reveal) an upcoming Daily early.
+  if (ref.date > latestOpenDailyDate()) {
+    throw new Error('This daily puzzle is not out yet.');
+  }
+  // The week-ahead job normally has this date ready; generate on the request
+  // path only when it does not.
+  const prepared = await readPreparedDaily(ref.date);
+  const generated: { board: Board; par: number; pass: DailyPass } = prepared
+    ? { board: prepared.board, par: prepared.par, pass: 'prepared' }
+    : generateDailyOnDemand(ref.date);
   const storedPuzzle: StoredDailyPuzzle = {
     date: ref.date,
     board: generated.board,
@@ -227,6 +161,8 @@ export const getDailyPuzzle = async (ref: DailyPuzzleRef): Promise<DailyPuzzle> 
   const winner = parseStoredDaily(winnerRaw, ref);
   if (!winner) throw new Error(`Daily creation record ${field} is invalid.`);
   await redis.set(storageKey, winnerRaw);
+  // Whichever request won, this date now has its permanent puzzle.
+  if (prepared) await redis.hDel(keys.dailyPrepared(), [ref.date]);
 
   if (wonCreation) {
     const tier = dailyTierForDate(ref.date);
@@ -242,6 +178,131 @@ export const getDailyPuzzle = async (ref: DailyPuzzleRef): Promise<DailyPuzzle> 
 /** Return the canonical published puzzle for a calendar date, creating it if needed. */
 export const getOrCreateDailyPuzzle = async (date: string): Promise<DailyPuzzle> =>
   getDailyPuzzle(await getCanonicalDailyRef(date));
+
+/**
+ * Lead time that still counts as "the date has arrived": the 12:00 UTC post
+ * job may be delivered a few minutes early (see the daily-puzzle scheduler).
+ */
+const DAILY_EARLY_MS = 5 * 60_000;
+
+/** The newest puzzle date that may be created (and so shown) right now. */
+const latestOpenDailyDate = (): string =>
+  dailyPuzzleDate(new Date(Date.now() + DAILY_EARLY_MS));
+
+/** The week-ahead job's puzzle for `date`, if a valid one is waiting. */
+const readPreparedDaily = async (date: string): Promise<PreparedDaily | null> => {
+  try {
+    return parsePreparedDaily(await redis.hGet(keys.dailyPrepared(), date), date);
+  } catch (error) {
+    console.error(`Prepared daily read failed for ${date}: ${error}`);
+    return null;
+  }
+};
+
+/** How far back published Dailies count as "recent" when avoiding repeats. */
+const RECENT_DAILY_DAYS = 60;
+
+/** Fingerprint ids of the published Dailies from the last RECENT_DAILY_DAYS days. */
+const recentDailyFingerprints = async (today: string): Promise<string[]> => {
+  const dates = Array.from({ length: RECENT_DAILY_DAYS }, (_, index) => addDays(today, -index));
+  const boards = await Promise.all(
+    dates.map(async (date) => {
+      const ref = await findCanonicalDailyRef(date);
+      return ref ? (await findDailyPuzzle(ref))?.board : undefined;
+    })
+  );
+  return boards.flatMap((board) => (board ? [boardFingerprintId(board)] : []));
+};
+
+/** Default work per week-ahead job run; Devvit allows 30s per request. */
+const PREPARE_BUDGET_MS = 15_000;
+
+export type PrepareResult = {
+  /** Puzzles made in this run. */
+  readonly prepared: number;
+  /** Upcoming dates that have a puzzle ready after this run. */
+  readonly ready: number;
+  readonly upcoming: number;
+};
+
+/**
+ * Keep the next DAILY_PREPARE_DAYS Dailies ready, earliest first, using the
+ * strict rules with plenty of time instead of a few seconds on the request
+ * path. Each puzzle is saved as soon as it is made, so a run cut short keeps
+ * its progress and the next run continues. A prepared puzzle never repeats
+ * another prepared one or a Daily from the last RECENT_DAILY_DAYS days,
+ * counting mirrored and rotated copies.
+ */
+export const prepareUpcomingDailies = async (
+  budgetMs: number = PREPARE_BUDGET_MS,
+  now: Date = new Date()
+): Promise<PrepareResult> => {
+  const deadline = Date.now() + budgetMs;
+  const today = dailyPuzzleDate(now);
+  const upcoming = upcomingDailyDates(today);
+  const preparedKey = keys.dailyPrepared();
+  const stored = await redis.hGetAll(preparedKey);
+
+  const ready = new Map<string, PreparedDaily>();
+  const discard: string[] = [];
+  for (const [date, raw] of Object.entries(stored)) {
+    // Today's entry stays until today's puzzle is created and consumes it.
+    if (date < today) {
+      discard.push(date);
+      continue;
+    }
+    const parsed = parsePreparedDaily(raw, date);
+    if (parsed) ready.set(date, parsed);
+    else discard.push(date);
+  }
+  if (discard.length > 0) await redis.hDel(preparedKey, discard);
+
+  const missing: string[] = [];
+  const created = new Set<string>();
+  for (const date of upcoming) {
+    if (ready.has(date)) continue;
+    // A date that already has its permanent puzzle needs nothing prepared.
+    const record = await redis.hGet(
+      keys.dailyPuzzleCreations(),
+      dailyPuzzleId(currentDailyPuzzleRef(date))
+    );
+    if (record) created.add(date);
+    else missing.push(date);
+  }
+  let prepared = 0;
+  if (missing.length > 0) {
+    const exclude = new Set<string>([
+      ...(await recentDailyFingerprints(today)),
+      ...[...ready.values()].map((entry) => boardFingerprintId(entry.board)),
+    ]);
+    for (const date of missing) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const generated = generateDesignedDaily(date, {
+        deadlineMs: remaining,
+        exclude,
+        seed: randomSeed(),
+      });
+      if (!generated) break;
+      const entry: PreparedDaily = {
+        date,
+        board: generated.board,
+        par: generated.par,
+        policy: DAILY_PREPARE_POLICY,
+      };
+      if (await redis.hSetNX(preparedKey, date, JSON.stringify(entry))) {
+        prepared += 1;
+        ready.set(date, entry);
+        exclude.add(boardFingerprintId(entry.board));
+      }
+    }
+  }
+  return {
+    prepared,
+    ready: upcoming.filter((date) => ready.has(date) || created.has(date)).length,
+    upcoming: upcoming.length,
+  };
+};
 
 /**
  * Read-only canonical identity for a date. Unlike getCanonicalDailyRef it never

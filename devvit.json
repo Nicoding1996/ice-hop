@@ -55,6 +55,10 @@
       "comment-leaderboards": {
         "endpoint": "/internal/scheduler/comment-leaderboards",
         "cron": "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+      },
+      "daily-prepare": {
+        "endpoint": "/internal/scheduler/daily-prepare",
+        "cron": "4,14,24,34,44,54 * * * *"
       }
     }
   },

@@ -1,5 +1,6 @@
 // Date helpers shared by client and server. The daily puzzle is keyed by its
-// puzzle date and generated from a deterministic seed derived from it.
+// puzzle date; its board is randomly generated and stored, never derived from
+// the date, so nobody can work out an upcoming puzzle.
 
 export const todayUtc = (now: Date = new Date()): string => now.toISOString().slice(0, 10); // YYYY-MM-DD
 
@@ -64,7 +65,7 @@ export const formatPuzzleDate = (date: string, withWeekday = false): string => {
 export const isStreakCurrent = (lastDate: string, puzzleDate: string): boolean =>
   lastDate !== '' && lastDate >= previousDate(puzzleDate);
 
-/** Stable 31-bit seed from a YYYY-MM-DD string (FNV-1a). */
+/** Stable 31-bit seed from a YYYY-MM-DD string (FNV-1a), for repeatable benchmark runs. */
 export const seedFromDate = (date: string): number => {
   let h = 2166136261;
   for (let i = 0; i < date.length; i++) {

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../dist/types/bench",
+    "tsBuildInfoFile": "../dist/types/bench/tsconfig.tsbuildinfo",
+    "types": ["node"],
+    "rootDir": "./bench"
+  },
+  "include": ["./bench/**/*"],
+  "exclude": [],
+  "references": [{ "path": "./tsconfig.shared.json" }, { "path": "./tsconfig.server.json" }]
+}

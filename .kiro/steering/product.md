@@ -91,7 +91,8 @@ short-lived request counter. Monitor the events currently emitted:
 - signed daily actives and next-day returners;
 - Endless issue/completion rates by tier and at-par frequency;
 - creator test starts/solves and accepted submissions;
-- daily generation tier, quality pass, and resulting par.
+- daily generation tier, quality pass (`prepared` by the week-ahead job, or the
+  on-demand pass that made it), and resulting par.
 
 The product is healthy when puzzles load reliably, daily completion and next-day
 return remain strong, players continue into Endless/Community, and creators see

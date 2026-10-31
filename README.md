@@ -176,8 +176,8 @@ unit-testable in isolation and lets the art change without touching gameplay.
 ```
 src/
   shared/   # pure TS, no platform imports (engine, solver, scoring, DTOs)
-    game/     # board, legal moves, apply-move + win detection, types
-    solver/   # BFS solver (par), puzzle generator, difficulty, UGC validation
+    game/     # board, legal moves, apply-move + win detection, symmetry fingerprints, types
+    solver/   # BFS solver (par), position-graph analysis, reverse + random generators, difficulty, UGC validation
     scoring.ts share.ts date.ts api.ts
     playLayout.ts    # play-screen geometry shared by GameScene and the UI smoke test
     leaderboard.ts   # distributions, ranks, durations, leaderboard and hub response parsers
@@ -221,6 +221,7 @@ Other scripts:
 npm run type-check   # tsc --build
 npm run test         # vitest run (engine, scoring, share, validation)
 npm run test:ui      # build + phone-sized UI smoke test (needs Chrome or Edge)
+npm run bench:gen    # puzzle-generation benchmark (time, par, best solutions, luck, repeats)
 npm run build        # vite build
 npm run deploy       # type-check + devvit upload
 npm run launch       # deploy + devvit publish
@@ -261,6 +262,12 @@ record; commit history alone is not sufficient.
   rolls over at the same moment (`dailyPuzzleDate` in `src/shared/date.ts`), so
   "Play today's puzzle" in the menu is always the newest post and its thread.
   Change the cron and `DAILY_ROLLOVER_UTC_HOUR` together.
+- **Daily puzzles are made a week ahead:** `scheduler.tasks.daily-prepare` runs
+  every 10 minutes and keeps the next seven dates ready under the strict rules
+  (one best solution, no clutter, low 3-star luck, no repeat of the last 60
+  days). The 12:00 post uses the prepared puzzle; a date is never created
+  before its day, so nobody can see it early. If none is ready, the post makes
+  one on the spot within a few seconds, as before.
 - **Daily, manually:** moderators can use **"Post today's puzzle"** at any time.
 - **Community:** each accepted creator submission is published as its own custom
   post after structural, solver, duplicate, rate-limit, and creator-proof checks.
@@ -368,6 +375,42 @@ confirmed upload.
 
 The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
 source/package hardening milestone that preceded those later platform builds.
+
+### Unreleased
+
+Puzzle generation. Numbers below are from `npm run bench:gen` on one PC: 28
+Daily dates, 300 Easy, 100 Medium and 40 Hard Endless boards, before and after.
+
+- Puzzles are built in reverse: start from a finished board, map every position
+  that can reach it, and pick starting boards with a known par and a known
+  number of best solutions. The shared solver still checks every puzzle's par.
+  Hard boards with one best solution come out in about half a second; random
+  placement found none for a weekend Daily within its 2.5-second budget.
+- Every Daily in the test now has exactly one best solution, so "how did you do
+  it in 9?" has one answer. Before, no weekend Daily passed that check (one had
+  106 equally short solutions), and 4 of 12 midweek Dailies skipped the quality
+  checks entirely.
+- Daily boards also limit "3-star luck", the chance that random moves earn 3
+  stars (finish within par + 1 moves): at most 5% on Easy days and 1% on Medium
+  and Hard days.
+- Dailies are made a week ahead by a new `daily-prepare` job, so the 12:00 post
+  never rushes one, and a prepared Daily never repeats one from the last 60
+  days, counting mirrored and rotated copies. A date's puzzle can't be created
+  before its day, and Daily boards no longer come from a seed derived from the
+  date, which the public code would have let anyone compute.
+- Endless no longer repeats for signed-in players: each player's last 500
+  puzzles per level are skipped, counting mirrored and rotated copies, and the
+  pool no longer holds the same puzzle twice. Easy also has four more piece
+  mixes. Before, 72 of 300 Easy boards were repeats or mirrored copies of
+  earlier ones; now the generator makes 20 in 300, and the seen list keeps those
+  from reaching the same signed-in player twice.
+- A pooled Endless puzzle now goes to exactly one player; two players asking at
+  the same moment could both get it before.
+- Endless boards are made much faster: Hard took about 7.8 seconds each (up to
+  20) and now takes about 0.14 seconds, so pools refill sooner and an empty pool
+  still serves a quality board within about a second.
+- `npm run bench:gen` reports time, par, best solutions, 3-star luck and repeats
+  for the Daily (on demand and prepared) and Endless generators.
 
 ### 0.0.26 - 2026-10-31
 
