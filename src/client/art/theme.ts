@@ -3,6 +3,7 @@
 // Characters are chunky and outlined (a dark silhouette stroke) to read as
 // deliberate, polished vector art. See .kiro/steering/art-direction.md.
 import * as Phaser from 'phaser';
+import type { Board } from '../../shared/game/types';
 
 export const PALETTE = {
   // Backdrop
@@ -510,7 +511,7 @@ export class PillButton extends Phaser.GameObjects.Container {
   private readonly hit: Phaser.GameObjects.Zone;
   private intendedVariant: PillVariant;
   private readonly sizeKey: PillSize;
-  private readonly minWidth: number;
+  private minWidth: number;
   private readonly clickable: boolean;
   private enabled = true;
   private readonly onClick?: () => void;
@@ -606,6 +607,14 @@ export class PillButton extends Phaser.GameObjects.Container {
     return this;
   }
 
+  /** Widen to at least `width` (labels never clip; a longer label still grows). */
+  setMinWidth(width: number): this {
+    if (width === this.minWidth) return this;
+    this.minWidth = width;
+    this.redraw();
+    return this;
+  }
+
   /** Enable/disable: a disabled button shows the muted style and ignores taps. */
   setEnabled(enabled: boolean): this {
     this.enabled = enabled;
@@ -650,27 +659,47 @@ export const armTap = (target: Phaser.GameObjects.GameObject, handlers: TapHandl
   target.on('pointerupoutside', cancel);
 };
 
-/** Device-pixel resolution for Phaser Text, capped to bound texture memory. */
-export const textResolution = (): number =>
-  Math.min(3, Math.max(1, Math.round((window.devicePixelRatio || 1) * 100) / 100));
+/**
+ * Canvas pixels per CSS pixel, fixed at load and capped at 3 (the cap Text
+ * already used) to bound GPU fill and memory. Phaser 4 has no game-level
+ * device-pixel-ratio option, so game.ts creates the canvas at this resolution
+ * and every scene's main camera zooms by it (useCrispRendering). Scenes keep
+ * laying out in CSS pixels through viewWidth/viewHeight, while vector art and
+ * text rasterize at the device resolution instead of being stretched from a
+ * 1x canvas.
+ */
+export const RENDER_SCALE = Math.min(
+  3,
+  Math.max(1, Math.round((window.devicePixelRatio || 1) * 100) / 100)
+);
+
+/** Device-pixel resolution for Phaser Text: the canvas resolution. */
+export const textResolution = (): number => RENDER_SCALE;
+
+/** The scene's layout width in CSS pixels (the canvas is RENDER_SCALE wider). */
+export const viewWidth = (scene: Phaser.Scene): number => scene.scale.width / RENDER_SCALE;
+
+/** The scene's layout height in CSS pixels (the canvas is RENDER_SCALE taller). */
+export const viewHeight = (scene: Phaser.Scene): number => scene.scale.height / RENDER_SCALE;
 
 const crispScenes = new WeakSet<Phaser.Scene>();
 
 /**
- * Render every Text this scene creates at the device pixel ratio. Phaser 4 has
- * no game-level DPR option, so on a 3x phone the canvas (and plain 1x Text) is
- * upscaled and looks soft. Call at the top of create(); it registers once per
- * scene instance and the listener survives scene restarts.
+ * Draw this scene at the device resolution. The main camera zooms by
+ * RENDER_SCALE from the top-left, so world units stay CSS pixels, and every
+ * Text renders at the same resolution so it maps 1:1 onto canvas pixels. Call
+ * at the top of every create(): the zoom is reapplied each start, and the Text
+ * listener registers once per scene instance and survives restarts.
  */
-export const useCrispText = (scene: Phaser.Scene): void => {
+export const useCrispRendering = (scene: Phaser.Scene): void => {
+  scene.cameras.main.setOrigin(0, 0).setZoom(RENDER_SCALE);
   if (crispScenes.has(scene)) return;
   crispScenes.add(scene);
-  const resolution = textResolution();
-  if (resolution <= 1) return;
+  if (RENDER_SCALE <= 1) return;
   scene.events.on(
     Phaser.Scenes.Events.ADDED_TO_SCENE,
     (object: Phaser.GameObjects.GameObject) => {
-      if (object instanceof Phaser.GameObjects.Text) object.setResolution(resolution);
+      if (object instanceof Phaser.GameObjects.Text) object.setResolution(RENDER_SCALE);
     }
   );
 };
@@ -678,6 +707,23 @@ export const useCrispText = (scene: Phaser.Scene): void => {
 /** Factory for a PillButton (mirrors scene.add.* style). */
 export const makePill = (scene: Phaser.Scene, opts: PillOptions): PillButton =>
   new PillButton(scene, opts);
+
+/** A small two-tone vector flame (streaks), matching the code-drawn art. */
+export const drawFlame = (
+  g: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  size: number
+): void => {
+  const flame = (scale: number, color: number): void => {
+    const s = size * scale;
+    g.fillStyle(color, 1);
+    g.fillCircle(x, y + s * 0.22, s * 0.42);
+    g.fillTriangle(x - s * 0.4, y + s * 0.12, x + s * 0.4, y + s * 0.12, x + s * 0.05, y - s * 0.62);
+  };
+  flame(1, PALETTE.accent);
+  flame(0.55, PALETTE.gold);
+};
 
 /** A non-interactive rounded badge (e.g. the endless "Solved" counter). */
 export const makeBadge = (
@@ -868,4 +914,121 @@ export const drawSpeakerIcon = (g: Phaser.GameObjects.Graphics, size: number, on
     g.lineTo(0.85 * s, -0.32 * s);
     g.strokePath();
   }
+};
+
+/** Music toggle icon: a beamed pair of notes, struck through when off.
+ *  Same conventions as drawSpeakerIcon (centred, `size` = bounding extent). */
+export const drawMusicIcon = (g: Phaser.GameObjects.Graphics, size: number, on: boolean): void => {
+  const s = size / 2;
+  const color = 0xeaf6fb;
+  const stem = Math.max(2, 0.14 * s);
+  g.fillStyle(color, on ? 1 : 0.55);
+  g.fillEllipse(-0.42 * s, 0.56 * s, 0.56 * s, 0.4 * s);
+  g.fillEllipse(0.5 * s, 0.4 * s, 0.56 * s, 0.4 * s);
+  g.fillRect(-0.2 * s, -0.6 * s, stem, 1.16 * s);
+  g.fillRect(0.72 * s, -0.76 * s, stem, 1.16 * s);
+  // Slanted beam joining the stems (two triangles: fillPoints wants Vector2s).
+  const right = 0.72 * s + stem;
+  g.fillTriangle(-0.2 * s, -0.6 * s, right, -0.76 * s, right, -0.48 * s);
+  g.fillTriangle(-0.2 * s, -0.6 * s, right, -0.48 * s, -0.2 * s, -0.32 * s);
+  if (!on) {
+    // A slash with a dark keyline so it reads against the light glyph.
+    g.lineStyle(Math.max(4, 0.3 * s), 0x1f3f59, 1);
+    g.lineBetween(-0.85 * s, -0.85 * s, 0.85 * s, 0.85 * s);
+    g.lineStyle(Math.max(2, 0.14 * s), color, 1);
+    g.lineBetween(-0.85 * s, -0.85 * s, 0.85 * s, 0.85 * s);
+  }
+};
+
+/** A cool silver trophy (Leaderboards), centred, `size` = bounding extent. */
+export const drawTrophyIcon = (g: Phaser.GameObjects.Graphics, size: number): void => {
+  const s = size / 2;
+  const body = 0xd5e3ee;
+  const edge = 0x7fb4d4;
+  g.lineStyle(Math.max(2, 0.13 * s), body, 1);
+  g.strokeCircle(-0.62 * s, -0.42 * s, 0.24 * s);
+  g.strokeCircle(0.62 * s, -0.42 * s, 0.24 * s);
+  g.fillStyle(body, 1);
+  g.fillRoundedRect(-0.58 * s, -0.86 * s, 1.16 * s, 0.86 * s, {
+    tl: 0.08 * s,
+    tr: 0.08 * s,
+    bl: 0.56 * s,
+    br: 0.56 * s,
+  });
+  g.fillRect(-0.1 * s, -0.04 * s, 0.2 * s, 0.5 * s);
+  g.fillRoundedRect(-0.46 * s, 0.44 * s, 0.92 * s, 0.26 * s, 0.07 * s);
+  g.fillStyle(edge, 1);
+  g.fillCircle(0, -0.46 * s, 0.17 * s);
+};
+
+/**
+ * A small schematic of a board for list rows (My puzzles, Community), so a
+ * puzzle is recognisable at a glance: the ice sheet with faint grid lines,
+ * water holes, and one flat glyph per piece (a penguin dot, a seal capsule
+ * spanning its cells, a rock square). Centred on (0,0) in `container`; `size`
+ * bounds the longer side. Purely a glyph, not the full character art.
+ */
+export const drawBoardThumb = (
+  scene: Phaser.Scene,
+  container: Phaser.GameObjects.Container,
+  board: Board,
+  size: number
+): void => {
+  const { width: cols, height: rows } = board;
+  const cell = size / Math.max(cols, rows);
+  // Size the backing to the grid extent so non-square boards aren't
+  // letterboxed inside a square with uneven padding.
+  const gw = cols * cell;
+  const gh = rows * cell;
+  const ox = -gw / 2;
+  const oy = -gh / 2;
+  const radius = Math.max(3, cell * 0.45);
+  const centre = (index: number): { x: number; y: number } => ({
+    x: ox + (index % cols) * cell + cell / 2,
+    y: oy + Math.floor(index / cols) * cell + cell / 2,
+  });
+  const g = scene.add.graphics();
+  g.fillStyle(PALETTE.iceSheet, 1);
+  g.fillRoundedRect(ox, oy, gw, gh, radius);
+  g.lineStyle(1, PALETTE.gridLine, 0.5);
+  for (let c = 1; c < cols; c++) g.lineBetween(ox + c * cell, oy + 2, ox + c * cell, oy + gh - 2);
+  for (let r = 1; r < rows; r++) g.lineBetween(ox + 2, oy + r * cell, ox + gw - 2, oy + r * cell);
+  g.lineStyle(1, PALETTE.iceEdge, 0.9);
+  g.strokeRoundedRect(ox, oy, gw, gh, radius);
+
+  for (const hole of board.holes) {
+    const { x, y } = centre(hole);
+    g.fillStyle(PALETTE.waterRing, 1);
+    g.fillCircle(x, y, cell * 0.38);
+    g.fillStyle(PALETTE.water, 1);
+    g.fillCircle(x, y, cell * 0.29);
+  }
+  for (const piece of board.pieces) {
+    if (piece.cells.length === 0) continue;
+    if (piece.kind === 'SLIDER') {
+      // One capsule across the seal's whole footprint.
+      const points = piece.cells.map(centre);
+      const left = Math.min(...points.map((p) => p.x)) - cell * 0.4;
+      const right = Math.max(...points.map((p) => p.x)) + cell * 0.4;
+      const top = Math.min(...points.map((p) => p.y)) - cell * 0.32;
+      const bottom = Math.max(...points.map((p) => p.y)) + cell * 0.32;
+      g.fillStyle(PALETTE.seal, 1);
+      g.fillRoundedRect(left, top, right - left, bottom - top, Math.min(right - left, bottom - top) / 2);
+      continue;
+    }
+    const { x, y } = centre(piece.cells[0]);
+    if (piece.kind === 'HOPPER') {
+      // A white belly keeps a penguin distinct from a dark water hole.
+      g.fillStyle(PALETTE.penguin, 1);
+      g.fillCircle(x, y, cell * 0.33);
+      g.fillStyle(PALETTE.penguinBelly, 1);
+      g.fillCircle(x, y + cell * 0.08, cell * 0.17);
+    } else {
+      g.fillStyle(PALETTE.rockOutline, 1);
+      g.fillRoundedRect(x - cell * 0.36, y - cell * 0.36, cell * 0.72, cell * 0.72, cell * 0.14);
+      g.fillStyle(PALETTE.rock, 1);
+      g.fillRoundedRect(x - cell * 0.3, y - cell * 0.3, cell * 0.6, cell * 0.6, cell * 0.1);
+    }
+  }
+  container.add(g);
 };

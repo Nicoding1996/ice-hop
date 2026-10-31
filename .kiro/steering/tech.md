@@ -27,7 +27,8 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
 - Phaser 4 is confined to the `game.html` expanded view, with scenes: `Boot`
   (loads the sound pref, launches `GameScene`), `HomeScene` (the hub), `GameScene`
   (daily / endless / community / test play), `EditorScene` (build),
-  `CommunityScene` (loads the stream and hands off to GameScene), `EndlessScene`
+  `CommunityScene` (the paginated Community browse list; a tapped row starts
+  `GameScene` with the list as its Next queue), `EndlessScene`
   (Easy/Medium/Hard tier select), and `MyPuzzlesScene` (creator dashboard). The
   shared "How to play" overlay (`src/client/howToPlay.ts`) opens from the hub and
   expanded play screen. The shared Leaderboards overlay
@@ -42,8 +43,20 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   play; Community has no transcript handoff after a move.
 - All art is drawn in code as vector graphics - no image/sprite assets. One
   palette + helper module, `src/client/art/theme.ts`, holds the penguin / seal /
-  rock / water, the connected ice sheet, the backdrop, win FX, and the scene
-  fades (`fadeToScene` / `fadeInScene`).
+  rock / water, the connected ice sheet, board thumbnails (`drawBoardThumb`),
+  the backdrop, win FX, and the scene fades (`fadeToScene` / `fadeInScene`).
+- The expanded game renders at device resolution: `game.ts` runs Phaser with
+  `Scale.NONE` at the container's CSS size times `RENDER_SCALE`
+  (`devicePixelRatio`, capped at 3) and a `1/RENDER_SCALE` canvas zoom, and
+  resizes the canvas itself when the container changes. Every scene calls
+  `useCrispRendering(this)` (camera zoom + DPR text) and lays out in CSS pixels
+  with `viewWidth(this)` / `viewHeight(this)`, never `scale.width/height`. Do not
+  return to Phaser's `RESIZE` mode: it sizes the backing store in CSS pixels, so
+  high-DPI phones show a stretched 1x canvas. Distances Phaser measures itself
+  (for example `input.dragDistanceThreshold`) are in canvas pixels.
+- Play-screen geometry (HUD rows, board, action bar, tip) is the pure
+  `src/shared/playLayout.ts`, shared with the UI smoke test so its taps land on
+  the cells and buttons `GameScene` draws. Change layout there, not inline.
 - Audio lives in `src/client/audio.ts`. Hop, slide, splash, and verified-win
   cues are synthesized at runtime with Web Audio; the ambient soundtrack is one
   checked-in composition encoded as `ice-hop-music.ogg` and
@@ -105,6 +118,10 @@ Devvit Web app (runs on Reddit.com). Verified against reddit/devvit-template-pha
   `GET /api/init` returns the authoritative host puzzle and lazily issues the
   Daily play capability. `POST /api/solve` verifies Daily transcripts;
   `POST /api/ugc/played` verifies Community transcripts.
+- `GET /api/hub` is the hub's read-only summary (today's date and par, the
+  viewer's verified result, rank, streak, and Endless total; parsed by
+  `parseHubResponse`). It uses read-only lookups, so unlike `/api/init` it never
+  issues a `playId`, starts the Daily clock, or generates a puzzle.
 - User-attributed Reddit actions run server-side via `reddit`, using the `asUser`
   scopes declared in devvit.json: `reddit.subscribeToCurrentSubreddit()` (the
   win-screen "Join" -> `/api/subscribe`) and `reddit.submitComment({ ..., runAs:

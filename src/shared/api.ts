@@ -197,6 +197,26 @@ export type RankedBoardResponse = {
   readonly viewerHidden: boolean;
 };
 
+/**
+ * Read-only hub summary: today's Daily, the viewer's result and streak, and
+ * their Endless total. It never starts a Daily clock or generates a puzzle.
+ */
+export type HubResponse = {
+  /** Today's puzzle date (12:00 UTC rollover). */
+  readonly date: string;
+  /** Today's par once the puzzle exists, else null. */
+  readonly par: number | null;
+  /** The signed viewer's best verified solve today, if any. */
+  readonly solved: { readonly moves: number; readonly stars: number } | null;
+  /** The viewer's rank today (0 when unranked) among `totalPlayers`. */
+  readonly rank: number;
+  readonly totalPlayers: number;
+  /** Current Daily streak in days (0 for guests or lapsed). */
+  readonly streak: number;
+  /** Lifetime no-hint Endless solves (0 for guests). */
+  readonly endlessSolved: number;
+};
+
 /** Opt in or out of having your name shown on comment leaderboards. */
 export type LeaderboardVisibilityRequest = { readonly hidden: boolean };
 

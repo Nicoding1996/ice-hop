@@ -1,18 +1,20 @@
 import { Scene } from 'phaser';
 import * as Phaser from 'phaser';
 import type { MyPuzzlesResponse, UgcSubmission } from '../../shared/api';
-import type { Board } from '../../shared/game/types';
 import {
   PALETTE,
   FONT,
   SPACE,
   RADIUS,
   paintBackdrop,
+  drawBoardThumb,
   drawPenguinInto,
   fadeInScene,
   fadeToScene,
   makePill,
-  useCrispText,
+  useCrispRendering,
+  viewHeight,
+  viewWidth,
 } from '../art/theme';
 
 const GOLD = '#ffd166';
@@ -29,60 +31,6 @@ const ago = (ts: number): string => {
   const mins = Math.floor(delta / 60_000);
   if (mins >= 1) return `${mins}m ago`;
   return 'just now';
-};
-
-/**
- * A tiny schematic of a board so a creator can recognise which puzzle is which
- * at a glance: ice backing, water holes, and a coloured dot per piece. Drawn
- * centred on (0,0) into `container`. Purely a glyph - not the full character art.
- */
-const drawBoardThumb = (
-  scene: Phaser.Scene,
-  container: Phaser.GameObjects.Container,
-  board: Board,
-  size: number
-): void => {
-  const { width: cols, height: rows } = board;
-  const cell = size / Math.max(cols, rows);
-  // Size the backing to the actual grid extent so non-square boards aren't
-  // letterboxed inside a square with uneven padding.
-  const gw = cols * cell;
-  const gh = rows * cell;
-  const ox = -gw / 2;
-  const oy = -gh / 2;
-  const g = scene.add.graphics();
-  g.fillStyle(PALETTE.iceSheet, 1);
-  g.fillRoundedRect(ox, oy, gw, gh, 4);
-  g.lineStyle(1, PALETTE.iceEdge, 0.8);
-  g.strokeRoundedRect(ox, oy, gw, gh, 4);
-
-  const holes = new Set(board.holes);
-  const kindAt = new Map<number, string>();
-  for (const p of board.pieces) for (const c of p.cells) kindAt.set(c, p.kind);
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c;
-      const x = ox + c * cell + cell / 2;
-      const y = oy + r * cell + cell / 2;
-      if (holes.has(idx)) {
-        g.fillStyle(PALETTE.water, 1);
-        g.fillCircle(x, y, cell * 0.32);
-      }
-      const kind = kindAt.get(idx);
-      if (kind === 'HOPPER') {
-        g.fillStyle(PALETTE.penguin, 1);
-        g.fillCircle(x, y, cell * 0.34);
-      } else if (kind === 'SLIDER') {
-        g.fillStyle(PALETTE.seal, 1);
-        g.fillRoundedRect(x - cell * 0.4, y - cell * 0.32, cell * 0.8, cell * 0.64, 2);
-      } else if (kind === 'BLOCKER') {
-        g.fillStyle(PALETTE.rock, 1);
-        g.fillRoundedRect(x - cell * 0.36, y - cell * 0.36, cell * 0.72, cell * 0.72, 2);
-      }
-    }
-  }
-  container.add(g);
 };
 
 /**
@@ -107,16 +55,16 @@ export class MyPuzzlesScene extends Scene {
   }
 
   create(): void {
-    useCrispText(this);
+    useCrispRendering(this);
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
     this.page = 0;
     this.bgLayer = this.add.container(0, 0);
-    paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+    paintBackdrop(this, this.bgLayer, viewWidth(this), viewHeight(this));
     this.build();
 
     const onResize = (): void => {
-      paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+      paintBackdrop(this, this.bgLayer, viewWidth(this), viewHeight(this));
       this.build();
     };
     this.scale.on('resize', onResize);
@@ -148,8 +96,8 @@ export class MyPuzzlesScene extends Scene {
   private build(): void {
     this.content.forEach((o) => o.destroy());
     this.content = [];
-    const w = this.scale.width;
-    const h = this.scale.height;
+    const w = viewWidth(this);
+    const h = viewHeight(this);
     const cx = w / 2;
 
     const title = this.add
@@ -186,7 +134,8 @@ export class MyPuzzlesScene extends Scene {
       size: 'sm',
       onClick: () => fadeToScene(this, 'HomeScene'),
     });
-    back.setPosition(SPACE.md + back.width / 2, Math.min(72, h * 0.13) / 2);
+    // Same corner as every other screen, so the chip never jumps between scenes.
+    back.setPosition(SPACE.md + back.width / 2, SPACE.md + back.height / 2);
     this.content.push(back);
 
     if (!this.loaded) return;
@@ -218,7 +167,7 @@ export class MyPuzzlesScene extends Scene {
    *  Next controls only when they're needed. Pagination (not scrolling) keeps
    *  every row inside the band, so rows can never overlap the header or footer. */
   private buildList(cx: number, top: number, footerTop: number): void {
-    const w = this.scale.width;
+    const w = viewWidth(this);
     const gap = SPACE.sm;
     const step = ROW_H + gap;
     const rowW = Math.min(440, w - SPACE.lg * 2);
@@ -348,8 +297,8 @@ export class MyPuzzlesScene extends Scene {
   }
 
   private buildErrorState(): void {
-    const w = this.scale.width;
-    const h = this.scale.height;
+    const w = viewWidth(this);
+    const h = viewHeight(this);
     const cx = w / 2;
 
     const msg = this.add
@@ -381,8 +330,8 @@ export class MyPuzzlesScene extends Scene {
   }
 
   private buildEmptyState(): void {
-    const w = this.scale.width;
-    const h = this.scale.height;
+    const w = viewWidth(this);
+    const h = viewHeight(this);
     const cx = w / 2;
 
     const peng = this.add.container(cx, h * 0.34);

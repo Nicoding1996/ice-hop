@@ -10,6 +10,7 @@ import {
   distributionBoundaries,
   formatDuration,
   parseDailyLeaderboard,
+  parseHubResponse,
   parseRankedBoard,
 } from '../leaderboard';
 import { decodeScore, leaderboardScore } from '../scoring';
@@ -165,5 +166,32 @@ describe('parseRankedBoard', () => {
     ).toBeNull();
     expect(parseRankedBoard({ ...week, periodEnd: undefined }, 'week')).toBeNull();
     expect(parseRankedBoard({ ...week, viewer: { rank: -1, value: 2 } }, 'week')).toBeNull();
+  });
+});
+
+describe('parseHubResponse', () => {
+  const hub = {
+    date: '2026-10-30',
+    par: 6,
+    solved: { moves: 7, stars: 3 },
+    rank: 7,
+    totalPlayers: 42,
+    streak: 3,
+    endlessSolved: 17,
+  };
+
+  it('accepts a solved summary and an unsolved day before the puzzle exists', () => {
+    expect(parseHubResponse(hub)).toEqual(hub);
+    const unsolved = { ...hub, par: null, solved: null, rank: 0, totalPlayers: 0 };
+    expect(parseHubResponse(unsolved)).toEqual(unsolved);
+  });
+
+  it('rejects a rank beyond the field, an impossible result, or a bad date', () => {
+    expect(parseHubResponse({ ...hub, rank: 43 })).toBeNull();
+    expect(parseHubResponse({ ...hub, solved: { moves: 7, stars: 4 } })).toBeNull();
+    expect(parseHubResponse({ ...hub, solved: { moves: 0, stars: 3 } })).toBeNull();
+    expect(parseHubResponse({ ...hub, date: '30/10/2026' })).toBeNull();
+    expect(parseHubResponse({ ...hub, streak: -1 })).toBeNull();
+    expect(parseHubResponse({ ok: true })).toBeNull();
   });
 });

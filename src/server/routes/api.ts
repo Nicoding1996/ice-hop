@@ -10,6 +10,7 @@ import type {
   EndlessSolveRequest,
   EndlessSolveResponse,
   EndlessTier,
+  HubResponse,
   InitResponse,
   LeaderboardResponse,
   LeaderboardVisibilityRequest,
@@ -502,6 +503,40 @@ api.get('/leaderboard', async (c) => {
     console.error(`/api/leaderboard failed: ${error}`);
     const message = error instanceof Error ? error.message : 'leaderboard failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/**
+ * Read-only hub summary. Uses read-only Daily lookups, so opening the hub never
+ * claims, generates, or starts the clock on today's puzzle.
+ */
+api.get('/hub', async (c) => {
+  try {
+    const username = await reddit.getCurrentUsername();
+    const date = dailyPuzzleDate();
+    const ref = await findCanonicalDailyRef(date);
+    const puzzle = ref ? await findDailyPuzzle(ref) : null;
+    const boardKey = ref ? keys.dailyLeaderboard(ref) : null;
+    const [best, rankIndex, totalPlayers, streak, endlessSolved] = await Promise.all([
+      username && ref ? getBestDailySolve(ref, username) : Promise.resolve(null),
+      username && boardKey ? redis.zRank(boardKey, username) : Promise.resolve(undefined),
+      boardKey ? redis.zCard(boardKey) : Promise.resolve(0),
+      username ? getCurrentStreak(username) : Promise.resolve(0),
+      username ? getEndlessSolved(username) : Promise.resolve(0),
+    ]);
+    const rank = typeof rankIndex === 'number' ? Math.min(rankIndex + 1, totalPlayers) : 0;
+    return c.json<HubResponse>({
+      date,
+      par: puzzle?.par ?? null,
+      solved: best ? { moves: best.moves, stars: best.stars } : null,
+      rank,
+      totalPlayers,
+      streak,
+      endlessSolved,
+    });
+  } catch (error) {
+    console.error(`/api/hub failed: ${error}`);
+    return c.json<ErrorResponse>({ status: 'error', message: 'hub failed' }, 400);
   }
 });
 

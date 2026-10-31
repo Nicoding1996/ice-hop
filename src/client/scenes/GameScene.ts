@@ -52,13 +52,16 @@ import {
   makePill,
   makeBadge,
   makePanel,
-  stackColumn,
   PillButton,
   IconButton,
   makeIconButton,
   drawSpeakerIcon,
   armTap,
-  useCrispText,
+  useCrispRendering,
+  viewHeight,
+  viewWidth,
+  RENDER_SCALE,
+  drawFlame,
   snowSpray,
   prefersReducedMotion,
 } from '../art/theme';
@@ -71,7 +74,10 @@ import {
   sealBlockedByWater,
 } from '../../shared/game/motion';
 import { starGoal, starGoalLabel } from '../../shared/scoring';
+import { formatPuzzleDate } from '../../shared/date';
+import { difficultyFromPar, difficultyLabel } from '../../shared/solver/difficulty';
 import { TUTORIAL_STEPS } from '../../shared/tutorial';
+import { ACTION_BAR_GAP, actionBarSlots, playLayout, type PlayLayout } from '../../shared/playLayout';
 import { context, showLoginPrompt, showShareSheet, showToast } from '@devvit/web/client';
 import { isAnyAudioOn, playHop, playSlide, playSplash, playWin, setAllAudioOn } from '../audio';
 import { consumeDailyHandoff } from '../dailyHandoff';
@@ -89,6 +95,55 @@ type DragState = {
   max: number;
   targets: { coord: number; move: Move }[];
 };
+
+/** A result screen's card metrics; its dim overlay and panel are drawn. */
+type ResultCard = {
+  readonly w: number;
+  readonly h: number;
+  readonly contentW: number;
+  readonly left: number;
+  readonly top: number;
+  readonly bottom: number;
+  readonly compact: boolean;
+};
+
+/** One tile in a result screen's stat row (rank, streak, par rate). */
+type StatTile = {
+  readonly value: string;
+  readonly label: string;
+  readonly flame?: boolean;
+};
+
+/** Everything a result card shows, top to bottom. */
+type ResultSpec = {
+  /** A bobbing penguin above the title, for cards without a star row. */
+  readonly mascot?: boolean;
+  readonly title: string;
+  readonly blurb?: string;
+  /** Stars earned (0-3); omit for no star row. */
+  readonly stars?: number;
+  /** Final move count for the "6 moves · par 6" line; omit for none. */
+  readonly moves?: number;
+  readonly countUp?: boolean;
+  /** Height kept free under the score line for async content (status, tiles). */
+  readonly slotHeight: number;
+  readonly primary: PillButton;
+  /** Two per row when every label fits, otherwise one per row. */
+  readonly secondaries: readonly PillButton[];
+  /** A quiet optional link under the primary (sign in, join). */
+  readonly quiet?: PillButton;
+};
+
+/** The Daily win's async block, driven by the verified solve and leaderboard. */
+type DailyResultView = {
+  readonly isActive: () => boolean;
+  readonly setNote: (text: string) => void;
+  readonly setStats: (tiles: readonly StatTile[]) => void;
+  readonly revealLeaderboard: (data: LeaderboardResponse) => void;
+};
+
+const STAT_TILE_HEIGHT = 56;
+const RESULT_NOTE_HEIGHT = 22;
 
 const responseProperty = (value: object, key: string): unknown => Reflect.get(value, key);
 const isResponseObject = (value: unknown): value is object =>
@@ -148,6 +203,8 @@ export class GameScene extends Scene {
   private menuButton!: PillButton;
   private communityPuzzle?: { id: string; board: Board; par: number; creator: string; votes: number; solves: number };
   private isCommunity = false;
+  /** Started from the in-app Community list or its Next/Skip (not the host post). */
+  private fromCommunityList = false;
   private testBoard?: Board;
   private testPar = 0;
   private isTest = false;
@@ -218,10 +275,10 @@ export class GameScene extends Scene {
   private originX = 0;
   private originY = 0;
   private hudHeight = 0;
-  /** Vertical band reserved for the async score/leaderboard block on the daily
-   *  win screen, between the result cluster and the bottom button stack. */
-  private winStatusTop = 0;
-  private winStatusBottom = 0;
+  /** Current play-screen geometry (see playLayout.ts). */
+  private geometry?: PlayLayout;
+  /** Mode line under Moves/Par: "Daily · Fri, Oct 30 · Medium". */
+  private contextText!: Phaser.GameObjects.Text;
   /** Viewport dimensions used when the active recap/win overlay was drawn. */
   private overlayBaseWidth = 0;
   private overlayBaseHeight = 0;
@@ -250,6 +307,7 @@ export class GameScene extends Scene {
     this.tutorialText = undefined;
     this.communityPuzzle = data?.community;
     this.isCommunity = Boolean(data?.community);
+    this.fromCommunityList = Boolean(data?.community);
     this.testBoard = data?.test?.board;
     this.testPar = data?.test?.par ?? 0;
     this.isTest = Boolean(data?.test);
@@ -284,6 +342,7 @@ export class GameScene extends Scene {
     this.hintStage = 0;
     this.hintUsed = false;
     this.hintRequestPending = false;
+    this.geometry = undefined;
     this.overlayBaseWidth = 0;
     this.overlayBaseHeight = 0;
     this.blockingShield = undefined;
@@ -293,13 +352,13 @@ export class GameScene extends Scene {
   }
 
   create(): void {
-    useCrispText(this);
+    useCrispRendering(this);
     this.dragMoved = false;
     this.emptyPress = false;
     this.cameras.main.setBackgroundColor(COLORS.bg);
     fadeInScene(this);
     this.bgLayer = this.add.container(0, 0);
-    paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+    paintBackdrop(this, this.bgLayer, viewWidth(this), viewHeight(this));
     this.boardLayer = this.add.container(0, 0);
     this.pieceLayer = this.add.container(0, 0);
     this.effectsLayer = this.add.container(0, 0);
@@ -318,7 +377,7 @@ export class GameScene extends Scene {
         color: COLORS.text,
         align: 'center',
         lineSpacing: 3,
-        wordWrap: { width: this.scale.width - 24 },
+        wordWrap: { width: viewWidth(this) - 24 },
       })
       .setOrigin(0.5)
       .setAlpha(0.7);
@@ -326,13 +385,25 @@ export class GameScene extends Scene {
     this.goalText = this.add
       .text(0, 0, '', { fontFamily: FONT.ui, fontSize: '20px', fontStyle: '800', color: '#ffd166' })
       .setOrigin(0.5);
-    this.uiLayer.add([this.hudText, this.hintText, this.goalText]);
+    // Mode line: names what is being played (and by whom) with its difficulty,
+    // matching the feed header, so a Community board credits its creator.
+    this.contextText = this.add
+      .text(0, 0, '', { fontFamily: FONT.ui, fontSize: '13px', fontStyle: '700', color: COLORS.text })
+      .setOrigin(0.5)
+      .setAlpha(0.72);
+    this.uiLayer.add([this.hudText, this.hintText, this.goalText, this.contextText]);
 
+    // Back goes up one level: Test to the editor, a puzzle picked from the
+    // Community list back to that list, everything else to the hub.
     this.menuButton = makePill(this, {
-      label: this.isTest ? '\u2039 Edit' : '\u2039 Menu',
+      label: this.isTest ? '\u2039 Edit' : this.fromCommunityList ? '\u2039 Community' : '\u2039 Menu',
       variant: 'chip',
       size: 'sm',
-      onClick: () => fadeToScene(this, this.isTest ? 'EditorScene' : 'HomeScene'),
+      onClick: () => {
+        if (this.isTest) fadeToScene(this, 'EditorScene');
+        else if (this.fromCommunityList) fadeToScene(this, 'CommunityScene', { resume: true });
+        else fadeToScene(this, 'HomeScene');
+      },
     });
     this.uiLayer.add(this.menuButton);
 
@@ -348,33 +419,33 @@ export class GameScene extends Scene {
     this.endlessBanner = makeBadge(this, 'Solved: 0', 'gold', 'sm');
     this.uiLayer.add(this.endlessBanner);
 
-    // Undo the last move (bottom strip, left of Restart). Every move has an
+    // Undo the last move (action bar, left of Restart). Every move has an
     // exact reverse and only the final move list is scored, so stepping back
     // is a convenience that never changes how a solve counts.
     this.undoButton = makePill(this, {
       label: '\u21B6 Undo',
       variant: 'chip',
-      size: 'sm',
+      size: 'md',
       onClick: () => this.undoMove(),
     });
     this.uiLayer.add(this.undoButton);
 
-    // Restart the current board (bottom strip). Only relevant once a move has
-    // been made, so it stays hidden on a fresh board and swaps in for the hint.
+    // Restart the current board (action bar). Shown from the start, disabled
+    // until the first move, so the bar never jumps when play begins.
     this.resetButton = makePill(this, {
       label: '\u21BA Restart',
       variant: 'chip',
-      size: 'sm',
+      size: 'md',
       onClick: () => this.resetPuzzle(),
     });
     this.uiLayer.add(this.resetButton);
 
-    // Hint (Endless only): reveals the solver's best next move. Lives next to
-    // Restart in the bottom strip; using it means the solve won't count.
+    // Hint (Endless only): reveals the solver's best next move, available from
+    // the start. Using it means the solve won't count.
     this.hintButton = makePill(this, {
-      label: 'Hint',
+      label: '\u2726 Hint',
       variant: 'chip',
-      size: 'sm',
+      size: 'md',
       onClick: () => void this.showHint(),
     });
     this.uiLayer.add(this.hintButton);
@@ -435,7 +506,8 @@ export class GameScene extends Scene {
 
     // Seal dragging. A small threshold keeps a tap a tap: tapping a seal
     // selects it and shows its lane stops, exactly like the feed post.
-    this.input.dragDistanceThreshold = 8;
+    // Phaser measures this in canvas pixels, so scale it to stay 8 CSS px.
+    this.input.dragDistanceThreshold = 8 * RENDER_SCALE;
     this.input.on('dragstart', (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.GameObject) =>
       this.onSealDragStart(obj)
     );
@@ -449,8 +521,8 @@ export class GameScene extends Scene {
     );
 
     const onResize = (): void => {
-      paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
-      if (this.loadingText) this.loadingText.setPosition(this.scale.width / 2, this.scale.height / 2);
+      paintBackdrop(this, this.bgLayer, viewWidth(this), viewHeight(this));
+      if (this.loadingText) this.loadingText.setPosition(viewWidth(this) / 2, viewHeight(this) / 2);
       if (!this.board) return;
       if (this.won || this.dailyRecapOpen) {
         this.fitBlockingOverlay();
@@ -483,7 +555,7 @@ export class GameScene extends Scene {
     // half-built frame (empty backdrop + unpositioned HUD) never flashes.
     this.uiLayer.setVisible(false);
     this.loadingText = this.add
-      .text(this.scale.width / 2, this.scale.height / 2, 'Getting the penguins ready\u2026', {
+      .text(viewWidth(this) / 2, viewHeight(this) / 2, 'Getting the penguins ready\u2026', {
         fontFamily: FONT.ui,
         fontSize: '16px',
         fontStyle: '600',
@@ -684,8 +756,8 @@ export class GameScene extends Scene {
   private showLoadError(message: string): void {
     this.clearLoadError();
     if (this.loadingText) this.loadingText.setText(message).setVisible(true);
-    const w = this.scale.width;
-    const h = this.scale.height;
+    const w = viewWidth(this);
+    const h = viewHeight(this);
     const retry = makePill(this, {
       label: 'Try again',
       variant: 'primary',
@@ -879,29 +951,29 @@ export class GameScene extends Scene {
     if (this.blockingShield?.active) this.blockingShield.destroy();
     this.blockingShield = undefined;
     this.resetFxTransform();
-    this.overlayBaseWidth = this.scale.width;
-    this.overlayBaseHeight = this.scale.height;
+    this.overlayBaseWidth = viewWidth(this);
+    this.overlayBaseHeight = viewHeight(this);
   }
 
   /** Uniformly fit an already-rendered modal and keep its input shield full-screen. */
   private fitBlockingOverlay(): void {
     if (this.overlayBaseWidth <= 0 || this.overlayBaseHeight <= 0) return;
     const scale = Math.min(
-      this.scale.width / this.overlayBaseWidth,
-      this.scale.height / this.overlayBaseHeight
+      viewWidth(this) / this.overlayBaseWidth,
+      viewHeight(this) / this.overlayBaseHeight
     );
-    const layerX = (this.scale.width - this.overlayBaseWidth * scale) / 2;
-    const layerY = (this.scale.height - this.overlayBaseHeight * scale) / 2;
+    const layerX = (viewWidth(this) - this.overlayBaseWidth * scale) / 2;
+    const layerY = (viewHeight(this) - this.overlayBaseHeight * scale) / 2;
     this.fxLayer.setScale(scale);
     this.fxLayer.setPosition(layerX, layerY);
 
     if (this.blockingShield?.active) this.blockingShield.destroy();
     const shield = this.add
       .rectangle(
-        (this.scale.width / 2 - layerX) / scale,
-        (this.scale.height / 2 - layerY) / scale,
-        this.scale.width / scale,
-        this.scale.height / scale,
+        (viewWidth(this) / 2 - layerX) / scale,
+        (viewHeight(this) / 2 - layerY) / scale,
+        viewWidth(this) / scale,
+        viewHeight(this) / scale,
         0x000000,
         0.001
       )
@@ -912,24 +984,35 @@ export class GameScene extends Scene {
 
   private layout(): void {
     if (!this.board) return;
-    const w = this.scale.width;
-    const h = this.scale.height;
-    // The top band holds two rows - a chrome row (Menu / mute / help|banner|skip)
-    // and a dedicated Moves/Par readout beneath it - so it's a touch taller than
-    // a single row.
-    this.hudHeight = Math.min(84, Math.max(72, h * 0.14));
-    // Reserve a strip at the bottom for the hint / breathing room so the board
-    // never sits under it (was clipping the hint on large/desktop screens).
-    const bottomStrip = 50;
-    const pad = 16;
-    const availW = w - pad * 2;
-    const regionH = h - this.hudHeight - bottomStrip;
-    const availH = regionH - pad * 2;
-    this.cell = Math.max(24, Math.floor(Math.min(availW / this.board.width, availH / this.board.height)));
-    const gridW = this.cell * this.board.width;
-    const gridH = this.cell * this.board.height;
-    this.originX = (w - gridW) / 2;
-    this.originY = this.hudHeight + (regionH - gridH) / 2;
+    // Shared with the UI smoke test (src/client/playLayout.ts): a three-row
+    // HUD, then the board with its action bar and tip docked underneath.
+    this.geometry = playLayout({
+      width: viewWidth(this),
+      height: viewHeight(this),
+      cols: this.board.width,
+      rows: this.board.height,
+    });
+    this.cell = this.geometry.cell;
+    this.originX = this.geometry.originX;
+    this.originY = this.geometry.originY;
+    this.hudHeight = this.geometry.hudBottom;
+  }
+
+  /** The mode line under Moves/Par: what this board is and how hard. */
+  private contextLabel(): string {
+    if (this.tutorialStep !== null) return '';
+    if (this.isTest) return 'Test play \u00B7 solve it to unlock Submit';
+    const band = difficultyLabel(difficultyFromPar(this.par));
+    if (this.isCommunity) {
+      const creator = this.communityPuzzle?.creator;
+      return creator ? `Community \u00B7 by ${creator} \u00B7 ${band}` : `Community \u00B7 ${band}`;
+    }
+    if (this.isEndless) {
+      return `Endless \u00B7 ${this.endlessTier.charAt(0).toUpperCase()}${this.endlessTier.slice(1)}`;
+    }
+    return this.date
+      ? `Daily \u00B7 ${formatPuzzleDate(this.date, true)} \u00B7 ${band}`
+      : `Daily \u00B7 ${band}`;
   }
 
   private cellCenter(index: number): { x: number; y: number } {
@@ -1595,7 +1678,7 @@ export class GameScene extends Scene {
   private showTutorialGuide(): void {
     if (this.tutorialStep === null || !this.board || this.won || this.celebrating) return;
     const step = TUTORIAL_STEPS[this.tutorialStep];
-    const w = this.scale.width;
+    const w = viewWidth(this);
     this.tutorialText?.destroy();
     this.tutorialText = undefined;
     const text = this.add
@@ -1616,7 +1699,7 @@ export class GameScene extends Scene {
     const y =
       bandBottom - bandTop >= text.height + SPACE.sm
         ? (bandTop + bandBottom) / 2
-        : this.scale.height - 76;
+        : (this.geometry?.tipY ?? viewHeight(this) - 76);
     text.setPosition(w / 2, y);
     this.uiLayer.add(text);
     this.tutorialText = text;
@@ -1658,6 +1741,8 @@ export class GameScene extends Scene {
         return;
       }
       this.hintUsed = true;
+      // The hint caption takes the tip's slot under the action bar.
+      this.hintText.setVisible(false);
       this.selected = null;
       this.fxLayer.removeAll(true);
       this.clearHintGraphics();
@@ -1737,7 +1822,7 @@ export class GameScene extends Scene {
    */
   private addHintCaption(text: string): PillButton {
     const caption = makeBadge(this, text, 'chip', 'sm');
-    caption.setPosition(this.scale.width / 2, this.scale.height - 70);
+    caption.setPosition(viewWidth(this) / 2, this.geometry?.tipY ?? viewHeight(this) - 70);
     this.hintLayer.add(caption);
     return caption;
   }
@@ -1778,13 +1863,14 @@ export class GameScene extends Scene {
   }
 
   private updateHud(): void {
-    const w = this.scale.width;
-    // Two-tier top HUD: row 1 is the chrome chips near the top; row 2 is a
+    const w = viewWidth(this);
+    const geometry = this.geometry;
+    // Three-tier top HUD: row 1 is the chrome chips near the top; row 2 is a
     // dedicated, full-width "Moves / Par" readout just below them, so the chips
-    // can never crowd the readout again (the added mute chip was crushing the
-    // old single-row centre to an unreadable sliver on narrow widths).
-    const midY = 22;
-    const statsMidY = this.hudHeight - 18;
+    // can never crowd the readout again; row 3 names the mode, date/creator,
+    // and difficulty.
+    const midY = geometry?.chromeY ?? 22;
+    const statsMidY = geometry?.statsY ?? this.hudHeight - 18;
     // During the ~1s win beat the board is the whole show: no chrome.
     const playing = !this.won && !this.celebrating;
     this.menuButton.setPosition(SPACE.md + this.menuButton.width / 2, midY);
@@ -1848,21 +1934,38 @@ export class GameScene extends Scene {
     const statsVisible = !this.won && !this.dailyRecapOpen;
     this.hudText.setVisible(statsVisible);
     this.goalText.setVisible(statsVisible && showGoal);
-    this.hintText.setPosition(w / 2, this.scale.height - 26);
-    this.hintText.setVisible(this.moves === 0 && playing && !this.isCommunity && !practicing);
-    // Undo + Restart (+ Hint in Endless) share the bottom strip once a move is
-    // made; they swap in for the first-move hint.
-    const bottomY = this.scale.height - 26;
-    const showActions = this.moves > 0 && playing;
+    const context = this.contextLabel();
+    this.contextText.setText(context);
+    this.contextText.setScale(1);
+    if (this.contextText.width > w - SPACE.lg * 2) {
+      this.contextText.setScale(Math.max(0.7, (w - SPACE.lg * 2) / this.contextText.width));
+    }
+    this.contextText.setPosition(w / 2, geometry?.contextY ?? statsMidY + 26);
+    this.contextText.setVisible(statsVisible && playing && context !== '');
+    const tipY = geometry?.tipY ?? viewHeight(this) - 26;
+    this.hintText.setPosition(w / 2, tipY);
+    this.hintText.setVisible(
+      this.moves === 0 && !this.hintUsed && playing && !this.isCommunity && !practicing
+    );
+    // Undo + Restart (+ Hint in Endless) sit in one bar docked under the
+    // board for the whole play. Undo/Restart wait, disabled, for a first move
+    // so the layout never jumps and the controls are always discoverable.
+    const actionsY = geometry?.actionsY ?? viewHeight(this) - 26;
+    const showActions = playing && !this.dailyRecapOpen;
     const strip: PillButton[] = [this.undoButton, this.resetButton];
     if (this.isEndless) strip.push(this.hintButton);
-    const stripGap = SPACE.md;
-    const stripW = strip.reduce((sum, button) => sum + button.width, 0) + stripGap * (strip.length - 1);
+    const slots = actionBarSlots(w, strip.length, geometry?.maxBarWidth ?? w - SPACE.lg * 2);
+    for (const button of strip) button.setMinWidth(slots.slotWidth);
+    const stripW =
+      strip.reduce((sum, button) => sum + button.width, 0) + ACTION_BAR_GAP * (strip.length - 1);
     let stripX = w / 2 - stripW / 2;
     for (const button of strip) {
-      button.setPosition(stripX + button.width / 2, bottomY);
-      stripX += button.width + stripGap;
+      button.setPosition(stripX + button.width / 2, actionsY);
+      stripX += button.width + ACTION_BAR_GAP;
     }
+    const hasMoves = this.moves > 0;
+    this.undoButton.setEnabled(hasMoves);
+    this.resetButton.setEnabled(hasMoves);
     this.undoButton.setVisible(showActions);
     this.resetButton.setVisible(showActions);
     this.hintButton.setVisible(showActions && this.isEndless);
@@ -1879,9 +1982,9 @@ export class GameScene extends Scene {
     if (context.username) return undefined; // already signed in - nothing to gain
     const btn = makePill(this, {
       label,
-      variant: 'secondary',
+      variant: 'ghost',
       size: 'sm',
-      x: this.scale.width / 2,
+      x: viewWidth(this) / 2,
       y,
       onClick: () => showLoginPrompt(),
     });
@@ -1900,9 +2003,9 @@ export class GameScene extends Scene {
     const label = this.subredditName ? `Join r/${this.subredditName}` : 'Join the community';
     const btn = makePill(this, {
       label,
-      variant: 'secondary',
+      variant: 'ghost',
       size: 'sm',
-      x: this.scale.width / 2,
+      x: viewWidth(this) / 2,
       y,
       onClick: () => void this.subscribeToCommunity(btn),
     });
@@ -1938,65 +2041,23 @@ export class GameScene extends Scene {
   private showDailySolvedRecap(result?: { moves: number; stars: number }): void {
     this.dailyRecapOpen = true;
     this.beginBlockingOverlay();
-    const w = this.scale.width;
-    const h = this.scale.height;
-    this.fxLayer.removeAll(true);
+    // uiLayer renders above the card, so every play control must hide.
     this.hudText.setVisible(false);
+    this.goalText.setVisible(false);
+    this.contextText.setVisible(false);
     this.hintText.setVisible(false);
+    this.undoButton.setVisible(false);
     this.resetButton.setVisible(false);
     this.hintButton.setVisible(false);
     this.menuButton.setVisible(false);
     this.muteButton.setVisible(false);
     this.helpButton.setVisible(false);
 
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(440, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const cardLeft = w / 2 - cardW / 2;
-    const cardTop = h / 2 - cardH / 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-
-    // Menu lives inside the card's top-left corner (consistent with the win
-    // screen), rather than the play-HUD chip floating above the card.
-    const menuChip = makePill(this, {
-      label: '\u2039 Menu',
-      variant: 'chip',
-      size: 'sm',
-      onClick: () => fadeToScene(this, 'HomeScene'),
-    });
-    menuChip.setPosition(cardLeft + SPACE.md + menuChip.width / 2, cardTop + SPACE.md + menuChip.height / 2);
-
-    const headline = this.add
-      .text(w / 2, h * 0.3, "You've solved today's puzzle!", {
-        fontFamily: FONT.display,
-        fontSize: '24px',
-        fontStyle: '700',
-        color: COLORS.text,
-        align: 'center',
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5);
-    const subText = result
-      ? `${result.moves} moves   ${'\u2605'.repeat(result.stars)}\nA fresh puzzle drops tomorrow.`
-      : 'A fresh puzzle drops tomorrow.';
-    const sub = this.add
-      .text(w / 2, h * 0.41, subText, {
-        fontFamily: FONT.ui,
-        fontSize: '15px',
-        fontStyle: '600',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 6,
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.9);
-
+    const card = this.openResultCard(440);
+    this.addCardMenuChip(card);
     const endlessBtn = makePill(this, {
       label: 'Endless puzzles \u25B6',
       variant: 'primary',
-      minWidth: Math.min(240, contentW),
       onClick: () => {
         trackClientEvent('daily_to_endless');
         fadeToScene(this, 'EndlessScene');
@@ -2004,12 +2065,18 @@ export class GameScene extends Scene {
     });
     const communityBtn = makePill(this, {
       label: 'Community puzzles',
-      variant: 'secondary',
-      minWidth: Math.min(240, contentW),
+      variant: 'chip',
+      size: 'sm',
       onClick: () => {
         trackClientEvent('daily_to_community');
         fadeToScene(this, 'CommunityScene');
       },
+    });
+    const leaderboardBtn = makePill(this, {
+      label: 'Leaderboard',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.openLeaderboard(),
     });
     const replayBtn = makePill(this, {
       label: "Play today's again",
@@ -2019,12 +2086,300 @@ export class GameScene extends Scene {
       // used to stay hidden after leaving the recap).
       onClick: () => this.replayPuzzle(),
     });
-    // Even-gap column for the three onward actions, centred below the subtext.
-    stackColumn([endlessBtn, communityBtn, replayBtn], w / 2, h * 0.53, SPACE.md);
+    this.composeResultCard(card, {
+      mascot: !result,
+      title: 'You\u2019ve solved today\u2019s puzzle!',
+      blurb: 'A fresh puzzle drops tomorrow.',
+      ...(result ? { stars: result.stars, moves: result.moves } : {}),
+      slotHeight: 0,
+      primary: endlessBtn,
+      secondaries: [communityBtn, leaderboardBtn],
+      quiet: replayBtn,
+    });
+  }
 
-    this.fxLayer.add([overlay, card, menuChip, headline, sub, endlessBtn, communityBtn, replayBtn]);
-    headline.setScale(0.95).setAlpha(0);
-    this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
+  /** Clear the fx layer and draw a result card's dim overlay and panel. */
+  private openResultCard(maxWidth = 460): ResultCard {
+    const w = viewWidth(this);
+    const h = viewHeight(this);
+    this.fxLayer.removeAll(true);
+    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
+    const cardW = Math.min(maxWidth, w - SPACE.lg * 2);
+    const cardH = h - SPACE.lg * 2;
+    const panel = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
+    this.fxLayer.add([overlay, panel]);
+    return {
+      w,
+      h,
+      contentW: cardW - SPACE.xl * 2,
+      left: w / 2 - cardW / 2,
+      top: h / 2 - cardH / 2,
+      bottom: h / 2 + cardH / 2,
+      compact: h < 680,
+    };
+  }
+
+  /** "‹ Menu" in the card's top-left corner, the same on every result screen. */
+  private addCardMenuChip(card: ResultCard): void {
+    const chip = makePill(this, {
+      label: '\u2039 Menu',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => fadeToScene(this, 'HomeScene'),
+    });
+    chip.setPosition(card.left + SPACE.md + chip.width / 2, card.top + SPACE.md + chip.height / 2);
+    this.fxLayer.add(chip);
+  }
+
+  /** Three stars that pop in one by one (earned ones spin and sparkle). */
+  private addStarRow(stars: number, y: number, outer: number): void {
+    const w = viewWidth(this);
+    const gap = Math.min(54, w * 0.16, outer * 2.3);
+    for (let i = 0; i < 3; i++) {
+      const earned = i < stars;
+      const star = this.add
+        .star(w / 2 + (i - 1) * gap, y, 5, outer * 0.45, outer, earned ? COLORS.gold : 0x32485c)
+        .setStrokeStyle(2, earned ? 0xffe9a8 : 0x4a6377)
+        .setScale(0);
+      this.fxLayer.add(star);
+      this.tweens.add({ targets: star, scale: 1, duration: 300, delay: 300 + i * 180, ease: 'Back.easeOut' });
+      if (earned) {
+        this.tweens.add({ targets: star, angle: 360, duration: 500, delay: 300 + i * 180, ease: 'Cubic.easeOut' });
+      }
+    }
+    if (stars > 0) {
+      this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, y, Math.min(60, w * 0.16)));
+    }
+  }
+
+  /**
+   * Lay out a result card: title, blurb, stars, score, a reserved slot for
+   * async content, then the actions (secondaries in a two-column grid above a
+   * full-width primary, a quiet link last). Header and actions form one block,
+   * centred when it fits so a tall phone never strands the buttons far below
+   * the result; otherwise the actions sit on the card's bottom edge.
+   * Returns the top of the reserved slot.
+   */
+  private composeResultCard(card: ResultCard, spec: ResultSpec): number {
+    const cx = card.w / 2;
+    const gap = SPACE.sm + 2;
+
+    // Actions: measure rows before placing anything. Neighbours share a row
+    // when both labels fit half the width; a long label takes a row alone.
+    const half = (card.contentW - gap) / 2;
+    const rows: PillButton[][] = [];
+    for (let index = 0; index < spec.secondaries.length; ) {
+      const first = spec.secondaries[index];
+      const second = spec.secondaries[index + 1];
+      if (!first) break;
+      if (second && first.width <= half && second.width <= half) {
+        rows.push([first, second]);
+        index += 2;
+      } else {
+        rows.push([first]);
+        index += 1;
+      }
+    }
+    const rowHeight = (row: readonly PillButton[]): number =>
+      Math.max(0, ...row.map((button) => button.height));
+    const actionsH =
+      rows.reduce((sum, row) => sum + rowHeight(row) + gap, 0) +
+      spec.primary.height +
+      (spec.quiet ? SPACE.xs + spec.quiet.height : 0);
+
+    // Header: create and measure.
+    const vGap = card.compact ? 8 : 12;
+    const title = this.add
+      .text(cx, 0, spec.title, {
+        fontFamily: FONT.display,
+        fontSize: card.compact ? '21px' : '24px',
+        fontStyle: '700',
+        color: COLORS.text,
+        align: 'center',
+        wordWrap: { width: card.contentW },
+      })
+      .setOrigin(0.5, 0);
+    const blurb = spec.blurb
+      ? this.add
+          .text(cx, 0, spec.blurb, {
+            fontFamily: FONT.display,
+            fontSize: card.compact ? '16px' : '18px',
+            fontStyle: '600',
+            color: COLORS.text,
+            align: 'center',
+            wordWrap: { width: card.contentW },
+          })
+          .setOrigin(0.5, 0)
+          .setAlpha(0.85)
+      : undefined;
+    const outer = card.compact ? 20 : 24;
+    const score =
+      spec.moves === undefined
+        ? undefined
+        : this.add
+            .text(cx, 0, this.scoreLine(spec.countUp ? 0 : spec.moves), {
+              fontFamily: FONT.ui,
+              fontSize: card.compact ? '17px' : '19px',
+              fontStyle: '800',
+              color: COLORS.text,
+            })
+            .setOrigin(0.5, 0);
+    const mascotSize = card.compact ? 54 : 68;
+    const mascotH = spec.mascot ? mascotSize + vGap : 0;
+    const headerH =
+      mascotH +
+      title.height +
+      (blurb ? SPACE.xs + blurb.height : 0) +
+      (spec.stars !== undefined ? vGap + outer * 2 + 6 : 0) +
+      (score ? vGap + score.height : 0) +
+      (spec.slotHeight > 0 ? vGap + spec.slotHeight : 0);
+
+    // Placement: one centred block when it fits.
+    const regionTop = card.top + 58;
+    const regionBottom = card.bottom - SPACE.lg;
+    const blockGap = card.compact ? 18 : 30;
+    const total = headerH + blockGap + actionsH;
+    let headerTop: number;
+    let actionsTop: number;
+    if (total <= regionBottom - regionTop) {
+      headerTop = regionTop + (regionBottom - regionTop - total) / 2;
+      actionsTop = headerTop + headerH + blockGap;
+    } else {
+      actionsTop = regionBottom - actionsH;
+      headerTop = Math.max(regionTop, actionsTop - blockGap - headerH);
+    }
+
+    let y = headerTop;
+    if (spec.mascot) {
+      const mascot = this.add.container(cx, y + mascotSize / 2);
+      drawPenguinInto(this, mascot, mascotSize);
+      this.fxLayer.add(mascot);
+      this.tweens.add({
+        targets: mascot,
+        y: mascot.y - 5,
+        duration: 1400,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+      y += mascotH;
+    }
+    title.setY(y);
+    y += title.height;
+    if (blurb) {
+      y += SPACE.xs;
+      blurb.setY(y);
+      y += blurb.height;
+    }
+    if (spec.stars !== undefined) {
+      y += vGap + 6;
+      this.addStarRow(spec.stars, y + outer, outer);
+      y += outer * 2;
+    }
+    if (score && spec.moves !== undefined) {
+      y += vGap;
+      score.setY(y);
+      y += score.height;
+      if (spec.countUp) {
+        const finalMoves = spec.moves;
+        const counter = { v: 0 };
+        this.tweens.add({
+          targets: counter,
+          v: finalMoves,
+          duration: 600,
+          delay: 250,
+          ease: 'Cubic.easeOut',
+          onUpdate: () => {
+            if (score.scene) score.setText(this.scoreLine(Math.round(counter.v)));
+          },
+        });
+      }
+    }
+    const slotTop = y + (spec.slotHeight > 0 ? vGap : 0);
+    const headerParts: Phaser.GameObjects.GameObject[] = [title];
+    if (blurb) headerParts.push(blurb);
+    if (score) headerParts.push(score);
+    this.fxLayer.add(headerParts);
+    const titleY = title.y;
+    title.setAlpha(0).setY(titleY + 8);
+    this.tweens.add({ targets: title, alpha: 1, y: titleY, duration: 300, ease: 'Quad.easeOut' });
+
+    let rowTop = actionsTop;
+    for (const row of rows) {
+      const height = rowHeight(row);
+      const cy = rowTop + height / 2;
+      const [first, second] = row;
+      if (first && second) {
+        first.setMinWidth(half).setPosition(cx - gap / 2 - half / 2, cy);
+        second.setMinWidth(half).setPosition(cx + gap / 2 + half / 2, cy);
+      } else if (first) {
+        first.setMinWidth(card.contentW).setPosition(cx, cy);
+      }
+      rowTop += height + gap;
+    }
+    spec.primary.setMinWidth(card.contentW).setPosition(cx, rowTop + spec.primary.height / 2);
+    rowTop += spec.primary.height;
+    if (spec.quiet) spec.quiet.setPosition(cx, rowTop + SPACE.xs + spec.quiet.height / 2);
+    this.fxLayer.add([spec.primary, ...spec.secondaries, ...(spec.quiet ? [spec.quiet] : [])]);
+    return slotTop;
+  }
+
+  private scoreLine(moves: number): string {
+    return `${moves} ${moves === 1 ? 'move' : 'moves'} \u00B7 par ${this.par}`;
+  }
+
+  /** A row of equal stat tiles at `top`; rebuilt whenever its data changes. */
+  private drawStatTiles(
+    card: ResultCard,
+    top: number,
+    tiles: readonly StatTile[]
+  ): Phaser.GameObjects.Container {
+    const layer = this.add.container(0, 0);
+    const gap = SPACE.sm;
+    const count = Math.max(1, tiles.length);
+    const tileW = Math.min(112, (card.contentW - gap * (count - 1)) / count);
+    const total = tileW * tiles.length + gap * (tiles.length - 1);
+    let x = card.w / 2 - total / 2;
+    for (const tile of tiles) {
+      const cx = x + tileW / 2;
+      const box = this.add.graphics();
+      box.fillStyle(0x0e2740, 0.9);
+      box.fillRoundedRect(x, top, tileW, STAT_TILE_HEIGHT, 14);
+      box.lineStyle(1.5, 0x2f5c7a, 1);
+      box.strokeRoundedRect(x, top, tileW, STAT_TILE_HEIGHT, 14);
+      const value = this.add
+        .text(cx, top + 20, tile.value, {
+          fontFamily: FONT.display,
+          fontSize: '22px',
+          fontStyle: '700',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5);
+      layer.add([box, value]);
+      if (tile.flame) {
+        const flameSize = 15;
+        const width = flameSize + SPACE.xs + value.width;
+        const flameX = cx - width / 2 + flameSize / 2;
+        const flame = this.add.graphics();
+        drawFlame(flame, flameX, top + 20, flameSize);
+        value.setX(flameX + flameSize / 2 + SPACE.xs + value.width / 2);
+        layer.add(flame);
+      }
+      const label = this.add
+        .text(cx, top + 42, tile.label, {
+          fontFamily: FONT.ui,
+          fontSize: '11px',
+          fontStyle: '700',
+          color: COLORS.text,
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.75);
+      if (label.width > tileW - SPACE.sm) label.setScale((tileW - SPACE.sm) / label.width);
+      layer.add(label);
+      x += tileW + gap;
+    }
+    this.fxLayer.add(layer);
+    return layer;
   }
 
   private onWin(): void {
@@ -2045,6 +2400,7 @@ export class GameScene extends Scene {
     // The win cue already played during celebrateWin().
     this.hudText.setVisible(false);
     this.goalText.setVisible(false);
+    this.contextText.setVisible(false);
     this.hintText.setVisible(false);
     this.tutorialText?.destroy();
     this.tutorialText = undefined;
@@ -2067,10 +2423,6 @@ export class GameScene extends Scene {
     }
     const stars = computeStars(this.moves, this.par);
     const blurb = stars === 3 ? 'A clean run!' : stars === 2 ? 'Nicely done!' : 'Can you do it in fewer?';
-    const w = this.scale.width;
-    const h = this.scale.height;
-    this.fxLayer.removeAll(true);
-
     this.shareText = buildShareText({
       date: this.date,
       moves: this.moves,
@@ -2081,239 +2433,119 @@ export class GameScene extends Scene {
       totalPlayers: 0,
     });
 
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(460, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const cardLeft = w / 2 - cardW / 2;
-    const cardTop = h / 2 - cardH / 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-    this.fxLayer.add([overlay, card]);
-
+    const card = this.openResultCard();
     // Aurora curtains near the top only for a standout (3-star) win.
-    if (stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
+    if (stars === 3) auroraFlourish(this, this.fxLayer, card.w, card.h * 0.12);
+    this.addCardMenuChip(card);
 
-    const headline = this.add
-      .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
-        fontFamily: FONT.display,
-        fontSize: '24px',
-        fontStyle: '700',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 6,
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5)
-      .setAlpha(0);
-    this.fxLayer.add(headline);
-    this.tweens.add({ targets: headline, alpha: 1, y: h * 0.18, duration: 300, ease: 'Quad.easeOut' });
-
-    // Stars pop in one by one (earned spin); empty ones stay dim.
-    const starY = h * 0.32;
-    const gap = Math.min(54, w * 0.16);
-    const outer = Math.min(24, w * 0.07);
-    for (let i = 0; i < 3; i++) {
-      const earned = i < stars;
-      const star = this.add
-        .star(w / 2 + (i - 1) * gap, starY, 5, outer * 0.45, outer, earned ? COLORS.gold : 0x32485c)
-        .setStrokeStyle(2, earned ? 0xffe9a8 : 0x4a6377)
-        .setScale(0);
-      this.fxLayer.add(star);
-      this.tweens.add({ targets: star, scale: 1, duration: 300, delay: 300 + i * 180, ease: 'Back.easeOut' });
-      if (earned) {
-        this.tweens.add({ targets: star, angle: 360, duration: 500, delay: 300 + i * 180, ease: 'Cubic.easeOut' });
-      }
-    }
-
-    // Moves count up to the final tally.
-    const movesText = this.add
-      .text(w / 2, h * 0.44, `0 moves   (par ${this.par})`, {
-        fontFamily: FONT.ui,
-        fontSize: '19px',
-        fontStyle: '700',
-        color: COLORS.text,
-      })
-      .setOrigin(0.5);
-    this.fxLayer.add(movesText);
-    const counter = { v: 0 };
-    this.tweens.add({
-      targets: counter,
-      v: this.moves,
-      duration: 600,
-      delay: 250,
-      ease: 'Cubic.easeOut',
-      onUpdate: () => movesText.setText(`${Math.round(counter.v)} moves   (par ${this.par})`),
-    });
-
-    // Celebration sparkles once the stars are landing.
-    this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
-
-    const status = this.add
-      .text(w / 2, h * 0.55, 'Saving your score\u2026', {
-        fontFamily: FONT.ui,
-        fontSize: '15px',
-        fontStyle: '600',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 5,
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.9);
-    // Outward share: the native share sheet (plus a link back to the post that
-    // pulls new players in). A quieter ghost treatment with an "out" arrow so it
-    // reads as distinct from the inward "Comment my score" - not a second
-    // identical secondary pill (the two used to be indistinguishable).
-    let leaderboardData: LeaderboardResponse | undefined;
-    const compareButton = makePill(this, {
-      label: 'Leaderboard',
+    // Outward share (native share sheet with a link back to the post) and the
+    // inward thread action: the player's verified score as a reply under the
+    // pinned leaderboard, only when this is the host post's own Daily so the
+    // comment's par and thread always match what was solved.
+    const shareButton = makePill(this, {
+      label: 'Share result \u2197',
       variant: 'chip',
       size: 'sm',
-      onClick: () => this.openLeaderboard(leaderboardData),
+      onClick: () => void this.copyResult(shareButton),
     });
-    compareButton.setVisible(false);
-    const copyButton = makePill(this, {
-      label: 'Share result \u2197',
-      variant: 'ghost',
-      size: 'sm',
-      x: w / 2,
-      onClick: () => void this.copyResult(copyButton),
-    });
-    const revealLeaderboard = (data: LeaderboardResponse): void => {
-      leaderboardData = data;
-      compareButton.setVisible(true);
-      const gap = SPACE.sm;
-      const rowWidth = compareButton.width + gap + copyButton.width;
-      let x = w / 2 - rowWidth / 2;
-      compareButton.setPosition(x + compareButton.width / 2, copyButton.y);
-      x += compareButton.width + gap;
-      copyButton.setX(x + copyButton.width / 2);
-    };
-
-    // Drop the result straight into this post's comment thread (the comment
-    // scoreboard / "how'd you do it in N?" culture), authored by the player.
-    // Only when this is the host post's own daily, so the comment's par + thread
-    // always match what was solved (never a daily reached from inside a UGC post).
     let postScoreButton: PillButton | undefined;
     if (this.isHostPostPuzzle) {
       postScoreButton = makePill(this, {
         label: 'Comment my score',
-        variant: 'secondary',
-        x: w / 2,
+        variant: 'chip',
+        size: 'sm',
         onClick: () => {
           if (postScoreButton) void this.postScore(postScoreButton);
         },
       });
     }
-
+    // Replay right here: "Try for ★★★" when there's room to improve. The
+    // server keeps the best verified score, so trying again never hurts.
+    const replayButton = makePill(this, {
+      label: stars === 3 ? '\u21BA Play again' : '\u21BA Try for \u2605\u2605\u2605',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.replayPuzzle(),
+    });
+    // The overlay loads its own data; a board already fetched here is reused.
+    let leaderboardData: LeaderboardResponse | undefined;
+    const leaderboardButton = makePill(this, {
+      label: 'Leaderboard',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.openLeaderboard(leaderboardData),
+    });
     // Forward navigation so the daily isn't a dead end (keeps the "one more"
     // loop). Endless is always full of fresh puzzles, so it's the better
     // post-daily CTA than the (possibly empty) community stream.
     const morePuzzlesButton = makePill(this, {
       label: 'More puzzles \u25B6',
       variant: 'primary',
-      x: w / 2,
       onClick: () => {
         trackClientEvent('daily_to_endless');
         fadeToScene(this, 'EndlessScene');
       },
     });
-
-    const homeButton = makePill(this, {
-      label: '\u2039 Menu',
-      variant: 'chip',
-      size: 'sm',
-      onClick: () => fadeToScene(this, 'HomeScene'),
-    });
-    homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
-
-    // Replay right here: "Try for ★★★" when there's room to improve. The
-    // server keeps the best verified score, so trying again never hurts.
-    const replayButton = makePill(this, {
-      label: stars === 3 ? '\u21BA Play again' : '\u21BA Try for \u2605\u2605\u2605',
-      variant: 'ghost',
-      size: 'sm',
-      x: w / 2,
-      onClick: () => this.replayPuzzle(),
-    });
-
-    const winButtons: Phaser.GameObjects.GameObject[] = [
-      status,
-      compareButton,
-      copyButton,
-      morePuzzlesButton,
-      homeButton,
-      replayButton,
-    ];
-    if (postScoreButton) winButtons.push(postScoreButton);
-    this.fxLayer.add(winButtons);
-
-    // At most one CTA shows: a sign-in nudge for guests, otherwise a join nudge
-    // for signed-in non-members. Capture whichever renders so it joins the
-    // bottom button stack instead of sitting at a fixed y that the growing
-    // leaderboard text used to overlap.
+    // At most one optional nudge: sign in for guests, otherwise join for
+    // signed-in non-members.
     const cta =
       this.addSignInPrompt(0, 'Sign in to save your streak') ?? this.addSubscribePrompt(0);
 
-    // Stack the action buttons up from the bottom with even gaps, then let the
-    // score/leaderboard block fill the gap above them. Anchoring to the bottom
-    // keeps them clear of the leaderboard no matter how many lines it grows to
-    // once submitSolve resolves. Order is lowest-first (best thumb reach at the
-    // bottom): primary loop CTA, then the inward thread action (Comment my
-    // score), then the quieter outward Share, then the opt-in nudge on top.
-    const stack: PillButton[] = [morePuzzlesButton];
-    if (postScoreButton) stack.push(postScoreButton);
-    stack.push(copyButton, replayButton);
-    if (cta) stack.push(cta);
-    const stackTop = this.stackFromBottom(stack);
+    const signedIn = Boolean(context.username);
+    const tilesHeight = signedIn ? STAT_TILE_HEIGHT + SPACE.sm : 0;
+    const slotTop = this.composeResultCard(card, {
+      title: 'Everyone made it in!',
+      blurb,
+      stars,
+      moves: this.moves,
+      countUp: true,
+      slotHeight: tilesHeight + RESULT_NOTE_HEIGHT,
+      primary: morePuzzlesButton,
+      secondaries: postScoreButton
+        ? [shareButton, postScoreButton, replayButton, leaderboardButton]
+        : [shareButton, leaderboardButton, replayButton],
+      ...(cta ? { quiet: cta } : {}),
+    });
 
-    const movesBottom = movesText.y + movesText.height / 2;
-    this.winStatusTop = movesBottom + SPACE.md;
-    this.winStatusBottom = stackTop - SPACE.md;
-    this.positionWinStatus(status);
-
-    this.completionPromise = this.submitSolve(status, revealLeaderboard);
-  }
-
-  /** Lay out win-screen action buttons stacked up from the bottom of the screen
-   *  with consistent gaps (pass them lowest-first). Returns the y of the top
-   *  edge of the topmost button so the variable-height status block above can be
-   *  placed without ever overlapping the buttons. */
-  private stackFromBottom(buttons: PillButton[]): number {
-    const h = this.scale.height;
-    const gap = SPACE.md;
-    let bottom = h - Math.max(SPACE.lg, h * 0.03);
-    let top = bottom;
-    for (const btn of buttons) {
-      const hgt = btn.height;
-      btn.setY(bottom - hgt / 2);
-      top = bottom - hgt;
-      bottom = top - gap;
+    // Signed players get skeleton tiles at once (filled when the solve and the
+    // board land); guests get a single status line.
+    let tiles: Phaser.GameObjects.Container | undefined;
+    const setStats = (items: readonly StatTile[]): void => {
+      tiles?.destroy(true);
+      tiles = this.drawStatTiles(card, slotTop, items);
+    };
+    if (signedIn) {
+      setStats([
+        { value: '\u2026', label: 'today' },
+        { value: '\u2026', label: 'day streak', flame: true },
+        { value: '\u2026', label: 'hit par' },
+      ]);
     }
-    return top;
-  }
+    const note = this.add
+      .text(card.w / 2, slotTop + tilesHeight, 'Saving your score\u2026', {
+        fontFamily: FONT.ui,
+        fontSize: card.compact ? '13px' : '14px',
+        fontStyle: '600',
+        color: COLORS.text,
+        align: 'center',
+        wordWrap: { width: card.contentW },
+      })
+      .setOrigin(0.5, 0)
+      .setAlpha(0.85);
+    this.fxLayer.add(note);
 
-  /** Anchor the async, variable-height score/leaderboard block to the TOP of its
-   *  reserved band so it hugs the moves tally. On a first solve (one short line)
-   *  that keeps it part of the top content group instead of floating marooned in
-   *  the middle of the card; a tall leaderboard is shrunk to fit so it still
-   *  never slides under the bottom buttons. */
-  private positionWinStatus(status: Phaser.GameObjects.Text): void {
-    if (!status.scene) return; // destroyed (player navigated away mid-fetch)
-    const top = this.winStatusTop;
-    const bottom = this.winStatusBottom;
-    const band = bottom - top;
-    // The leaderboard is capped at 3 names, but the full block (rank + streak +
-    // best + 3 solvers, plus any wrapped long usernames) can still be taller
-    // than its band on a short viewport. Shrink it to fit so it can never spill
-    // onto the buttons; the floor keeps the text legible.
-    status.setScale(1);
-    if (band > 0 && status.height > band) {
-      status.setScale(Math.max(0.62, band / status.height));
-    }
-    // Top-anchored: place the block's top edge at winStatusTop (origin is
-    // centred, so offset by half its scaled height).
-    status.setY(top + status.displayHeight / 2);
+    this.completionPromise = this.submitSolve({
+      isActive: () => Boolean(note.scene),
+      setNote: (text) => {
+        if (note.scene) note.setText(text);
+      },
+      setStats: (items) => {
+        if (note.scene) setStats(items);
+      },
+      revealLeaderboard: (data) => {
+        leaderboardData = data;
+      },
+    });
   }
 
   private onWinCommunity(): void {
@@ -2323,47 +2555,21 @@ export class GameScene extends Scene {
     // (also identical to the request celebrateWin() already started).
     const completionBody = this.communityCompletionBody();
     const generation = this.playGeneration;
-    const w = this.scale.width;
-    const h = this.scale.height;
-    this.fxLayer.removeAll(true);
     const creator = this.communityPuzzle?.creator ?? 'a redditor';
     const isMine = Boolean(context.username) && this.communityPuzzle?.creator === context.username;
+    const card = this.openResultCard();
+    this.addCardMenuChip(card);
 
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(440, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-
-    const headline = this.add
-      .text(
-        w / 2,
-        h * 0.3,
-        `${isMine ? 'Solved your own puzzle!' : `Solved ${creator}'s puzzle!`}\n${this.moves} moves`,
-        {
-          fontFamily: FONT.display,
-          fontSize: '23px',
-          fontStyle: '700',
-          color: COLORS.text,
-          align: 'center',
-          lineSpacing: 8,
-          wordWrap: { width: contentW },
-        }
-      )
-      .setOrigin(0.5);
-
-    const buttons: PillButton[] = [];
     let voteButton: PillButton | undefined;
     if (!isMine) {
       voteButton = makePill(this, {
-        label: 'Upvote this puzzle',
+        label: '\u25B2 Upvote',
         variant: 'mint',
-        minWidth: Math.min(240, contentW),
+        size: 'sm',
         onClick: () => {
           if (voteButton) void this.upvoteCurrent(voteButton);
         },
       });
-      buttons.push(voteButton);
     }
     // Let a signed solver drop their verified score into this exact puzzle's
     // thread. Creator and host-post gates remain unchanged.
@@ -2371,14 +2577,13 @@ export class GameScene extends Scene {
     if (context.username && !isMine && this.isHostPostPuzzle) {
       scoreButton = makePill(this, {
         label: 'Comment my score',
-        variant: 'secondary',
-        minWidth: Math.min(240, contentW),
+        variant: 'chip',
+        size: 'sm',
         onClick: () => {
           if (scoreButton) void this.postScore(scoreButton);
         },
       });
       scoreButton.setEnabled(false);
-      buttons.push(scoreButton);
     }
 
     let verificationState: 'pending' | 'failed' | 'verified' = 'failed';
@@ -2386,7 +2591,6 @@ export class GameScene extends Scene {
     const moreButton = makePill(this, {
       label: 'Verifying solve\u2026',
       variant: 'primary',
-      minWidth: Math.min(240, contentW),
       onClick: () => {
         if (verificationState === 'verified') {
           void this.nextCommunity();
@@ -2398,7 +2602,7 @@ export class GameScene extends Scene {
     moreButton.setEnabled(false);
     const dailyButton = makePill(this, {
       label: 'Back to daily',
-      variant: 'ghost',
+      variant: 'chip',
       size: 'sm',
       onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
@@ -2406,49 +2610,49 @@ export class GameScene extends Scene {
     const communityStars = computeStars(this.moves, this.par);
     const replayButton = makePill(this, {
       label: communityStars === 3 ? '\u21BA Play again' : '\u21BA Try for \u2605\u2605\u2605',
-      variant: 'ghost',
+      variant: 'chip',
       size: 'sm',
       onClick: () => this.replayPuzzle(),
     });
-    buttons.push(moreButton, replayButton, dailyButton);
+    const secondaries: PillButton[] = [];
+    if (voteButton) secondaries.push(voteButton);
+    if (scoreButton) secondaries.push(scoreButton);
+    secondaries.push(replayButton, dailyButton);
 
-    const extras: Phaser.GameObjects.GameObject[] = [];
     // Social proof from the stream-load snapshot: how this puzzle is doing.
     const votes = this.communityPuzzle?.votes ?? 0;
     const solves = this.communityPuzzle?.solves ?? 0;
     const statBits: string[] = [];
     if (solves > 0) statBits.push(`${solves} ${solves === 1 ? 'solve' : 'solves'}`);
     if (votes > 0) statBits.push(`\u25B2 ${votes}`);
-    const statText = statBits.join('   \u00B7   ');
-    if (isMine) {
+    const statText = statBits.join('  \u00B7  ');
+    const noteText = isMine
+      ? statText
+        ? `Your puzzle  \u00B7  ${statText}`
+        : 'Your puzzle \u2014 nice build!'
+      : statText;
+
+    const slotTop = this.composeResultCard(card, {
+      title: isMine ? 'Solved your own puzzle!' : `Solved ${creator}'s puzzle!`,
+      stars: communityStars,
+      moves: this.moves,
+      countUp: true,
+      slotHeight: noteText ? RESULT_NOTE_HEIGHT : 0,
+      primary: moreButton,
+      secondaries,
+    });
+    if (noteText) {
       const note = this.add
-        .text(w / 2, h * 0.44, statText ? `Your puzzle  \u00B7  ${statText}` : 'Your puzzle \u2014 nice build!', {
-          fontFamily: FONT.ui,
-          fontSize: '15px',
-          fontStyle: '600',
-          color: COLORS.text,
-        })
-        .setOrigin(0.5)
-        .setAlpha(0.9);
-      extras.push(note);
-    } else if (statText) {
-      const note = this.add
-        .text(w / 2, h * 0.44, statText, {
+        .text(card.w / 2, slotTop, noteText, {
           fontFamily: FONT.ui,
           fontSize: '14px',
           fontStyle: '700',
           color: COLORS.text,
         })
-        .setOrigin(0.5)
+        .setOrigin(0.5, 0)
         .setAlpha(0.8);
-      extras.push(note);
+      this.fxLayer.add(note);
     }
-    stackColumn(buttons, w / 2, h * 0.52, SPACE.md);
-
-    this.fxLayer.add([overlay, card, headline, ...buttons, ...extras]);
-    headline.setScale(0.92).setAlpha(0);
-    this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
-    this.time.delayedCall(180, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.3, Math.min(48, w * 0.13)));
 
     const verifyCompletion = (): void => {
       if (verificationState === 'pending' || verificationState === 'verified') return;
@@ -2493,152 +2697,78 @@ export class GameScene extends Scene {
           ? 'Nicely done!'
           : 'Got there in the end!'
       : 'You found the way with a hint.';
-    const w = this.scale.width;
-    const h = this.scale.height;
-    const showGuestPrompt = !context.username;
-    const countY = h * 0.52;
-    const signInY = h * 0.635;
-    const nextY = h * (showGuestPrompt ? 0.74 : 0.7);
-    const levelY = h * (showGuestPrompt ? 0.85 : 0.81);
-    this.fxLayer.removeAll(true);
-
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(460, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const cardLeft = w / 2 - cardW / 2;
-    const cardTop = h / 2 - cardH / 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-    this.fxLayer.add([overlay, card]);
-    if (counts && stars === 3) auroraFlourish(this, this.fxLayer, w, h * 0.12);
-
-    const headline = this.add
-      .text(w / 2, h * 0.2, `Everyone made it in!\n${blurb}`, {
-        fontFamily: FONT.display,
-        fontSize: '24px',
-        fontStyle: '700',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 6,
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5)
-      .setAlpha(0);
-    this.fxLayer.add(headline);
-    this.tweens.add({ targets: headline, alpha: 1, y: h * 0.18, duration: 300, ease: 'Quad.easeOut' });
-
-    if (counts) {
-      // Stars pop in one by one (earned ones spin); empty ones stay dim.
-      const starY = h * 0.32;
-      const gap = Math.min(54, w * 0.16);
-      const outer = Math.min(24, w * 0.07);
-      for (let i = 0; i < 3; i++) {
-        const earned = i < stars;
-        const star = this.add
-          .star(w / 2 + (i - 1) * gap, starY, 5, outer * 0.45, outer, earned ? COLORS.gold : 0x32485c)
-          .setStrokeStyle(2, earned ? 0xffe9a8 : 0x4a6377)
-          .setScale(0);
-        this.fxLayer.add(star);
-        this.tweens.add({ targets: star, scale: 1, duration: 300, delay: 300 + i * 180, ease: 'Back.easeOut' });
-        if (earned) {
-          this.tweens.add({ targets: star, angle: 360, duration: 500, delay: 300 + i * 180, ease: 'Cubic.easeOut' });
-        }
-      }
-
-      const movesText = this.add
-        .text(w / 2, h * 0.43, `${this.moves} moves   (par ${this.par})`, {
-          fontFamily: FONT.ui,
-          fontSize: '18px',
-          fontStyle: '700',
-          color: COLORS.text,
-        })
-        .setOrigin(0.5);
-      this.fxLayer.add(movesText);
-
-      // The progression payoff: the lifetime solved count ticks up by one.
-      const fromCount = this.endlessSolved;
-      const countText = this.add
-        .text(w / 2, countY, `Solved: ${fromCount}`, {
-          fontFamily: FONT.ui,
-          fontSize: '20px',
-          fontStyle: '800',
-          color: '#ffd166',
-          align: 'center',
-          lineSpacing: 4,
-          wordWrap: { width: contentW },
-        })
-        .setOrigin(0.5);
-      this.fxLayer.add(countText);
-
-      this.time.delayedCall(520, () => sparkleBurst(this, this.fxLayer, w / 2, starY, Math.min(60, w * 0.16)));
-      void this.recordEndless(countText, fromCount);
-    } else {
-      // Hinted solve: honest and encouraging, but it does not add to the total.
-      const note = this.add
-        .text(w / 2, h * 0.33, 'Solved with a hint', {
-          fontFamily: FONT.ui,
-          fontSize: '18px',
-          fontStyle: '800',
-          color: '#ffd166',
-        })
-        .setOrigin(0.5);
-      const sub = this.add
-        .text(w / 2, h * 0.42, "This one doesn't add to your total \u2014 try the next one solo", {
-          fontFamily: FONT.ui,
-          fontSize: '13px',
-          fontStyle: '600',
-          color: COLORS.text,
-          align: 'center',
-          wordWrap: { width: contentW },
-        })
-        .setOrigin(0.5)
-        .setAlpha(0.85);
-      const countText = this.add
-        .text(w / 2, countY, `Solved: ${this.endlessSolved}`, {
-          fontFamily: FONT.ui,
-          fontSize: '18px',
-          fontStyle: '700',
-          color: COLORS.text,
-        })
-        .setOrigin(0.5);
-      this.fxLayer.add([note, sub, countText]);
-    }
+    const card = this.openResultCard();
+    if (counts && stars === 3) auroraFlourish(this, this.fxLayer, card.w, card.h * 0.12);
+    this.addCardMenuChip(card);
 
     const nextButton = makePill(this, {
       label: 'Next puzzle \u25B6',
       variant: 'primary',
-      x: w / 2,
-      y: nextY,
-      minWidth: Math.min(240, contentW),
       onClick: () => {
         trackClientEvent('endless_next');
         this.preserveEndlessPrefetch = true;
         fadeToScene(this, 'GameScene', { endless: { tier: this.endlessTier } });
       },
     });
-
     const levelButton = makePill(this, {
       label: 'Change level',
-      variant: 'secondary',
+      variant: 'chip',
       size: 'sm',
-      x: w / 2,
-      y: levelY,
       onClick: () => {
         trackClientEvent('endless_change_level');
         fadeToScene(this, 'EndlessScene');
       },
     });
+    const signIn = this.addSignInPrompt(0, 'Sign in to save your progress');
 
-    const homeButton = makePill(this, {
-      label: '\u2039 Menu',
-      variant: 'chip',
-      size: 'sm',
-      onClick: () => fadeToScene(this, 'HomeScene'),
+    // The progression payoff (a count that ticks up by one, plus any award
+    // unlocked) or, after a hint, an honest note that it does not count.
+    const slotTop = this.composeResultCard(card, {
+      title: 'Everyone made it in!',
+      blurb,
+      ...(counts ? { stars } : {}),
+      moves: this.moves,
+      countUp: counts,
+      slotHeight: counts ? 54 : 62,
+      primary: nextButton,
+      secondaries: [levelButton],
+      ...(signIn ? { quiet: signIn } : {}),
     });
-    homeButton.setPosition(cardLeft + SPACE.md + homeButton.width / 2, cardTop + SPACE.md + homeButton.height / 2);
-
-    this.fxLayer.add([nextButton, levelButton, homeButton]);
-    this.addSignInPrompt(signInY, 'Sign in to save your progress');
+    if (counts) {
+      const fromCount = this.endlessSolved;
+      const countText = this.add
+        .text(card.w / 2, slotTop, `Solved: ${fromCount}`, {
+          fontFamily: FONT.ui,
+          fontSize: '20px',
+          fontStyle: '800',
+          color: '#ffd166',
+          align: 'center',
+          lineSpacing: 4,
+          wordWrap: { width: card.contentW },
+        })
+        .setOrigin(0.5, 0);
+      this.fxLayer.add(countText);
+      void this.recordEndless(countText, fromCount);
+    } else {
+      const note = this.add
+        .text(
+          card.w / 2,
+          slotTop,
+          `Solved with a hint, so it doesn\u2019t add to your total.\nTry the next one solo!  \u00B7  Solved: ${this.endlessSolved}`,
+          {
+            fontFamily: FONT.ui,
+            fontSize: '14px',
+            fontStyle: '700',
+            color: COLORS.text,
+            align: 'center',
+            lineSpacing: 6,
+            wordWrap: { width: card.contentW },
+          }
+        )
+        .setOrigin(0.5, 0)
+        .setAlpha(0.9);
+      this.fxLayer.add(note);
+    }
   }
 
   private endlessSolvedLabel(solved: number, achievements: AchievementSnapshot): string {
@@ -2777,72 +2907,31 @@ export class GameScene extends Scene {
       });
     }
     trackClientEvent('creator_test_solved');
-    const w = this.scale.width;
-    const h = this.scale.height;
-    this.fxLayer.removeAll(true);
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(420, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-    const panel = this.add
-      .text(w / 2, h * 0.4, `Your puzzle works!\nYou solved it in ${this.moves} \u00B7 par ${this.testPar}`, {
-        fontFamily: FONT.display,
-        fontSize: '23px',
-        fontStyle: '700',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 8,
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5);
+    const card = this.openResultCard(420);
     const back = makePill(this, {
       label: 'Back to editing',
       variant: 'primary',
-      x: w / 2,
-      y: h * 0.56,
       onClick: () => fadeToScene(this, 'EditorScene'),
     });
-    this.fxLayer.add([overlay, card, panel, back]);
-    panel.setScale(0.92).setAlpha(0);
-    this.tweens.add({ targets: panel, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
-    this.time.delayedCall(150, () => sparkleBurst(this, this.fxLayer, w / 2, h * 0.4, Math.min(48, w * 0.13)));
+    this.composeResultCard(card, {
+      title: 'Your puzzle works!',
+      blurb: 'You solved it, so Submit is unlocked.',
+      stars: computeStars(this.moves, this.testPar),
+      moves: this.moves,
+      slotHeight: 0,
+      primary: back,
+      secondaries: [],
+    });
   }
 
   /** Practice step solved: on to the next rule, or off to the real puzzle. */
   private onWinTutorial(): void {
     const step = this.tutorialStep ?? 0;
     const last = step >= TUTORIAL_STEPS.length - 1;
-    const w = this.scale.width;
-    const h = this.scale.height;
-    this.fxLayer.removeAll(true);
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(420, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-    const headline = this.add
-      .text(
-        w / 2,
-        h * 0.36,
-        last
-          ? "You're ready!\nEvery puzzle uses just these moves."
-          : `Nice!\nPractice ${step + 2} of ${TUTORIAL_STEPS.length} is next.`,
-        {
-          fontFamily: FONT.display,
-          fontSize: '23px',
-          fontStyle: '700',
-          color: COLORS.text,
-          align: 'center',
-          lineSpacing: 8,
-          wordWrap: { width: contentW },
-        }
-      )
-      .setOrigin(0.5);
+    const card = this.openResultCard(420);
     const primary = makePill(this, {
       label: last ? 'Play today\u2019s puzzle' : 'Next \u25B6',
       variant: 'primary',
-      minWidth: Math.min(240, contentW),
       onClick: () =>
         fadeToScene(this, 'GameScene', last ? { daily: true } : { tutorial: { step: step + 1 } }),
     });
@@ -2852,10 +2941,17 @@ export class GameScene extends Scene {
       size: 'sm',
       onClick: () => fadeToScene(this, 'HomeScene'),
     });
-    stackColumn([primary, secondary], w / 2, h * 0.52, SPACE.md);
-    this.fxLayer.add([overlay, card, headline, primary, secondary]);
-    headline.setScale(0.92).setAlpha(0);
-    this.tweens.add({ targets: headline, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut' });
+    this.composeResultCard(card, {
+      mascot: true,
+      title: last ? 'You\u2019re ready!' : 'Nice!',
+      blurb: last
+        ? 'Every puzzle uses just these moves.'
+        : `Practice ${step + 2} of ${TUTORIAL_STEPS.length} is next.`,
+      slotHeight: 0,
+      primary,
+      secondaries: [],
+      quiet: secondary,
+    });
   }
 
   private async markPlayed(id: string, body: string): Promise<void> {
@@ -2898,7 +2994,9 @@ export class GameScene extends Scene {
       if (!response.ok) throw new Error(`vote failed: ${response.status}`);
       const data: VoteResponse = await response.json();
       if (!this.isCurrentPlay(generation) || !button.active) return;
-      button.setLabelText(data.ok ? `Upvoted! (${data.votes})` : data.reason ?? 'Already upvoted');
+      // Short labels keep the grid button its size; any reason goes to a toast.
+      button.setLabelText(data.ok ? `Upvoted! (${data.votes})` : 'Already upvoted');
+      if (!data.ok && data.reason) showToast(data.reason);
       button.setEnabled(false);
     } catch (error) {
       console.error(error);
@@ -2932,7 +3030,7 @@ export class GameScene extends Scene {
       if (!this.isCurrentPlay(generation) || !button.active) return;
       if (!result.ok) throw new Error('comment was not accepted');
       this.scorePosted = true;
-      button.setLabelText(result.alreadyPosted ? 'Already posted ✓' : 'Posted to comments ✓');
+      button.setLabelText(result.alreadyPosted ? 'Already posted ✓' : 'Posted ✓');
       showToast(result.alreadyPosted ? 'Your score is already in the comments.' : 'Your score is in the comments!');
     } catch (error) {
       console.error(error);
@@ -2997,56 +3095,45 @@ export class GameScene extends Scene {
     }
   }
 
+  /** The stream ran dry: a closing card that keeps the player playing. */
   private showStreamDone(): void {
-    const w = this.scale.width;
-    const h = this.scale.height;
     this.won = true;
+    this.selected = null;
+    this.clearHint();
     this.beginBlockingOverlay();
-    this.skipButton.setVisible(false);
-    this.muteButton.setVisible(false);
-    this.fxLayer.removeAll(true);
-    const overlay = this.add.rectangle(w / 2, h / 2, w, h, 0x05131f, 0.55).setInteractive();
-    const cardW = Math.min(420, w - SPACE.lg * 2);
-    const cardH = h - SPACE.lg * 2;
-    const contentW = cardW - SPACE.xl * 2;
-    const card = makePanel(this, cardW, cardH).setPosition(w / 2, h / 2);
-    const panel = this.add
-      .text(w / 2, h * 0.36, "That's all the community puzzles for now!", {
-        fontFamily: FONT.display,
-        fontSize: '21px',
-        fontStyle: '700',
-        color: COLORS.text,
-        align: 'center',
-        lineSpacing: 8,
-        wordWrap: { width: contentW },
-      })
-      .setOrigin(0.5);
+    // Skip can land here mid-play, and the play controls (uiLayer) draw above
+    // the card, so let the HUD hide them for the won state.
+    this.updateHud();
+    const card = this.openResultCard(440);
+    this.addCardMenuChip(card);
     const endlessBtn = makePill(this, {
-      label: 'Play Endless',
+      label: 'Play Endless \u25B6',
       variant: 'primary',
-      minWidth: Math.min(220, contentW),
       onClick: () => fadeToScene(this, 'EndlessScene'),
     });
     const buildBtn = makePill(this, {
       label: 'Build a puzzle',
-      variant: 'secondary',
-      minWidth: Math.min(220, contentW),
+      variant: 'chip',
+      size: 'sm',
       onClick: () => fadeToScene(this, 'EditorScene'),
     });
     const dailyBtn = makePill(this, {
       label: 'Back to daily',
-      variant: 'ghost',
+      variant: 'chip',
       size: 'sm',
       onClick: () => fadeToScene(this, 'GameScene', { daily: true }),
     });
-    stackColumn([endlessBtn, buildBtn, dailyBtn], w / 2, h * 0.5, SPACE.md);
-    this.fxLayer.add([overlay, card, panel, endlessBtn, buildBtn, dailyBtn]);
+    this.composeResultCard(card, {
+      mascot: true,
+      title: 'You\u2019re all caught up!',
+      blurb: 'New community puzzles appear as players build them.',
+      slotHeight: 0,
+      primary: endlessBtn,
+      secondaries: [buildBtn, dailyBtn],
+    });
   }
 
-  private async submitSolve(
-    status: Phaser.GameObjects.Text,
-    onLeaderboardLoaded: (leaderboard: LeaderboardResponse) => void
-  ): Promise<void> {
+  private async submitSolve(view: DailyResultView): Promise<void> {
     const generation = this.playGeneration;
     const puzzleId = this.dailyPuzzleId;
     // Identical to the request celebrateWin() already started.
@@ -3091,63 +3178,54 @@ export class GameScene extends Scene {
         totalPlayers: attemptIsRankedBest ? result.totalPlayers : 0,
       });
 
-      const lines: string[] = [];
-      if (result.bestMoves < this.moves) {
-        const rankSuffix =
-          result.rank > 0
-            ? ` · #${result.rank} of ${result.totalPlayers}`
-            : '';
-        lines.push(`Your best today: ${result.bestMoves} moves${rankSuffix}`);
-      } else if (result.totalPlayers >= 2 && result.rank > 0) {
-        lines.push(`You're #${result.rank} of ${result.totalPlayers} today`);
-      } else if (result.rank > 0) {
-        lines.push('You set today\u2019s pace - first one in!');
-      } else {
-        lines.push('Playing as a guest \u2014 scores aren\u2019t saved.');
-      }
-      if (result.streak > 1) lines.push(`Streak: ${result.streak} days`);
-
-      if (!status.scene) return;
-      status.setText(lines.join('\n'));
-      this.positionWinStatus(status);
+      if (!view.isActive()) return;
+      const ranked = result.rank > 0;
+      // Rank and streak describe the materialized best (it may beat this run).
+      const tiles = (atPar: string): StatTile[] => [
+        { value: `#${result.rank}`, label: `of ${result.totalPlayers} today` },
+        { value: String(result.streak), label: 'day streak', flame: true },
+        { value: atPar, label: 'hit par' },
+      ];
+      if (ranked) view.setStats(tiles('\u2026'));
+      view.setNote(
+        result.bestMoves < this.moves
+          ? `Your best today stays ${result.bestMoves} moves (${'\u2605'.repeat(result.stars)}).`
+          : ranked && result.totalPlayers === 1
+            ? 'You set today\u2019s pace \u2014 first one in!'
+            : ranked
+              ? 'Score saved.'
+              : 'Verified! Guest scores aren\u2019t saved.'
+      );
 
       // The verified completion promise must resolve here so an optional,
       // potentially slow leaderboard request can never block score comments.
       // Leaderboard enrichment continues independently behind generation guards.
-      void this.loadDailyLeaderboard(status, lines, generation, onLeaderboardLoaded).catch(
-        (error) => console.error(error)
+      void this.loadDailyLeaderboard(view, generation, ranked ? tiles : null).catch((error) =>
+        console.error(error)
       );
     } catch (error) {
       console.error(error);
-      if (!this.isCurrentPlay(generation) || !status.scene) return;
-      status.setText('Score could not be verified. Try again.');
-      this.positionWinStatus(status);
+      if (!this.isCurrentPlay(generation) || !view.isActive()) return;
+      view.setNote('Score could not be verified. Try again.');
     }
   }
 
   private async loadDailyLeaderboard(
-    status: Phaser.GameObjects.Text,
-    baseLines: readonly string[],
+    view: DailyResultView,
     generation: number,
-    onLeaderboardLoaded: (leaderboard: LeaderboardResponse) => void
+    tiles: ((atPar: string) => StatTile[]) | null
   ): Promise<void> {
     // Guests may compare after solving even though they are not ranked. The
     // response stays bounded to the top ten and, for signed players, five
     // nearby rows.
     const leaderboard = await this.fetchLeaderboard();
-    if (!leaderboard || !this.isCurrentPlay(generation) || !status.scene) return;
-
-    if (leaderboard.totalPlayers >= 2 && leaderboard.entries.length > 0) {
-      const lines = [...baseLines, '', 'Top solvers today'];
-      leaderboard.entries
-        .slice(0, 3)
-        .forEach((entry) =>
-          lines.push(`${entry.rank}. ${entry.username} - ${entry.moves} moves`)
-        );
-      status.setText(lines.join('\n'));
-      this.positionWinStatus(status);
+    if (!this.isCurrentPlay(generation) || !view.isActive()) return;
+    if (!leaderboard) {
+      if (tiles) view.setStats(tiles('\u2013'));
+      return;
     }
-    onLeaderboardLoaded(leaderboard);
+    if (tiles) view.setStats(tiles(String(leaderboard.distribution[0]?.players ?? 0)));
+    view.revealLeaderboard(leaderboard);
   }
 
   private async copyResult(button: PillButton): Promise<void> {
@@ -3185,8 +3263,8 @@ export class GameScene extends Scene {
       puzzleId: this.dailyPuzzleId,
       ...(preloaded ? { preloaded } : {}),
       parent: this.fxLayer,
-      width: this.overlayBaseWidth || this.scale.width,
-      height: this.overlayBaseHeight || this.scale.height,
+      width: this.overlayBaseWidth || viewWidth(this),
+      height: this.overlayBaseHeight || viewHeight(this),
       onClose: () => {
         this.leaderboardOverlay = undefined;
       },

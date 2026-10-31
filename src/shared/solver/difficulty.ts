@@ -18,6 +18,10 @@ export type Grade = {
 export const difficultyFromPar = (par: number): Difficulty =>
   par >= 12 ? 'EXPERT' : par >= 8 ? 'HARD' : par >= 5 ? 'MEDIUM' : 'EASY';
 
+/** Title-case display label for a band, e.g. MEDIUM -> "Medium". */
+export const difficultyLabel = (band: Difficulty): string =>
+  band.charAt(0) + band.slice(1).toLowerCase();
+
 /** Grade a board by its optimal solution length (par). */
 export const gradeBoard = (board: Board): Grade => {
   const res = solve(board);

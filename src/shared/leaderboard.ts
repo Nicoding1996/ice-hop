@@ -2,6 +2,7 @@
 // and the in-game overlay: move distributions, ranks, durations, and strict
 // parsers for the leaderboard responses the client receives.
 import type {
+  HubResponse,
   LeaderboardEntry,
   LeaderboardResponse,
   MovesBucket,
@@ -300,6 +301,37 @@ export const parseDailyLeaderboard = (
     distribution,
     viewerHidden,
   };
+};
+
+/** Strictly validate a `/api/hub` response. */
+export const parseHubResponse = (value: unknown): HubResponse | null => {
+  if (!isObject(value)) return null;
+  const date = property(value, 'date');
+  const par = property(value, 'par');
+  const solvedValue = property(value, 'solved');
+  const rank = property(value, 'rank');
+  const totalPlayers = property(value, 'totalPlayers');
+  const streak = property(value, 'streak');
+  const endlessSolved = property(value, 'endlessSolved');
+  if (
+    !isDailyDate(date) ||
+    (par !== null && (!isCount(par, MAX_MOVES) || par < 1)) ||
+    !isCount(totalPlayers) ||
+    !isCount(rank, totalPlayers) ||
+    !isCount(streak) ||
+    !isCount(endlessSolved)
+  ) {
+    return null;
+  }
+  let solved: HubResponse['solved'] = null;
+  if (solvedValue !== null) {
+    if (!isObject(solvedValue)) return null;
+    const moves = property(solvedValue, 'moves');
+    const stars = property(solvedValue, 'stars');
+    if (!isCount(moves, MAX_MOVES) || moves < 1 || !isCount(stars, 3) || stars < 1) return null;
+    solved = { moves, stars };
+  }
+  return { date, par, solved, rank, totalPlayers, streak, endlessSolved };
 };
 
 const RANKED_KINDS: readonly RankedBoardKind[] = ['week', 'streak', 'alltime'];

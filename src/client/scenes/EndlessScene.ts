@@ -15,22 +15,35 @@ import {
   PALETTE,
   FONT,
   SPACE,
+  armTap,
   paintBackdrop,
   fadeInScene,
   fadeToScene,
   makePill,
-  makeBadge,
   makePanel,
-  useCrispText,
+  useCrispRendering,
+  viewHeight,
+  viewWidth,
 } from '../art/theme';
 
-type TierInfo = { tier: EndlessTier; label: string; blurb: string };
+type TierInfo = {
+  readonly tier: EndlessTier;
+  readonly label: string;
+  readonly blurb: string;
+  /** Display copy of the tier's par band (source of truth: endlessPolicy.ts). */
+  readonly parBand: string;
+  readonly pips: number;
+};
 
 const TIERS: ReadonlyArray<TierInfo> = [
-  { tier: 'easy', label: 'Easy', blurb: 'A gentle warm-up' },
-  { tier: 'medium', label: 'Medium', blurb: 'A proper head-scratcher' },
-  { tier: 'hard', label: 'Hard', blurb: 'For the bold' },
+  { tier: 'easy', label: 'Easy', blurb: 'A gentle warm-up', parBand: 'par 2\u20134', pips: 1 },
+  { tier: 'medium', label: 'Medium', blurb: 'A proper head-scratcher', parBand: 'par 5\u20137', pips: 2 },
+  { tier: 'hard', label: 'Hard', blurb: 'For the bold', parBand: 'par 8\u201311', pips: 3 },
 ];
+
+const CARD_FILL = 0x1a3a55;
+const CARD_FILL_PRESSED = 0x24496a;
+const CARD_BORDER = 0x35608a;
 
 const emptyAchievements = (): AchievementSnapshot =>
   buildAchievementSnapshot({
@@ -60,16 +73,16 @@ export class EndlessScene extends Scene {
   }
 
   create(): void {
-    useCrispText(this);
+    useCrispRendering(this);
     const generation = ++this.loadGeneration;
     this.solvedLoaded = false;
     this.cameras.main.setBackgroundColor(PALETTE.bg);
     fadeInScene(this);
     this.bgLayer = this.add.container(0, 0);
-    paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+    paintBackdrop(this, this.bgLayer, viewWidth(this), viewHeight(this));
     this.build();
     const onResize = (): void => {
-      paintBackdrop(this, this.bgLayer, this.scale.width, this.scale.height);
+      paintBackdrop(this, this.bgLayer, viewWidth(this), viewHeight(this));
       this.build();
     };
     this.scale.on('resize', onResize);
@@ -83,32 +96,44 @@ export class EndlessScene extends Scene {
   }
 
   private async loadSolved(generation: number): Promise<void> {
-    try {
-      if (!context.username) {
-        const solved = this.registry.get('endless.solved');
-        const easy = this.registry.get('endless.solved.easy');
-        const medium = this.registry.get('endless.solved.medium');
-        const hard = this.registry.get('endless.solved.hard');
-        this.solved = typeof solved === 'number' ? solved : 0;
-        this.byTier = {
-          easy: typeof easy === 'number' ? easy : 0,
-          medium: typeof medium === 'number' ? medium : 0,
-          hard: typeof hard === 'number' ? hard : 0,
-        };
-        const unlocked: AchievementId[] =
-          this.registry.get('endless.achievementIds') ?? [];
-        this.achievements = buildAchievementSnapshot(
-          {
-            solved: this.solved,
-            byTier: this.byTier,
-            hardAtPar: this.registry.get('endless.hardAtPar') === true,
-          },
-          unlocked
-        );
-        this.registry.set('endless.achievements', this.achievements);
-        return;
-      }
+    if (!context.username) {
+      // Guest counts come from this session's registry synchronously, while
+      // create() is still running (sys.isActive() is false until it returns),
+      // so publish them directly instead of through the async path's guard.
+      this.loadGuestSolved();
+      this.solvedLoaded = true;
+      this.build();
+      return;
+    }
+    await this.loadSignedSolved(generation);
+  }
 
+  /** Guests keep their counts in this session's registry only. */
+  private loadGuestSolved(): void {
+    const solved = this.registry.get('endless.solved');
+    const easy = this.registry.get('endless.solved.easy');
+    const medium = this.registry.get('endless.solved.medium');
+    const hard = this.registry.get('endless.solved.hard');
+    this.solved = typeof solved === 'number' ? solved : 0;
+    this.byTier = {
+      easy: typeof easy === 'number' ? easy : 0,
+      medium: typeof medium === 'number' ? medium : 0,
+      hard: typeof hard === 'number' ? hard : 0,
+    };
+    const unlocked: AchievementId[] = this.registry.get('endless.achievementIds') ?? [];
+    this.achievements = buildAchievementSnapshot(
+      {
+        solved: this.solved,
+        byTier: this.byTier,
+        hardAtPar: this.registry.get('endless.hardAtPar') === true,
+      },
+      unlocked
+    );
+    this.registry.set('endless.achievements', this.achievements);
+  }
+
+  private async loadSignedSolved(generation: number): Promise<void> {
+    try {
       const response = await fetch('/api/endless/stats');
       if (!response.ok) throw new Error(`stats failed: ${response.status}`);
       const data: EndlessSolvedResponse = await response.json();
@@ -170,60 +195,30 @@ export class EndlessScene extends Scene {
     }
   }
 
+  private text(
+    x: number,
+    y: number,
+    value: string,
+    size: number,
+    style: { readonly weight?: string; readonly display?: boolean; readonly color?: string } = {}
+  ): Phaser.GameObjects.Text {
+    return this.add.text(x, y, value, {
+      fontFamily: style.display ? FONT.display : FONT.ui,
+      fontSize: `${size}px`,
+      fontStyle: style.weight ?? '700',
+      color: style.color ?? PALETTE.text,
+    });
+  }
+
   private build(): void {
     this.closeAwards();
     this.content.forEach((object) => object.destroy());
     this.content = [];
-    const w = this.scale.width;
-    const h = this.scale.height;
+    const w = viewWidth(this);
+    const h = viewHeight(this);
     const cx = w / 2;
-
-    const title = this.add
-      .text(cx, h * 0.16, 'Endless', {
-        fontFamily: FONT.display,
-        fontSize: `${Math.round(Math.min(52, w * 0.14))}px`,
-        fontStyle: '700',
-        color: PALETTE.text,
-      })
-      .setOrigin(0.5);
-    const sub = this.add
-      .text(cx, title.y + title.height / 2 + SPACE.sm, 'Pick a level. The puzzles never run out.', {
-        fontFamily: FONT.ui,
-        fontSize: '14px',
-        fontStyle: '600',
-        color: PALETTE.text,
-        align: 'center',
-        wordWrap: { width: w - 40 },
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.85);
-
-    // The progression payoff: a lifetime solved count in the gold accent.
-    const bannerLabel = !this.solvedLoaded
-      ? 'Solved so far: \u2026'
-      : this.solved > 0
-        ? `Solved so far: ${this.solved}`
-        : 'Solve one to start your count';
-    const banner = makeBadge(this, bannerLabel, 'gold', 'md');
-    banner.setPosition(cx, h * 0.33);
-
-    this.content.push(title, sub, banner);
-
-    const ys = [0.47, 0.61, 0.75];
-    TIERS.forEach((info, index) => {
-      this.content.push(...this.makeTierButton(info, h * ys[index]));
-    });
-
-    const awards = makePill(this, {
-      label: this.solvedLoaded
-        ? `Awards ${this.achievements.unlocked}/${this.achievements.total}`
-        : 'Awards \u2026',
-      variant: 'chip',
-      size: 'sm',
-      x: cx,
-      y: Math.min(h - SPACE.xl, h * 0.9),
-      onClick: () => this.showAwards(0),
-    });
+    const compact = h < 680;
+    const cardW = Math.min(340, w - 40);
 
     const back = makePill(this, {
       label: '\u2039 Menu',
@@ -231,47 +226,182 @@ export class EndlessScene extends Scene {
       size: 'sm',
       onClick: () => fadeToScene(this, 'HomeScene'),
     });
-    back.setPosition(SPACE.md + back.width / 2, this.menuY());
-    this.content.push(awards, back);
-  }
+    back.setPosition(SPACE.md + back.width / 2, SPACE.md + back.height / 2);
 
-  private menuY(): number {
-    return Math.min(72, this.scale.height * 0.13) / 2;
-  }
+    const title = this.text(cx, 0, 'Endless', Math.round(Math.min(compact ? 42 : 52, w * 0.14)), {
+      display: true,
+    }).setOrigin(0.5, 0);
+    const sub = this.text(cx, 0, 'Pick a level. The puzzles never run out.', 14, { weight: '600' })
+      .setOrigin(0.5, 0)
+      .setAlpha(0.85);
 
-  private makeTierButton(info: TierInfo, y: number): Phaser.GameObjects.GameObject[] {
-    const w = this.scale.width;
-    const btn = makePill(this, {
-      label: info.label,
-      variant: 'secondary',
-      size: 'lg',
-      x: w / 2,
-      y,
-      minWidth: Math.min(260, w - 64),
-      onClick: () => fadeToScene(this, 'GameScene', { endless: { tier: info.tier } }),
+    // The progression payoff: the lifetime count in the gold accent, with a
+    // bar toward the nearest award still to earn.
+    const progress = this.buildProgress(cx, cardW, compact);
+    const cardH = compact ? 70 : 82;
+    const cardGap = compact ? SPACE.sm + 2 : SPACE.md;
+    const cards = TIERS.map((info) => this.makeTierCard(cx, cardW, cardH, info));
+    const awards = makePill(this, {
+      label: this.solvedLoaded
+        ? `Awards ${this.achievements.unlocked}/${this.achievements.total}`
+        : 'Awards \u2026',
+      variant: 'chip',
+      size: 'sm',
+      onClick: () => this.showAwards(0),
     });
-    // Quietly fold the per-tier solved count into the blurb (muted, no extra
-    // accent, so the gold total banner stays the one highlight). Hidden until
-    // the player has a solve in this tier - which also sidesteps the migration
-    // case where a pre-existing total has no per-tier history yet.
+
+    // One centred column under the Menu chip.
+    const gapAfterTitle = compact ? SPACE.md : SPACE.lg;
+    const stackH =
+      title.height +
+      SPACE.xs +
+      sub.height +
+      gapAfterTitle +
+      progress.height +
+      gapAfterTitle +
+      cards.length * cardH +
+      (cards.length - 1) * cardGap +
+      gapAfterTitle +
+      awards.height;
+    const regionTop = SPACE.md + back.height + SPACE.sm;
+    const regionBottom = h - SPACE.md;
+    let y = regionTop + Math.max(0, (regionBottom - regionTop - stackH) / 2);
+    title.setY(y);
+    y += title.height + SPACE.xs;
+    sub.setY(y);
+    y += sub.height + gapAfterTitle;
+    progress.setY(y);
+    y += progress.height + gapAfterTitle;
+    for (const card of cards) {
+      card.setY(y + cardH / 2);
+      y += cardH + cardGap;
+    }
+    y += gapAfterTitle - cardGap;
+    awards.setPosition(cx, y + awards.height / 2);
+
+    this.content.push(back, title, sub, progress, ...cards, awards);
+  }
+
+  /** "Solved so far" and a bar toward the closest award still locked. */
+  private buildProgress(cx: number, width: number, compact: boolean): Phaser.GameObjects.Container {
+    const block = this.add.container(cx, 0);
+    const label = !this.solvedLoaded
+      ? 'Solved so far: \u2026'
+      : this.solved > 0
+        ? `Solved so far: ${this.solved}`
+        : 'Solve one to start your count';
+    const count = this.text(0, 0, label, compact ? 18 : 20, { weight: '800', color: PALETTE.arrow })
+      .setOrigin(0.5, 0);
+    block.add(count);
+    let height = count.height;
+    const next = this.solvedLoaded
+      ? [...this.achievements.progress]
+          .filter((achievement) => !achievement.unlocked && achievement.target > 0)
+          .sort(
+            (left, right) =>
+              (left.target - left.current) / left.target - (right.target - right.current) / right.target
+          )[0]
+      : undefined;
+    if (next) {
+      const barW = Math.min(width, 260);
+      const barY = height + SPACE.sm;
+      const fraction = Math.max(0, Math.min(1, next.current / next.target));
+      const bar = this.add.graphics();
+      bar.fillStyle(0x0e2740, 1);
+      bar.fillRoundedRect(-barW / 2, barY, barW, 8, 4);
+      if (fraction > 0) {
+        bar.fillStyle(PALETTE.waterShimmer, 0.85);
+        bar.fillRoundedRect(-barW / 2, barY, Math.max(8, barW * fraction), 8, 4);
+      }
+      const caption = this.text(
+        0,
+        barY + 14,
+        `Next award: ${next.title} \u00B7 ${next.current}/${next.target}`,
+        12,
+        { weight: '700' }
+      )
+        .setOrigin(0.5, 0)
+        .setAlpha(0.75);
+      if (caption.width > width) caption.setScale(width / caption.width);
+      block.add([bar, caption]);
+      height = barY + 14 + caption.height;
+    }
+    block.setSize(width, height);
+    return block;
+  }
+
+  /** A tappable tier card: difficulty pips, name and blurb, and its count. */
+  private makeTierCard(
+    cx: number,
+    width: number,
+    height: number,
+    info: TierInfo
+  ): Phaser.GameObjects.Container {
+    const card = this.add.container(cx, 0);
+    const bg = this.add.graphics();
+    const paint = (pressed: boolean): void => {
+      bg.clear();
+      bg.fillStyle(0x06121f, 0.28);
+      bg.fillRoundedRect(-width / 2, -height / 2 + 3, width, height, 18);
+      bg.fillStyle(pressed ? CARD_FILL_PRESSED : CARD_FILL, 1);
+      bg.fillRoundedRect(-width / 2, -height / 2, width, height, 18);
+      bg.lineStyle(1.5, CARD_BORDER, 0.9);
+      bg.strokeRoundedRect(-width / 2, -height / 2, width, height, 18);
+    };
+    paint(false);
+
+    // Difficulty pips: one to three filled ice dots, stacked at the left.
+    const pips = this.add.graphics();
+    const pipX = -width / 2 + 26;
+    for (let index = 0; index < 3; index++) {
+      const pipY = (index - 1) * 13;
+      const filled = 2 - index < info.pips;
+      pips.fillStyle(filled ? PALETTE.waterShimmer : 0x0e2740, filled ? 0.95 : 1);
+      pips.fillCircle(pipX, pipY, 4.5);
+    }
+
+    const textX = -width / 2 + 48;
+    const name = this.text(textX, -9, info.label, 20, { display: true }).setOrigin(0, 0.5);
+    const blurb = this.text(textX, 15, `${info.blurb} \u00B7 ${info.parBand}`, 12, { weight: '700' })
+      .setOrigin(0, 0.5)
+      .setAlpha(0.72);
     const count = this.byTier[info.tier];
-    const blurbText = count > 0 ? `${info.blurb}   \u00B7   ${count} solved` : info.blurb;
-    const blurb = this.add
-      .text(w / 2, y + btn.height / 2 + SPACE.sm, blurbText, {
-        fontFamily: FONT.ui,
-        fontSize: '12px',
-        fontStyle: '600',
-        color: PALETTE.text,
-      })
+    const chevron = this.text(width / 2 - 18, 0, '\u203A', 26, { weight: '800' })
       .setOrigin(0.5)
       .setAlpha(0.7);
-    return [btn, blurb];
+    const solved = this.text(width / 2 - 34, 0, count > 0 ? `${count} \u2713` : '', 14, {
+      weight: '800',
+    })
+      .setOrigin(1, 0.5)
+      .setAlpha(0.85);
+    const maxBlurb = width / 2 - 34 - (count > 0 ? solved.width + SPACE.sm : 0) - textX;
+    if (blurb.width > maxBlurb) blurb.setScale(Math.max(0.75, maxBlurb / blurb.width));
+
+    const zone = this.add.zone(0, 0, width, height).setInteractive({ useHandCursor: true });
+    armTap(zone, {
+      onPress: () => {
+        paint(true);
+        card.setScale(0.98);
+      },
+      onCancel: () => {
+        paint(false);
+        card.setScale(1);
+      },
+      onTap: () => {
+        paint(false);
+        card.setScale(1);
+        fadeToScene(this, 'GameScene', { endless: { tier: info.tier } });
+      },
+    });
+    card.add([bg, pips, name, blurb, solved, chevron, zone]);
+    card.setSize(width, height);
+    return card;
   }
 
   private showAwards(requestedPage: number): void {
     this.closeAwards();
-    const w = this.scale.width;
-    const h = this.scale.height;
+    const w = viewWidth(this);
+    const h = viewHeight(this);
     const pageSize = h < 390 ? 1 : h < 560 ? 2 : h < 720 ? 3 : 4;
     const compact = h < 500;
     const totalPages = Math.max(1, Math.ceil(this.achievements.progress.length / pageSize));

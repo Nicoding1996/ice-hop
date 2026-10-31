@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path';
 import type { Board, Piece } from '../../src/shared/game/types';
 import { applyMove } from '../../src/shared/game/rules';
 import { slideStop } from '../../src/shared/game/slide';
+import { actionBarSlots, playLayout } from '../../src/shared/playLayout';
 import { solve } from '../../src/shared/solver/solver';
 import { findBrowser, launchBrowser, sleep, type Page } from './cdp';
 import { FIXTURES, startServer, type SmokeServer } from './server';
@@ -223,13 +224,11 @@ const expandedScenario = async (page: Page, server: SmokeServer): Promise<void> 
   await page.evaluate(`localStorage.setItem('icehop.howto.seen', '1'); location.reload(); true`);
   await sleep(3500);
 
-  // Mirrors GameScene.layout() so taps land on real cells.
+  // The scene's own layout module, so taps land on real cells and buttons.
   const board = FIXTURES.daily.board;
-  const hudHeight = Math.min(84, Math.max(72, height * 0.14));
-  const regionH = height - hudHeight - 50;
-  const cell = Math.max(24, Math.floor(Math.min((width - 32) / board.width, (regionH - 32) / board.height)));
-  const originX = (width - cell * board.width) / 2;
-  const originY = hudHeight + (regionH - cell * board.height) / 2;
+  const geometry = playLayout({ width, height, cols: board.width, rows: board.height });
+  const { cell, originX, originY } = geometry;
+  const [undoX = width / 2] = actionBarSlots(width, 2, geometry.maxBarWidth).centers;
   const centre = (cells: readonly number[]): { x: number; y: number } => {
     let x = 0;
     let y = 0;
@@ -254,8 +253,8 @@ const expandedScenario = async (page: Page, server: SmokeServer): Promise<void> 
     const firstTo = centre(stop ? [stop.leadingCell] : first.to);
     await page.tap(firstTo.x, firstTo.y);
     await sleep(700);
-    // Undo is the left button of the bottom strip (Undo | Restart).
-    await page.tap(width / 2 - 52, height - 26);
+    // Undo is the left button of the action bar under the board.
+    await page.tap(undoX, geometry.actionsY);
     await sleep(700);
   }
 
@@ -291,6 +290,59 @@ const expandedScenario = async (page: Page, server: SmokeServer): Promise<void> 
 };
 
 /**
+ * Full-game Community post on a smaller phone: penguins by taps, seals by
+ * touch drags on the device-resolution canvas, then the result card.
+ */
+const communityGameScenario = async (page: Page, server: SmokeServer): Promise<void> => {
+  const width = 360;
+  const height = 640;
+  const name = `full game community ${width}x${height}`;
+  console.log(name);
+  await page.setViewport(width, height, 2);
+  await page.navigate(`${server.origin}/game.html?post=ugc&user=snowfan`, 3500);
+
+  const board = FIXTURES.community.board;
+  const { cell, originX, originY } = playLayout({
+    width,
+    height,
+    cols: board.width,
+    rows: board.height,
+  });
+  const centre = (cells: readonly number[]): { x: number; y: number } => {
+    let x = 0;
+    let y = 0;
+    for (const c of cells) {
+      x += originX + (c % board.width) * cell + cell / 2;
+      y += originY + Math.floor(c / board.width) * cell + cell / 2;
+    }
+    return { x: x / cells.length, y: y / cells.length };
+  };
+  let pieces: Piece[] = board.pieces.map((piece) => ({ ...piece, cells: [...piece.cells] }));
+  for (const move of solve(board).solution) {
+    const from = centre(pieces[move.pieceIndex].cells);
+    if (move.kind === 'SLIDER') {
+      const to = centre(move.to);
+      await page.swipe(from.x, from.y, to.x, to.y);
+    } else {
+      await page.tap(from.x, from.y);
+      await sleep(450);
+      const to = centre(move.to);
+      await page.tap(to.x, to.y);
+    }
+    await sleep(800);
+    pieces = applyMove(pieces, move);
+  }
+  await sleep(3200);
+  const completion = lastCompletion(server, '/api/ugc/played');
+  check(
+    `${name}: hop taps and seal drags reach a replay-verified win at par`,
+    completion?.ok === true && completion.moves === FIXTURES.community.par,
+    completion?.reason ?? 'no verified completion'
+  );
+  await page.screenshot(join(OUT_DIR, 'full-game-community-win.png'));
+};
+
+/**
  * Tab centres in the leaderboard overlay at 390x844 (mirrors showLeaderboard:
  * a 366x680 card at top 82, title, then a centred row of four "sm" chips).
  */
@@ -305,9 +357,9 @@ const winLeaderboardScenario = async (page: Page, server: SmokeServer): Promise<
     'win: the leaderboard loads after a verified solve',
     server.urls.some((url) => url.startsWith('/api/leaderboard?puzzleId='))
   );
-  // Mirrors stackFromBottom(): More puzzles (42) and Comment my score (42)
-  // sit below the Leaderboard | Share result row of "sm" chips.
-  await page.tap(390 / 2 - 60, 694);
+  // composeResultCard() at 390x844: Leaderboard is the right-hand button of
+  // the second grid row (Share | Comment, Play again | Leaderboard).
+  await page.tap(275, 561);
   await sleep(700);
   await page.screenshot(join(OUT_DIR, 'full-game-leaderboard.png'));
   await page.tap(OVERLAY_TABS.week, OVERLAY_TAB_Y);
@@ -360,6 +412,40 @@ const hubLeaderboardScenario = async (page: Page, server: SmokeServer): Promise<
   await page.screenshot(join(OUT_DIR, 'hub-leaderboard-360x580.png'));
 };
 
+/**
+ * Hub -> Community list -> a puzzle -> back to the list, on a 360x640 phone.
+ * Taps are fixed points of that layout: the hub's Community tile (top-right of
+ * the 2x2 grid), the first list row, and the play screen's top-left chip.
+ */
+const communityListScenario = async (page: Page, server: SmokeServer): Promise<void> => {
+  console.log('community list 360x640');
+  await page.setViewport(360, 640, 2);
+  await page.navigate(`${server.origin}/game.html?post=daily&user=snowfan`, 800);
+  await page.evaluate(`sessionStorage.setItem('icehop.launch:t3_smoke_daily', 'home'); location.reload(); true`);
+  await sleep(3000);
+  check('hub: loads its read-only summary', server.requests.includes('/api/hub'));
+  await page.screenshot(join(OUT_DIR, 'hub-360x640.png'));
+
+  const listsBefore = server.requests.filter((path) => path === '/api/ugc/list').length;
+  await page.tap(262, 396);
+  await sleep(1800);
+  const listsOpened = server.requests.filter((path) => path === '/api/ugc/list').length;
+  check('community: the hub tile opens the browse list', listsOpened === listsBefore + 1);
+  await page.screenshot(join(OUT_DIR, 'community-list.png'));
+
+  const startsBefore = server.events.filter((event) => event === 'community_started').length;
+  await page.tap(180, 159);
+  await sleep(1800);
+  const starts = server.events.filter((event) => event === 'community_started').length;
+  check('community: tapping a row starts that puzzle', starts === startsBefore + 1);
+  await page.screenshot(join(OUT_DIR, 'community-list-puzzle.png'));
+
+  await page.tap(65, 22);
+  await sleep(1800);
+  const listsAfter = server.requests.filter((path) => path === '/api/ugc/list').length;
+  check('community: "\u2039 Community" returns to the list', listsAfter === listsOpened + 1);
+};
+
 /** Practice: "?" -> Practice, then solve the three lessons by taps. */
 const tutorialScenario = async (page: Page, server: SmokeServer): Promise<void> => {
   const width = 390;
@@ -372,10 +458,10 @@ const tutorialScenario = async (page: Page, server: SmokeServer): Promise<void> 
   await page.tap(140, 614); // "Practice" beside "Got it"
   await sleep(1300);
 
-  // Lessons are 5x3 boards: GameScene.layout() gives 71px cells from
-  // x=17.5, y=332.5 at this size.
-  const col = (c: number): number => 17.5 + c * 71 + 35.5;
-  const row = (r: number): number => 332.5 + r * 71 + 35.5;
+  // Lessons are 5x3 boards laid out by the scene's own layout module.
+  const lesson = playLayout({ width, height, cols: 5, rows: 3 });
+  const col = (c: number): number => lesson.originX + c * lesson.cell + lesson.cell / 2;
+  const row = (r: number): number => lesson.originY + r * lesson.cell + lesson.cell / 2;
   const taps: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
     [[col(0), row(1)], [col(2), row(1)]],
     [[col(3.5), row(1)], [col(2), row(1)], [col(2), row(0)], [col(2), row(2)]],
@@ -386,10 +472,14 @@ const tutorialScenario = async (page: Page, server: SmokeServer): Promise<void> 
       await page.tap(x, y);
       await sleep(550);
     }
-    await sleep(1600);
+    // The win beat plus the card fade-in; generous because headless Chrome
+    // renders the device-resolution canvas in software.
+    await sleep(2600);
     if (lesson === taps.length - 1) await page.screenshot(join(OUT_DIR, 'full-game-practice-done.png'));
     const initsBefore = server.requests.filter((path) => path === '/api/init').length;
-    await page.tap(width / 2, 460); // "Next" / "Play today's puzzle"
+    // "Next" / "Play today's puzzle": composeResultCard centres mascot, title,
+    // blurb and actions as one block, putting the primary at y=507 here.
+    await page.tap(width / 2, 507);
     await sleep(1400);
     if (lesson === taps.length - 1) {
       const initsAfter = server.requests.filter((path) => path === '/api/init').length;
@@ -411,7 +501,9 @@ const main = async (): Promise<void> => {
     await feedScenarios(browser.page, server);
     await expandedScenario(browser.page, server);
     await winLeaderboardScenario(browser.page, server);
+    await communityGameScenario(browser.page, server);
     await hubLeaderboardScenario(browser.page, server);
+    await communityListScenario(browser.page, server);
     await tutorialScenario(browser.page, server);
     check(
       'no page exceptions or console errors',

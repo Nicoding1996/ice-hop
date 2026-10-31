@@ -8,21 +8,64 @@ import { EndlessScene } from './scenes/EndlessScene';
 import { HomeScene } from './scenes/HomeScene';
 import { MyPuzzlesScene } from './scenes/MyPuzzlesScene';
 import { initAudioPrefs, installAudioLifecycle } from './audio';
+import { RENDER_SCALE } from './art/theme';
 
-const config: Phaser.Types.Core.GameConfig = {
-  type: AUTO,
-  parent: 'game-container',
-  backgroundColor: '#0a2a43',
-  scale: {
-    mode: Scale.RESIZE,
-    autoCenter: Scale.CENTER_BOTH,
-    width: 1024,
-    height: 768,
-  },
-  scene: [Boot, GameScene, EditorScene, CommunityScene, EndlessScene, HomeScene, MyPuzzlesScene],
+type Size = { readonly width: number; readonly height: number };
+
+/** The container's size in CSS pixels (it fills the expanded view). */
+const containerSize = (parent: string): Size => {
+  const rect = document.getElementById(parent)?.getBoundingClientRect();
+  return {
+    width: Math.max(1, rect?.width || window.innerWidth),
+    height: Math.max(1, rect?.height || window.innerHeight),
+  };
 };
 
-const startGame = (parent: string): Game => new Game({ ...config, parent });
+/** Canvas backing-store size for a CSS size at the fixed render scale. */
+const canvasSize = (css: Size): Size => ({
+  width: Math.max(1, Math.round(css.width * RENDER_SCALE)),
+  height: Math.max(1, Math.round(css.height * RENDER_SCALE)),
+});
+
+/**
+ * Phaser's RESIZE mode always sizes the canvas backing store in CSS pixels, so
+ * a 3x phone stretched a 1x image and every penguin looked soft. Instead the
+ * game runs unscaled at device resolution with a 1/RENDER_SCALE canvas zoom
+ * (CSS size = container size), and scenes zoom their cameras back up.
+ */
+const startGame = (parent: string): Game => {
+  const size = canvasSize(containerSize(parent));
+  return new Game({
+    type: AUTO,
+    parent,
+    backgroundColor: '#0a2a43',
+    scale: {
+      mode: Scale.NONE,
+      autoCenter: Scale.CENTER_BOTH,
+      width: size.width,
+      height: size.height,
+      zoom: 1 / RENDER_SCALE,
+    },
+    scene: [Boot, GameScene, EditorScene, CommunityScene, EndlessScene, HomeScene, MyPuzzlesScene],
+  });
+};
+
+/** Keep the device-resolution canvas matched to its container (rotation, resize). */
+const followContainer = (game: Game, parent: string): void => {
+  const fit = (): void => {
+    if (!game.isBooted) return;
+    const size = canvasSize(containerSize(parent));
+    if (size.width === game.scale.width && size.height === game.scale.height) return;
+    // Emits the scale RESIZE event every scene already relayouts on.
+    game.scale.resize(size.width, size.height);
+  };
+  const element = document.getElementById(parent);
+  if (element && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(fit).observe(element);
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
+};
 
 /**
  * Keep the Phaser loop alive across focus / visibility changes.
@@ -107,6 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
   void ensureFonts().finally(() => {
     try {
       const game = startGame('game-container');
+      followContainer(game, 'game-container');
       keepAwake(game);
       dismissLaunchCoverAfterFirstRender(game);
     } catch (error) {

@@ -117,6 +117,8 @@ export type SmokeServer = {
   readonly requests: string[];
   /** Every /api/* path with its query string, in order. */
   readonly urls: string[];
+  /** Client telemetry event names posted to /api/telemetry, in order. */
+  readonly events: string[];
   close(): Promise<void>;
 };
 
@@ -199,6 +201,7 @@ export const startServer = async (): Promise<SmokeServer> => {
   const completions: VerifiedCompletion[] = [];
   const requests: string[] = [];
   const urls: string[] = [];
+  const events: string[] = [];
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
@@ -323,6 +326,42 @@ export const startServer = async (): Promise<SmokeServer> => {
         json({ ok: true, hidden: property(parsed, 'hidden') === true });
         return;
       }
+      if (url.pathname === '/api/hub') {
+        json({
+          date: DAILY_DATE,
+          par: FIXTURES.daily.par,
+          solved: null,
+          rank: 0,
+          totalPlayers: 42,
+          streak: guest ? 0 : 3,
+          endlessSolved: guest ? 0 : 17,
+        });
+        return;
+      }
+      if (url.pathname === '/api/ugc/list') {
+        // The Community fixture first (its solves replay against /api/ugc/played),
+        // then two more boards so the list has several rows.
+        const submissions = [FIXTURES.community, FIXTURES.daily, FIXTURES.community].map(
+          (fixture, index) => ({
+            id: index === 0 ? COMMUNITY_ID : `ugc_smoke${index + 1}`,
+            creator: index === 1 ? username : CREATOR,
+            board: fixture.board,
+            par: fixture.par,
+            votes: 9 - index * 3,
+            solves: 30 - index * 7,
+            createdAt: Date.now() - index * 3_600_000,
+          })
+        );
+        json({ submissions });
+        return;
+      }
+      if (url.pathname === '/api/telemetry') {
+        const parsed: unknown = body ? JSON.parse(body) : null;
+        const event = property(parsed, 'event');
+        if (typeof event === 'string') events.push(event);
+        json({ ok: true });
+        return;
+      }
       if (url.pathname.startsWith('/api/')) {
         json({ ok: true });
         return;
@@ -356,6 +395,7 @@ export const startServer = async (): Promise<SmokeServer> => {
     completions,
     requests,
     urls,
+    events,
     close: () => new Promise<void>((done) => server.close(() => done())),
   };
 };

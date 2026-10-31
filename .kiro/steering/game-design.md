@@ -197,17 +197,22 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 
 - Build screen (`EditorScene`): place Penguin / Seal / Rock / Water, or Erase via
   icon tool-chips (the active tool highlights gold). "Random" drops a solver-made
-  starter to riff on. Live solver feedback reports whether the board is solvable
-  and its par before the player submits.
+  starter to riff on. A Build -> Test -> Submit stepper sits in the header (its
+  own row on tall screens, under the title), and the status line under the board
+  gives live solver feedback: what is missing, with penguin and water-hole
+  counts, or "Solvable · par 6 · Medium", then "Solved by you" once proven.
 - Seal orientation: tap the Seal tool again to rotate it between horizontal
-  (<->) and vertical; a status hint spells this out so it stays discoverable.
-  Generated dailies can use either orientation too.
-- Undo: an in-editor history stack reverts the last placement.
+  (<->) and vertical; the detail line under the status spells this out so it
+  stays discoverable. Generated dailies can use either orientation too.
+- Undo: an in-editor history stack reverts the last placement. Undo, Random, and
+  Clear are quiet chips (Undo and Clear disable when there is nothing to act on);
+  Test and Submit are the large buttons, because they are the steps forward.
 - Test: play your own board before submitting. It saves a draft, jumps into a
   GameScene "test" mode, and returns you to the editor with the board intact.
 - Submit turns active (coral) only after the board validates and the creator has
   solved that exact board in Test mode. Placement, erase, undo, random, and clear
-  all invalidate the proof.
+  all invalidate the proof. After a successful submit the button becomes
+  "My puzzles ›" until the next edit.
 - Undo (one move) and Restart share the strip under the board on both surfaces.
   Every move has an exact reverse and the server scores only the final
   transcript, so Undo never changes how a solve counts. A gold "★★★ up to N" star
@@ -264,14 +269,25 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
 
 ## Expanded navigation & flow
 
-- Home hub (`HomeScene`): the menu screen with Play today's puzzle / Endless
-  puzzles / Build a puzzle / My puzzles + Leaderboards (one row of two
-  half-width pills) / Community puzzles, plus a persistent
-  sound on/off toggle and a "?" chip that opens the shared "How to play" overlay
-  (`showHowToPlay` in `howToPlay.ts`). The game is built to read without
-  instructions, so "?" is a discoverable safety net, not a wall; the same overlay
-  is reachable from the expanded play screen for a first-timer who opens the full
-  Daily.
+- Home hub (`HomeScene`): the penguin and wordmark, then "Play today's puzzle"
+  (the screen's one coral action) with a status line under it from the read-only
+  `GET /api/hub` ("Solved ✓ 6 moves ★★★ · 3-day streak", or the date and
+  difficulty), then a 2x2 grid of icon tiles: Endless (lifetime solves),
+  Community, Build, and Leaderboards (today's rank), and a quiet "My puzzles ›"
+  link. The top bar has a "?" chip that opens the shared "How to play" overlay
+  (`showHowToPlay` in `howToPlay.ts`) and independent SFX and Music icon toggles.
+  The hub stays fully usable when the summary fails. The game is built to read
+  without instructions, so "?" is a discoverable safety net, not a wall; the
+  same overlay is reachable from the expanded play screen for a first-timer who
+  opens the full Daily.
+- Community list (`CommunityScene`): a paginated list (never scrolled) of the
+  puzzles `/api/ugc/list` returns, minus ones solved this session. Each row has a
+  board thumbnail (`drawBoardThumb`), "by creator" ("by you" for your own),
+  difficulty and par, upvotes, and solves. Tapping a row starts that puzzle with
+  the list as GameScene's Next queue; "Play all" starts at the top; "+ Build"
+  opens the editor. A puzzle started from the list shows "‹ Community" instead of
+  "‹ Menu", which reopens the list on the same page. Empty and error states offer
+  Build / Play Endless or a retry.
 - Leaderboards overlay (`showLeaderboard` in `leaderboard.ts`): tabs Daily (a
   Today/Yesterday switch, par, "#7 of 42 · 18 hit par", a move-count bar chart
   with the viewer's bucket in gold, medal ranks, streak flames, "6 moves · 0:42"),
@@ -285,16 +301,26 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   builder comes back. Paginated (Prev / Next) rather than scrolled so rows never
   overlap the header/footer; data from GET `/api/ugc/mine`. Empty and error
   states route to Build or a retry.
-- Endless tier select (`EndlessScene`): pick Easy / Medium / Hard; shows the
-  lifetime "Solved so far" banner, per-tier counts, and a paginated Awards panel
-  (from GET `/api/endless/stats`: total, `byTier`, and the achievement snapshot),
-  then routes into `GameScene` in Endless mode.
-- In expanded play, the HUD nav is a single "‹ Menu" button (top-left) back to the
-  hub plus a "↺ Restart" button (bottom strip) that restores the current board to
-  its start; Restart only appears once a move has been made (it swaps in for the
-  first-move hint), so a stranded/unsolvable board is never a dead end. In Endless
-  a "Hint" button sits beside Restart (best next move; the solve then won't
-  count). Endless play also shows a top-right "Solved: N" progression banner.
+- Endless tier select (`EndlessScene`): tappable Easy / Medium / Hard cards with
+  difficulty pips, a blurb, the tier's par band, and its solve count, under a
+  "Solved so far: N" line with a bar toward the nearest locked award, plus a
+  paginated Awards panel (from GET `/api/endless/stats`: total, `byTier`, and the
+  achievement snapshot); a card routes into `GameScene` in Endless mode. Guests'
+  counts come from this session's registry.
+- In expanded play, the HUD has three rows: the chrome ("‹ Menu" top-left, the
+  combined mute, and "?" / Skip / the Endless "Solved: N" banner top-right),
+  Moves / Par with the star goal, and a mode line naming what is being played
+  ("Daily · Fri, Oct 30 · Medium", "Endless · Hard", "Community · by X · Medium",
+  "Test play · solve it to unlock Submit"). Undo and "↺ Restart" sit in one bar
+  docked under the board for the whole play, disabled until the first move so
+  the layout never jumps, so a stranded board is never a dead end. In Endless a
+  "✦ Hint" button joins the bar from the start (best next move; the solve then
+  won't count). Geometry comes from the pure `src/shared/playLayout.ts`.
+- Result screens share one card layout (`composeResultCard`): an optional
+  penguin mascot or star row, title and blurb, the "6 moves · par 6" score line,
+  a slot for async content (the Daily's rank / streak / hit-par stat tiles),
+  then secondary actions two per row when they fit, the full-width primary, and
+  a quiet link. A "‹ Menu" chip sits in every card's corner.
 - No dead ends in expanded `GameScene`: the Daily win screen offers Share result
   (native share sheet, clipboard fallback), Comment my score (posts a spoiler-free
   score line straight into the current post's thread, authored by the player via
@@ -303,7 +329,8 @@ Display name "Ice Hop"; app slug and package name `ice-hop`.
   Leaderboard (the shared Leaderboards overlay on this Daily), More puzzles
   (-> Endless tier select), and Menu; Endless wins offer Next puzzle
   (same tier) / Change level / Menu; Community wins offer Upvote / Next / Back to
-  daily; Test wins offer Back to editing. Signed-in players who haven't joined
+  daily; Test wins offer Back to editing. When the Community stream runs out,
+  an "all caught up" card offers Play Endless / Build a puzzle / Back to daily. Signed-in players who haven't joined
   also get a "Join r/{subreddit}" CTA (`/api/subscribe` - a one-tap opt-in that
   never gates play; an app-side `subscribed:{user}` flag stops re-prompting), and
   logged-out players get a "Sign in to save your streak / progress" CTA via

@@ -119,7 +119,7 @@ move history.
 - **Build your own + a community stream.** Make your own puzzle in the editor;
   the solver checks that it is structurally valid and solvable, and Submit stays
   locked until you personally solve that exact board in Test mode. Accepted
-  puzzles go into a community stream anyone can play through
+  puzzles go into a community list anyone can browse or play straight through
   (solve one, jump to the next, or skip), upvoting the ones they like with the
   creator credited. That's an endless supply of "one more" puzzles and a reason
   for creators to come back and see how their puzzle is doing.
@@ -130,16 +130,18 @@ move history.
 
 Open the **Build** screen from the game to design a board:
 
-- Place **Penguin**, **Seal**, **Rock**, or **Hole**, or use **Erase**.
+- Place **Penguin**, **Seal**, **Rock**, or **Water**, or use **Erase**.
 - Tap the **Seal** tool again to rotate the seal between horizontal and vertical.
 - **Random** drops a solver-generated starter board you can riff on.
 - **Undo** steps back your last placement.
 - **Test** drops you into your own board. You must solve the exact current board
   before **Submit** unlocks; changing anything invalidates that proof and asks you
-  to test again.
-- The editor runs the solver live and tells you whether the board is **solvable**
-  and its **par**, while the server independently replays the creator proof before
-  publication.
+  to test again. A **Build → Test → Submit** stepper at the top shows where you
+  are.
+- The editor runs the solver live. The line under the board says what is missing
+  (with penguin and water-hole counts) or that the board is **solvable**, with its
+  **par** and difficulty. The server independently replays the creator proof
+  before publication.
 
 A valid submission is a 4-6 wide/tall board with 1-4 penguins, an equal number of
 water holes, a real solution, and a par of at least 2. You can submit up to 5
@@ -177,10 +179,11 @@ src/
     game/     # board, legal moves, apply-move + win detection, types
     solver/   # BFS solver (par), puzzle generator, difficulty, UGC validation
     scoring.ts share.ts date.ts api.ts
-    leaderboard.ts   # distributions, ranks, durations, leaderboard response parsers
+    playLayout.ts    # play-screen geometry shared by GameScene and the UI smoke test
+    leaderboard.ts   # distributions, ranks, durations, leaderboard and hub response parsers
     commentBoard.ts  # Markdown for the live pinned-comment leaderboards
   server/   # Hono app on Devvit (Node 22)
-    routes/   # /api (preview, init, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
+    routes/   # /api (preview, init, hub, solve, leaderboard, endless), /api/ugc, /internal (menu, cron, triggers)
     core/     # daily puzzle, endless pool, leaderboards + streaks, comment boards, UGC, posts, Redis keys
   client/   # runs in the post iframe
     audio.ts         # synthesized SFX, dual-format ambient loop, prefs + lifecycle
@@ -422,6 +425,37 @@ Leaderboards and the comment leaderboard:
   "🐧 Daily Oct 30 · ⭐⭐⭐ 6 moves (par 6) 🎯 · 🔥 3-day streak". Community
   score comments no longer mention the creator.
 - Leaderboard reads never claim or generate a Daily for a request-supplied id.
+
+Screens in the full game:
+
+- The canvas now renders at the phone's pixel ratio (up to 3x). Phaser's resize
+  mode had drawn a 1x canvas that the browser stretched, so penguins and text
+  looked soft on high-DPI phones.
+- The play screen names what you are playing ("Daily · Fri, Oct 30 · Medium",
+  "Community · by frosty_builder · Medium") and keeps Undo, Restart, and the
+  Endless Hint in one bar under the board for the whole puzzle. Undo and Restart
+  wait, disabled, for your first move, and Hint is available from the start.
+- Every result screen uses one card: title, stars, "6 moves · par 6", then the
+  actions, with Menu in the corner. The Daily card shows your rank, streak, and
+  how many players hit par; Community wins now show stars and the score too.
+- The menu leads with today's puzzle and your status under it (your verified
+  result or the date and difficulty, plus your streak) from a new read-only
+  `GET /api/hub` that never starts the Daily clock. Endless, Community, Build,
+  and Leaderboards are icon tiles with your Endless total and today's rank.
+- The Endless picker shows each level's par range and your solves per level,
+  plus a bar toward your next award. Guests were stuck on "Solved so far: …"
+  because the count arrived before the screen was ready.
+- Community opens a list instead of dropping you into the first puzzle: board
+  thumbnails, creator ("by you" for yours), difficulty, par, upvotes, and
+  solves, a page at a time. Tap a puzzle to play it, Next continues down the
+  list, and "‹ Community" goes back to the same page. The "all caught up" card
+  no longer has the play controls drawn over it when you reach it with Skip.
+- The editor shows a Build → Test → Submit stepper and a status line under the
+  board that says what is missing (with penguin and water-hole counts) or the
+  board's par and difficulty. Undo, Random, and Clear became quieter chips, and
+  after a successful submit the Submit button becomes "My puzzles ›". The tool
+  buttons' tap areas now follow screen resizes; they kept their first size.
+- UI smoke test: 64 checks, now including hub → Community list → puzzle → back.
 
 ### 0.0.25 - 2026-08-16
 

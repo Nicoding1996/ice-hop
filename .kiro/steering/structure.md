@@ -41,14 +41,15 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
     │   ├── daily.ts          # immutable Daily puzzle identities/migration parser
     │   ├── community.ts      # stream ordering and creator totals
     │   ├── scoring.ts        # stars and leaderboard score encoding
-    │   ├── leaderboard.ts    # distributions, ranks, durations, response parsers
+    │   ├── leaderboard.ts    # distributions, ranks, durations, leaderboard/hub parsers
+    │   ├── playLayout.ts     # play-screen geometry shared with the UI smoke test
     │   ├── commentBoard.ts   # live pinned-comment leaderboard Markdown
     │   ├── share.ts          # spoiler-free share/comment copy
     │   └── date.ts           # UTC/puzzle dates, weeks, labels, seed helpers
     ├── server/
     │   ├── index.ts          # Hono entry; mounts /api and /internal
     │   ├── routes/
-    │   │   ├── api.ts        # post preview/init, Daily replay, leaderboards, social actions, telemetry
+    │   │   ├── api.ts        # post preview/init, hub summary, Daily replay, leaderboards, social actions, telemetry
     │   │   ├── ugc.ts        # submit/list/mine/vote/Community replay routes
     │   │   ├── menu.ts       # moderator menu endpoints
     │   │   ├── triggers.ts   # install warm-up/first post
@@ -76,13 +77,13 @@ The project follows the Devvit Web `src/{client,server,shared}` layout. Keep
         ├── telemetry.ts           # best-effort fixed-event client reporting
         ├── howToPlay.ts           # shared instructions overlay
         ├── leaderboard.ts         # shared Leaderboards overlay (hub, win, feed link)
-        ├── art/theme.ts           # palette, vector art, transitions, win FX
+        ├── art/theme.ts           # palette, vector art, DPR rendering, transitions, win FX
         └── scenes/
             ├── Boot.ts
-            ├── HomeScene.ts
+            ├── HomeScene.ts       # hub: today's puzzle + status, mode tiles
             ├── GameScene.ts       # daily, Endless, Community, Test, recap/loading
-            ├── EditorScene.ts
-            ├── CommunityScene.ts
+            ├── EditorScene.ts     # Build -> Test -> Submit editor
+            ├── CommunityScene.ts  # paginated Community browse list
             ├── EndlessScene.ts    # tiers, counts, Awards overlay
             └── MyPuzzlesScene.ts
 ```

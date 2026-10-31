@@ -22,7 +22,7 @@ export const validateSubmission = (value: unknown): ValidationResult => {
   if (hoppers < 1) return { ok: false, reason: 'Add at least one penguin.' };
   if (hoppers > 4) return { ok: false, reason: 'Use at most four penguins.' };
   if (board.holes.length !== hoppers) {
-    return { ok: false, reason: 'The number of water holes must equal the number of penguins.' };
+    return { ok: false, reason: 'Use exactly one water hole per penguin.' };
   }
 
   const result = solve(board, { maxStates: 200_000 });

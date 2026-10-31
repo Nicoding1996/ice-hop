@@ -12,7 +12,18 @@ import {
   parseDailyLeaderboard,
   parseRankedBoard,
 } from '../shared/leaderboard';
-import { FONT, PALETTE, SPACE, armTap, makePanel, makePill, type PillButton } from './art/theme';
+import {
+  FONT,
+  PALETTE,
+  SPACE,
+  armTap,
+  drawFlame,
+  makePanel,
+  makePill,
+  type PillButton,
+  viewHeight,
+  viewWidth,
+} from './art/theme';
 
 /**
  * Shared leaderboard overlay: the Daily board (today or yesterday, with the
@@ -127,18 +138,6 @@ const cachedLoad = <K, T>(
   return pending;
 };
 
-/** A small two-tone vector flame (streaks), matching the code-drawn art. */
-const drawFlame = (g: Phaser.GameObjects.Graphics, x: number, y: number, size: number): void => {
-  const flame = (scale: number, color: number): void => {
-    const s = size * scale;
-    g.fillStyle(color, 1);
-    g.fillCircle(x, y + s * 0.22, s * 0.42);
-    g.fillTriangle(x - s * 0.4, y + s * 0.12, x + s * 0.4, y + s * 0.12, x + s * 0.05, y - s * 0.62);
-  };
-  flame(1, PALETTE.accent);
-  flame(0.55, PALETTE.gold);
-};
-
 /** Shorten a label with an ellipsis until it fits `maxWidth`. */
 const fitText = (label: Phaser.GameObjects.Text, maxWidth: number): void => {
   const full = label.text;
@@ -157,8 +156,8 @@ export const showLeaderboard = (
   scene: Phaser.Scene,
   options: LeaderboardOverlayOptions = {}
 ): Phaser.GameObjects.Container => {
-  const w = options.width ?? scene.scale.width;
-  const h = options.height ?? scene.scale.height;
+  const w = options.width ?? viewWidth(scene);
+  const h = options.height ?? viewHeight(scene);
   const compact = h < 600;
   const rowH = compact ? 28 : 32;
   const signedIn = Boolean(context.username);

@@ -1,5 +1,5 @@
 import * as Phaser from 'phaser';
-import { PALETTE, FONT, armTap, drawPenguinInto, drawSealInto, drawRockInto, makePill } from './art/theme';
+import { PALETTE, FONT, armTap, drawPenguinInto, drawSealInto, drawRockInto, makePill, viewHeight, viewWidth } from './art/theme';
 
 /**
  * Shared "How to play" overlay, used by both the hub and the play screen so a
@@ -17,8 +17,8 @@ export const showHowToPlay = (
   /** When given, the card also offers three hands-on practice puzzles. */
   onPractice?: () => void
 ): Phaser.GameObjects.Container => {
-  const w = scene.scale.width;
-  const h = scene.scale.height;
+  const w = viewWidth(scene);
+  const h = viewHeight(scene);
 
   const layer = scene.add.container(0, 0).setDepth(1000);
 
