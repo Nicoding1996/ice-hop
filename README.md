@@ -369,9 +369,12 @@ confirmed upload.
 The `0.0.x` entries identify explicit Devvit app uploads. `0.1.0` records the
 source/package hardening milestone that preceded those later platform builds.
 
-### Unreleased
+### 0.0.26 - 2026-10-31
 
-Touch, fit, and generation fixes from a phone-sized audit.
+Phone-first release: touch and fit fixes, game feel, live leaderboards, and
+redesigned full-game screens.
+
+Touch, fit, and generation fixes from a phone-sized audit:
 
 - One set of controls on both surfaces. Seals slide by drag or by tap-then-stop
   in the feed post and the full game. The full game's seal tap used to do
